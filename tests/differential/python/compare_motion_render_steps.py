@@ -13,6 +13,11 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.motion_timing import (  # noqa: E402
+    SIMULATION_DELTA_MS,
+    SIMULATION_FPS,
+    validate_simulation_contract,
+)
 from oracle_runner.png_artifacts import image_pixel_hash, rgba_sha256_file
 
 
@@ -63,6 +68,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Oracle render-stage artifact root")
     p.add_argument("--wasmtime-root", type=Path, required=True,
                    help="Wasmtime render-stage artifact root")
+    p.add_argument("--spec-dir", type=Path,
+                   default=REPO_ROOT / "tests" / "differential" /
+                           "specs" / "motion_playback",
+                   help="Directory of motion_playback spec JSON files")
     p.add_argument("--case", action="append", default=[],
                    help="Case id to compare; defaults to all oracle cases")
     p.add_argument("--allow-render-flow-diagnostics", action="store_true",
@@ -457,6 +466,7 @@ def compare_case(
     wasmtime_root: Path,
     case_id: str,
     *,
+    expected_frames: int,
     allow_render_flow_diagnostics: bool = False,
     ignore_layer_save: bool = False,
 ) -> bool:
@@ -558,6 +568,14 @@ def compare_case(
         len(oracle_execute),
         len(wasmtime_execute),
     )
+    if frame_count != expected_frames and first_mismatch is None:
+        first_mismatch = (
+            0,
+            "fixture",
+            "frame_count",
+            expected_frames,
+            frame_count,
+        )
     for index in range(frame_count):
         if index >= len(oracle_build_events) or index >= len(wasmtime_build_events):
             build_flow_mismatches += 1
@@ -761,15 +779,51 @@ def compare_case(
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    specs = {
+        str(spec["id"]): spec
+        for spec in (
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(args.spec_dir.glob("*.json"))
+        )
+    }
+    if not specs:
+        raise SystemExit(f"no motion_playback specs found in {args.spec_dir}")
+    validate_simulation_contract(specs.values())
+
+    for label, root in (("oracle", args.oracle_root),
+                        ("wasmtime", args.wasmtime_root)):
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        fixture = manifest.get("fixture")
+        if not isinstance(fixture, dict):
+            raise SystemExit(f"{label} manifest has no fixture object: "
+                             f"{manifest_path}")
+        fps = float(fixture.get("simulationFps", float("nan")))
+        delta_ms = float(fixture.get("deltaMs", float("nan")))
+        if fps != SIMULATION_FPS or not math.isclose(
+            delta_ms, SIMULATION_DELTA_MS, rel_tol=0.0, abs_tol=1.0e-12
+        ):
+            raise SystemExit(
+                f"{label} render manifest timing mismatch: "
+                f"simulationFps={fps}, deltaMs={delta_ms}; expected "
+                f"{SIMULATION_FPS:g} Hz / {SIMULATION_DELTA_MS} ms"
+            )
+
     cases = args.case or case_ids(args.oracle_root)
     if not cases:
         raise SystemExit("no cases found")
     all_ok = True
     for case_id in cases:
+        spec = specs.get(case_id)
+        if spec is None:
+            print(f"{case_id}: FAIL no matching motion_playback spec")
+            all_ok = False
+            continue
         if not compare_case(
             args.oracle_root,
             args.wasmtime_root,
             case_id,
+            expected_frames=int(spec["frames"]),
             allow_render_flow_diagnostics=(
                 args.allow_render_flow_diagnostics),
             ignore_layer_save=args.ignore_layer_save,

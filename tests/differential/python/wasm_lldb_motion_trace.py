@@ -23,6 +23,8 @@ from wasm_lldb_runner import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.motion_timing import STARTUP_WARMUP_TICKS  # noqa: E402
 FRAME_BEGIN_SYMBOL = "krkr2_lldb_motion_frame_begin"
 LAYER_SAMPLE_SYMBOL = "krkr2_lldb_motion_layer_sample"
 FRAME_END_SYMBOL = "krkr2_lldb_motion_frame_end"
@@ -59,7 +61,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--wasm", required=True,
                    help="Path to krkr2_wasmtime_guest.wasm")
     p.add_argument("--startup-xp3", required=True,
-                   help="Path to logo_test_oracle.xp3")
+                   help="Path to the deterministic 15 Hz oracle XP3")
     p.add_argument("--spec-dir", required=True,
                    help="Directory of motion_playback spec JSON files")
     p.add_argument("--trace-out", required=True,
@@ -99,7 +101,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Path to write LLDB-collected render stage JSON events")
     p.add_argument("--manifest-startup-xp3", default=None,
                    help="Original startup XP3 path to record in manifest")
-    p.add_argument("--expected-frames", type=int, default=332,
+    p.add_argument("--expected-frames", type=int, required=True,
                    help="Minimum expected event count")
     p.add_argument("--capture-frame-start", type=int, default=0,
                    help="First global frame id to record in driver probes")
@@ -227,7 +229,8 @@ class WasmMotionTracer:
                     # startupFrom schedules the first motion update a few host
                     # ticks later; the TJS fixture still stops after the
                     # selected global frame window is complete.
-                    str(max(self.expected_frames + 10, 1)),
+                    str(max(
+                        self.expected_frames + STARTUP_WARMUP_TICKS, 1)),
                     "--output",
                     str(self.driver_output),
                     "--capture-frame-start",

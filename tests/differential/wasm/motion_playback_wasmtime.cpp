@@ -1,6 +1,6 @@
 // Wasmtime-only Motion playback differential target.
 //
-// This module intentionally executes the real logo_test_oracle.xp3
+// This module intentionally executes the real 15 Hz oracle XP3
 // startup.tjs path through TJS. It supplies a headless Window layer and a
 // test-local implementation of the MotionTraceWeb symbols so the production
 // trace hook remains untouched.

@@ -4,53 +4,54 @@
   "mtn_path": "reference/xp3/logo_test/m2logo.mtn",
   "chara": "m2cheeseware_logo",
   "label": "back_white",
-  "frames": 93,
+  "simulation_fps": 15,
+  "frames": 25,
   "oracle_sanity": {
     "playerCountRanges": [
       {
         "start": 0,
-        "end": 12,
+        "end": 3,
         "count": 1
       },
       {
-        "start": 12,
-        "end": 43,
+        "start": 3,
+        "end": 11,
         "count": 5
       },
       {
-        "start": 43,
-        "end": 91,
+        "start": 11,
+        "end": 24,
         "count": 1
       },
       {
-        "start": 91,
-        "end": 93,
+        "start": 24,
+        "end": 25,
         "count": 5
       }
     ],
     "layerCountRanges": [
       {
         "start": 0,
-        "end": 12,
+        "end": 3,
         "count": 31
       },
       {
-        "start": 12,
-        "end": 43,
+        "start": 3,
+        "end": 11,
         "count": 39
       },
       {
-        "start": 43,
-        "end": 91,
+        "start": 11,
+        "end": 24,
         "count": 31
       },
       {
-        "start": 91,
-        "end": 93,
+        "start": 24,
+        "end": 25,
         "count": 35
       }
     ]
   },
   "expected_trace": "traces/motion_playback/m2logo.oracle.json",
-  "notes": "type0-only fixture covering the Phase 2 PlayerRender drawFlag-gate fix."
+  "notes": "15Hz full-playback fixture covering the Phase 2 PlayerRender drawFlag-gate fix; 25 frames includes the natural completion/cleanup boundary."
 }

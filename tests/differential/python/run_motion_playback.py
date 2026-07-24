@@ -23,6 +23,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # `oracle_runner` directory being a package, so tests/differential (the
 # package parent) goes on sys.path rather than oracle_runner itself.
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.motion_timing import (  # noqa: E402
+    DEFAULT_STARTUP_XP3_NAME,
+    validate_simulation_contract,
+)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -38,7 +42,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Directory for recorded oracle JSONs")
     p.add_argument("--startup-xp3",
                    default=str(REPO_ROOT / "reference" / "xp3" /
-                               "logo_test_oracle.xp3"),
+                               DEFAULT_STARTUP_XP3_NAME),
                    help="Host path to the oracle startup XP3")
     p.add_argument("--case", action="append", default=[],
                    help="Motion case id to record; repeat for multiple cases. "
@@ -112,6 +116,7 @@ def main(argv: list[str]) -> int:
 
     try:
         specs = filter_specs(load_specs(spec_dir), args.case)
+        validate_simulation_contract(specs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -129,7 +134,7 @@ def main(argv: list[str]) -> int:
             else default_framebuffer_dir()
         ) if args.record_framebuffer else None
         # Single playback covers every spec: startup.tjs inside
-        # logo_test_oracle.xp3 plays all SEGMENT_ORDER motions sequentially,
+        # The combined 15 Hz fixture plays SEGMENT_ORDER sequentially,
         # and cocos2d only accepts one scheduleOnce("startup", ...) per
         # Activity lifetime. mpb.record_all_oracles returns
         # {spec_id: frames} in one shot.

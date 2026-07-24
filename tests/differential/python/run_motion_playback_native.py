@@ -12,6 +12,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.motion_timing import (  # noqa: E402
+    DEFAULT_STARTUP_XP3_NAME,
+    select_expected_segments,
+    validate_simulation_contract,
+)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -30,8 +35,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Path to the motion_playback_native executable")
     p.add_argument("--startup-xp3",
                    default=str(REPO_ROOT / "reference" / "xp3" /
-                               "logo_test_oracle.xp3"),
-                   help="Host path to logo_test_oracle.xp3")
+                               DEFAULT_STARTUP_XP3_NAME),
+                   help=f"Host path to {DEFAULT_STARTUP_XP3_NAME}")
     p.add_argument("--strict-missing-trace", action="store_true",
                    help="Fail when a disk golden is missing instead of "
                         "auto-skipping the case")
@@ -162,26 +167,27 @@ def partition_native_frames(events: list[dict], specs: list[dict], mpb) -> dict:
     segment_order = mpb.segment_order_for_specs(specs_by_id)
 
     segments = _segment_events(events)
-    substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if len(substantive) < len(specs_by_id):
+    ordered_specs = [specs_by_id[spec_id] for spec_id in segment_order]
+    try:
+        fixture_segments = select_expected_segments(segments, ordered_specs)
+    except ValueError as exc:
         raise RuntimeError(
-            f"only {len(substantive)} substantive native segment(s) "
-            f"captured (raw segments: {[len(s['frames']) for s in segments]})."
-        )
+            f"failed to identify native fixture segments: {exc}"
+        ) from exc
 
     results: dict[str, list[dict]] = {}
     for i, spec_id in enumerate(segment_order):
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
-        frames = substantive[i]["frames"]
-        if len(frames) < wanted:
+        frames = fixture_segments[i]["frames"]
+        if len(frames) != wanted:
             raise RuntimeError(
                 f"native segment {i} ({spec_id}) has "
                 f"{len(frames)} frames; spec requires {wanted}."
             )
         results[spec_id] = [
             mpb.normalize_frame(fr, fi)
-            for fi, fr in enumerate(frames[:wanted])
+            for fi, fr in enumerate(frames)
         ]
     return results
 
@@ -197,6 +203,12 @@ def main(argv: list[str]) -> int:
         return 2
 
     specs = load_specs(spec_dir)
+    try:
+        validate_simulation_contract(specs)
+    except ValueError as exc:
+        print(f"invalid motion_playback timing contract: {exc}",
+              file=sys.stderr)
+        return 2
     if not specs:
         print(f"no specs in {spec_dir}", file=sys.stderr)
         return 0

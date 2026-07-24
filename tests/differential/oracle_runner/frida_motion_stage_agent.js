@@ -1888,7 +1888,7 @@ function postDrawFrameIdFromMarkerArgs(argArray, numParams) {
     } else if (caseText.value === 'yuzulogo') {
         baseFrame = 0;
     } else if (caseText.value === 'm2logo') {
-        baseFrame = 243;
+        baseFrame = 63;
     }
     if (baseFrame === null) return null;
     const localFrame = frameArg.scalar.int32;

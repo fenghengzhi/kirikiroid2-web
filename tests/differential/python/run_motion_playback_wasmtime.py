@@ -35,6 +35,13 @@ from oracle_runner.motion_capture_window import (
     frame_capture_window_from_bounds,
     frame_capture_window_from_args,
 )
+from oracle_runner.motion_timing import (
+    DEFAULT_STARTUP_XP3_NAME,
+    SIMULATION_DELTA_MS,
+    SIMULATION_FPS,
+    select_expected_segments,
+    validate_simulation_contract,
+)
 
 DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
 DEFAULT_HOST_PYTHON = (
@@ -90,8 +97,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Path to the Wasmtime guest wasm")
     p.add_argument("--startup-xp3",
                    default=str(REPO_ROOT / "reference" / "xp3" /
-                               "logo_test_oracle.xp3"),
-                   help="Host path to logo_test_oracle.xp3")
+                               DEFAULT_STARTUP_XP3_NAME),
+                   help=f"Host path to {DEFAULT_STARTUP_XP3_NAME}")
     p.add_argument("--case", action="append", default=[],
                    help="Motion case id to run; repeat for multiple cases. "
                         "Defaults to all specs in --spec-dir")
@@ -1246,7 +1253,8 @@ def _write_wasmtime_framebuffer_manifest(
             "guestCapturePhase": "post_draw",
             "xp3": bootstrap.xp3_guest_path,
             "window": {"width": 1920, "height": 1080},
-            "deltaMs": 1000.0 / 60.0,
+            "simulationFps": SIMULATION_FPS,
+            "deltaMs": SIMULATION_DELTA_MS,
             "segmentOrder": list(segment_order),
         },
         "summary": {
@@ -1767,7 +1775,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     max_ticks = int(frames)
     ticks_driven = 0
     for tick_index in range(max_ticks):
-        tick_ok = tick(store, 1000.0 / 60.0)
+        tick_ok = tick(store, SIMULATION_DELTA_MS)
         ticks_driven += 1
         if not tick_ok:
             err = read_string(store, memory,
@@ -2015,18 +2023,19 @@ def partition_port_frames(
         return results
 
     segments = _segment_events(events)
-    substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if len(substantive) < len(specs_by_id):
+    ordered_specs = [specs_by_id[spec_id] for spec_id in segment_order]
+    try:
+        fixture_segments = select_expected_segments(segments, ordered_specs)
+    except ValueError as exc:
         raise RuntimeError(
-            f"only {len(substantive)} substantive Wasmtime segment(s) "
-            f"captured (raw segments: {[len(s['frames']) for s in segments]})."
-        )
+            f"failed to identify Wasmtime fixture segments: {exc}"
+        ) from exc
 
     results: dict[str, list[dict]] = {}
     for i, spec_id in enumerate(segment_order):
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
-        frames = substantive[i]["frames"]
+        frames = fixture_segments[i]["frames"]
         if len(frames) != wanted:
             raise RuntimeError(
                 f"Wasmtime segment {i} ({spec_id}) has "
@@ -2083,17 +2092,24 @@ def render_case_segments(
         return out
 
     segments = _segment_events(events)
-    substantive = [s for s in segments if len(s["frames"]) >= 30]
+    ordered_specs = [
+        specs_by_id[spec_id]
+        for spec_id in segment_order
+        if spec_id in specs_by_id
+    ]
+    try:
+        fixture_segments = select_expected_segments(segments, ordered_specs)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"failed to identify Wasmtime render fixture segments: {exc}"
+        ) from exc
     out: list[dict[str, Any]] = []
     for i, spec_id in enumerate(segment_order):
         spec = specs_by_id.get(spec_id)
         if spec is None:
             continue
-        if i >= len(substantive):
-            raise RuntimeError(
-                f"missing Wasmtime segment for render stage case {spec_id}")
         wanted = int(spec["frames"])
-        frames = substantive[i]["frames"]
+        frames = fixture_segments[i]["frames"]
         if len(frames) != wanted:
             raise RuntimeError(
                 f"Wasmtime segment {i} ({spec_id}) has {len(frames)} frame(s); "
@@ -2102,7 +2118,7 @@ def render_case_segments(
         frame_ids = [int(frame["frameId"]) for frame in selected]
         out.append({
             "caseId": spec_id,
-            "player": substantive[i].get("player"),
+            "player": fixture_segments[i].get("player"),
             "firstFrameId": min(frame_ids),
             "lastFrameId": max(frame_ids),
             "caseFrameIdBase": min(frame_ids),
@@ -2742,7 +2758,8 @@ def write_render_stage_artifacts(
         "fixture": {
             "guestCaptureRoot": image_manifest.get("guestCaptureRoot"),
             "window": {"width": 1920, "height": 1080},
-            "deltaMs": 1000.0 / 60.0,
+            "simulationFps": SIMULATION_FPS,
+            "deltaMs": SIMULATION_DELTA_MS,
             "segmentOrder": [str(segment["caseId"]) for segment in case_segments],
         },
         "stages": list(RENDER_STAGES),
@@ -2844,6 +2861,7 @@ def main(argv: list[str]) -> int:
 
     try:
         specs = filter_specs(load_specs(spec_dir), args.case)
+        validate_simulation_contract(specs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2

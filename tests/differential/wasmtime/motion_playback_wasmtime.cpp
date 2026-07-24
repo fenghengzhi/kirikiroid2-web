@@ -55,7 +55,7 @@ int g_save_layer_visual_readback_frame_count = 1;
 int g_capture_frame_start = 0;
 int g_capture_frame_count = -1;
 int g_yuzulogo_frame_base = 0;
-int g_m2logo_frame_base = 243;
+int g_m2logo_frame_base = 63;
 constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {

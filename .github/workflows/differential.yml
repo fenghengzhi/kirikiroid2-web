@@ -28,8 +28,8 @@ env:
   # Google Drive references are mutable; pin the exact oracle inputs each job consumes.
   REFERENCE_LIBKRKR2_SHA256: "ded611b9018cfca425e97d5f8aaaa5dff809c4bacefb66ba77806372ddb52b38"
   REFERENCE_APK_SHA256: "262bab07722b95d76e3e10170744d88f80141260502e3d0a7b4e005ed3090379"
-  REFERENCE_YUZULOGO_XP3_SHA256: "edb465666eda7ad5be538d1ca0c2d9874e9ecc59836560e6310e8711b8a1067e"
-  REFERENCE_M2LOGO_XP3_SHA256: "e6f92c31186e081ef660bc17bc22d8f355ca0210d5bec99e7ae7ddc69fa6b4b0"
+  REFERENCE_YUZULOGO_15HZ_XP3_SHA256: "00a3fd21cccd217f7e4f49e5787db1ff88332e870e94d0148f064d35cbaad974"
+  REFERENCE_M2LOGO_15HZ_XP3_SHA256: "54e8f9c696c12ccec8e0b82a0c04e7c325ee4f0f169354a539b0f69618ad915e"
 
 jobs:
   # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
@@ -67,18 +67,18 @@ jobs:
           mkdir -p reference/xp3
           for case in yuzulogo m2logo; do
             rclone copyto \
-              "gdrive:reference/xp3/logo_test_oracle_${case}.xp3" \
-              "reference/xp3/logo_test_oracle_${case}.xp3" \
+              "gdrive:reference/xp3/logo_test_oracle_${case}_15hz.xp3" \
+              "reference/xp3/logo_test_oracle_${case}_15hz.xp3" \
               --checksum \
               --drive-acknowledge-abuse
           done
           {
             printf '%s  %s\n' \
-              "${REFERENCE_YUZULOGO_XP3_SHA256}" \
-              "reference/xp3/logo_test_oracle_yuzulogo.xp3"
+              "${REFERENCE_YUZULOGO_15HZ_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_yuzulogo_15hz.xp3"
             printf '%s  %s\n' \
-              "${REFERENCE_M2LOGO_XP3_SHA256}" \
-              "reference/xp3/logo_test_oracle_m2logo.xp3"
+              "${REFERENCE_M2LOGO_15HZ_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_m2logo_15hz.xp3"
           } | shasum -a 256 -c -
 
       - name: Cache Emscripten SDK
@@ -192,6 +192,9 @@ jobs:
           embuilder.py build sdl2 sdl2-mt
           embuilder.py build sdl2_ttf sdl2_ttf-mt
 
+      - name: Verify motion_playback 15 Hz timing contract
+        run: python3 tests/differential/python/test_motion_timing.py
+
       - name: Build Wasmtime full guest for motion_playback
         run: |
           source "${EMSDK}/emsdk_env.sh"
@@ -207,7 +210,7 @@ jobs:
           rm -rf tests/differential/artifacts/motion_playback_render_stages_wasmtime
           mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
           for case in yuzulogo m2logo; do
-            xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+            xp3="reference/xp3/logo_test_oracle_${case}_15hz.xp3"
             python3 tests/differential/python/run_motion_playback_wasmtime.py \
               --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
               --startup-xp3 "${xp3}" \
@@ -395,8 +398,8 @@ jobs:
             --drive-acknowledge-abuse
           for case in yuzulogo m2logo; do
             rclone copyto \
-              "gdrive:reference/xp3/logo_test_oracle_${case}.xp3" \
-              "reference/xp3/logo_test_oracle_${case}.xp3" \
+              "gdrive:reference/xp3/logo_test_oracle_${case}_15hz.xp3" \
+              "reference/xp3/logo_test_oracle_${case}_15hz.xp3" \
               --checksum \
               --drive-acknowledge-abuse
           done
@@ -408,11 +411,11 @@ jobs:
               "${REFERENCE_APK_SHA256}" \
               "reference/apk/krkr2 1.4.4.apk"
             printf '%s  %s\n' \
-              "${REFERENCE_YUZULOGO_XP3_SHA256}" \
-              "reference/xp3/logo_test_oracle_yuzulogo.xp3"
+              "${REFERENCE_YUZULOGO_15HZ_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_yuzulogo_15hz.xp3"
             printf '%s  %s\n' \
-              "${REFERENCE_M2LOGO_XP3_SHA256}" \
-              "reference/xp3/logo_test_oracle_m2logo.xp3"
+              "${REFERENCE_M2LOGO_15HZ_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_m2logo_15hz.xp3"
           } | sha256sum -c -
 
       # Redroid needs the Android binder driver. Azure kernels don't
@@ -707,7 +710,7 @@ jobs:
             set +e
             {
               for case in yuzulogo m2logo; do
-                xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+                xp3="reference/xp3/logo_test_oracle_${case}_15hz.xp3"
                 echo "--- recording ${case} from ${xp3} ---"
                 adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
                 adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
@@ -792,7 +795,7 @@ jobs:
           set -euo pipefail
           rm -rf tests/differential/artifacts/motion_playback_render_stages_oracle
           for case in yuzulogo m2logo; do
-            xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+            xp3="reference/xp3/logo_test_oracle_${case}_15hz.xp3"
             adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
             adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
             adb -s "${ANDROID_SERIAL}" logcat -c || true

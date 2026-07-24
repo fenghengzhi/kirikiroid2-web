@@ -35,7 +35,7 @@ pixel output.
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
 | `psbfile_load` | committed raw PSB or existing reference material | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. `--integer-boundary` walks a natural tag-0x09 value through public TJS dispatch and the raw scalar getters. `--media-lifecycle` covers PSBMedia cross-container replacement and borrowed-stream destruction; `--media-dictionary` uses an existing `autoskip.psb` to verify the exact Dictionary listing order through 0x5999F4. `--trace` records the corresponding native call chains. No damaged fixture is generated or checked in |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
-| `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`; the port-side verifier runs the Wasmtime guest, executing the same `startup.tjs` path with a headless Window stub. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
+| `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule the per-case `reference/xp3/logo_test_oracle_<case>_15hz.xp3` fixture inside libkrkr2. Each captured frame advances exactly `1000/15` ms of simulation time; Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record `yuzulogo.mtn` and `m2logo.mtn`. The port-side verifier executes the same XP3/TJS path under Wasmtime. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
 ## Motion playback visual oracle status
 
@@ -52,11 +52,14 @@ Current oracle-runner side status:
   real gnustl `std::string`, and calls
   `TVPMainScene::startupFrom(const std::string&)`. This avoids the old
   Python-side fake `std::string` ABI risk.
-- The recording fixture is `reference/xp3/logo_test_oracle.xp3`, a
-  deterministic wrapper around the `logo_test.xp3` playback path. It
-  preserves the KAGParser `[ev]` / `[ev waitmovie]` boundary and drives
+- The recording fixtures are
+  `reference/xp3/logo_test_oracle_{yuzulogo,m2logo}_15hz.xp3`,
+  deterministic wrappers around the `logo_test.xp3` playback path. They
+  preserve the KAGParser `[ev]` / `[ev waitmovie]` boundary and drive
   `.mtn` playback through `AffineLayer` / `AffineSourceMotion` / `onPaint`,
-  using fixed delta timing so the recorded segments match the specs.
+  advancing `1000/15` ms per captured simulation frame. The TJS/KAG sources
+  are versioned under `oracle_runner/fixtures/`; the large assets stay in the
+  external `reference/xp3/logo_test` tree.
 - `FridaMotionTracer` attaches to the harness process and the in-process
   JS agent hooks `Motion.Player.progress` and `Player_updateLayers`.
   Recording happens from natural playback on the GL thread; the host
@@ -349,7 +352,8 @@ step 12: addr differs (sub_69A754 vs sub_698454)
 
 `motion_playback` is recorded from live libkrkr2 rather than by a scalar
 `CALL`. It starts the APK harness, pushes
-`reference/xp3/logo_test_oracle.xp3`, calls `STARTUP_FROM`, and records
+the selected `reference/xp3/logo_test_oracle_<case>_15hz.xp3`, calls
+`STARTUP_FROM`, and records
 the natural GL-thread playback with the specialised Frida motion tracer.
 
 ```bash

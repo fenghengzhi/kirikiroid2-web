@@ -2,7 +2,7 @@
 
 Two modes:
   * Live oracle (`record_all_oracles`): attach Frida to the APK harness,
-    drop `logo_test_oracle.xp3` on the device, trigger
+    drop the deterministic 15 Hz oracle XP3 on the device, trigger
     `TVPMainScene::startupFrom` via the harness-RPC engine (pure
     scheduler call; doesn't touch GL thread state), and let the embedded
     `startup.tjs` play yuzulogo then m2logo on the cocos2d GL thread.
@@ -46,6 +46,12 @@ from oracle_runner.motion_capture_window import (
     captured_case_ranges,
     frame_capture_window_from_args,
 )
+from oracle_runner.motion_timing import (
+    DEFAULT_STARTUP_XP3_NAME,
+    SIMULATION_DELTA_MS,
+    SIMULATION_FPS,
+    select_expected_segments,
+)
 from oracle_runner.png_artifacts import png_manifest_entry
 
 
@@ -88,16 +94,15 @@ def segment_order_for_specs(specs_or_by_id) -> tuple[str, ...]:
     return tuple(sid for sid in SEGMENT_ORDER if sid in specs_by_id)
 
 
-# Deterministic oracle-recording xp3. Its startup.tjs keeps the same
+# Deterministic 15 Hz oracle-recording XP3. Its startup.tjs keeps the same
 # KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint() playback path
-# as logo_test.xp3, with fixed delta timing so fresh oracles remain
-# comparable. The Wasmtime verifier loads this same xp3 and collects the
-# port-side trace samples. Sources live in the reference submodule
-# (reference/xp3/logo_test_oracle/startup.tjs + the shared logo_test
-# scripts/assets). Regenerate via
+# as logo_test.xp3, with fixed delta timing so fresh oracles remain comparable.
+# The Wasmtime verifier loads this same XP3 and collects the port-side trace
+# samples. Small scripts are tracked beside the build script; large assets stay
+# under reference/xp3/logo_test. Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
 # whenever the spec frame counts change.
-_LOGO_TEST_XP3_REL = "reference/xp3/logo_test_oracle.xp3"
+_LOGO_TEST_XP3_REL = f"reference/xp3/{DEFAULT_STARTUP_XP3_NAME}"
 _REMOTE_APP_FILES_DIR = "/sdcard/Android/data/org.github.krkr2/files"
 _REMOTE_STARTUP_FILES_DIR = "/data/user/0/org.github.krkr2/files"
 ORACLE_RENDERER = "software"
@@ -328,8 +333,8 @@ def _ensure_logo_test_xp3_pushed(
 ) -> str:
     """Push the oracle bootstrap xp3 to a device startup path.
 
-    `startup_xp3` lets callers run the single-motion fixtures while keeping the
-    old combined logo_test_oracle.xp3 path as the default.
+    `startup_xp3` lets callers run a single-motion fixture; the default is the
+    combined tracked 15 Hz fixture.
     """
     repo_root = Path(__file__).resolve().parents[4]
     local = startup_xp3 or repo_root / _LOGO_TEST_XP3_REL
@@ -510,6 +515,7 @@ def _write_framebuffer_manifest(
     specs_by_id: dict[str, dict],
     remote_capture_root: str,
     capture_window: FrameCaptureWindow | None = None,
+    startup_xp3: Path | None = None,
 ) -> Path:
     total_spec_frames = sum(int(spec["frames"]) for spec in specs_by_id.values())
     if capture_window is None:
@@ -572,9 +578,13 @@ def _write_framebuffer_manifest(
         "remoteCapturePhase": "post_draw",
         "localRoot": str(framebuffer_dir),
         "fixture": {
-            "xp3": "logo_test_oracle.xp3",
+            "xp3": (
+                Path(startup_xp3).name
+                if startup_xp3 is not None else DEFAULT_STARTUP_XP3_NAME
+            ),
             "window": {"width": 1920, "height": 1080},
-            "deltaMs": 1000.0 / 60.0,
+            "simulationFps": SIMULATION_FPS,
+            "deltaMs": SIMULATION_DELTA_MS,
             "segmentOrder": list(segment_order),
         },
         "summary": {
@@ -601,6 +611,7 @@ def _collect_framebuffer_capture(
     *,
     timeout: float,
     capture_window: FrameCaptureWindow | None = None,
+    startup_xp3: Path | None = None,
 ) -> Path:
     total_frames = sum(int(s["frames"]) for s in specs_by_id.values())
     if capture_window is None:
@@ -638,7 +649,8 @@ def _collect_framebuffer_capture(
             )
 
     manifest = _write_framebuffer_manifest(
-        framebuffer_dir, specs_by_id, remote_capture_root, capture_window)
+        framebuffer_dir, specs_by_id, remote_capture_root, capture_window,
+        startup_xp3)
     _adb_shell(serial, f"rm -rf {shlex.quote(remote_capture_root)}")
     return manifest
 
@@ -1194,30 +1206,21 @@ def record_all_oracles(
             tracer, specs_by_id, timeout=playback_timeout,
             stabilise_seconds=5.0 if framebuffer_dir is not None else 2.0)
     segments = _segment_trace_flatten_frames(_trace_flatten_frames(events))
-    # Filter out any "warmup" segments that fire before startup.tjs's
-    # own Motion.Player instances exist (e.g. if libkrkr2 runs an
-    # internal Motion.Player for an intro clip). The startup.tjs
-    # playback guarantees requested Motion.Player instances with >= 60 frames
-    # each; anything shorter is noise.
-    substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if set(specs_by_id) == set(segment_order) and \
-            len(substantive) != len(segment_order):
+    ordered_specs = [specs_by_id[spec_id] for spec_id in segment_order]
+    try:
+        fixture_segments = select_expected_segments(segments, ordered_specs)
+    except ValueError as exc:
         raise RuntimeError(
-            f"expected exactly {len(segment_order)} substantive "
-            f"trace_flatten segment(s), captured {len(substantive)} "
-            f"(raw segments: {[len(s['frames']) for s in segments]})")
-    if len(substantive) < len(specs_by_id):
-        raise RuntimeError(
-            f"only {len(substantive)} substantive trace_flatten segment(s) "
-            f"captured (raw segments: {[len(s['frames']) for s in segments]}). "
-            f"startup.tjs should produce {segment_order}; check "
-            f"logcat for Motion.Player creation or GL-surface failures.")
+            f"failed to identify fixture trace_flatten segments: {exc}. "
+            f"startup.tjs should produce {segment_order}; check logcat for "
+            "Motion.Player creation or GL-surface failures."
+        ) from exc
 
     results: dict[str, list[dict]] = {}
     for i, spec_id in enumerate(segment_order):
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
-        frames = substantive[i]["frames"]
+        frames = fixture_segments[i]["frames"]
         if len(frames) != wanted:
             raise RuntimeError(
                 f"segment {i} ({spec_id}) has {len(frames)} frames; "
@@ -1231,7 +1234,7 @@ def record_all_oracles(
         assert framebuffer_remote_root is not None
         _collect_framebuffer_capture(
             serial, specs_by_id, framebuffer_dir, framebuffer_remote_root,
-            timeout=playback_timeout)
+            timeout=playback_timeout, startup_xp3=startup_xp3)
     return results
 
 
@@ -1243,17 +1246,18 @@ def _wait_for_trace_flatten_segments(
     poll_interval: float = 0.4,
     stabilise_seconds: float = 2.0,
 ) -> list[dict]:
-    """Poll until we have ≥ len(specs) substantive trace_flatten segments AND
-    the event count has been stable for `stabilise_seconds`. Returns the
-    full event list.
+    """Poll until the fixture segments match specs and capture stabilises.
 
     We can't peek at the buffer incrementally (rpc.exports round-trips
     freeze the whole array), so we only call stop_record() once the frame
     count has stabilised. Intermediate polls use `event_count` which is cheap
     (one integer over RPC).
     """
-    needed_substantive = len(specs_by_id)
     needed_frames = sum(int(s["frames"]) for s in specs_by_id.values())
+    ordered_specs = [
+        specs_by_id[spec_id]
+        for spec_id in segment_order_for_specs(specs_by_id)
+    ]
 
     deadline = time.time() + timeout
     stable_since: float | None = None
@@ -1270,16 +1274,18 @@ def _wait_for_trace_flatten_segments(
             events = tracer.stop_record()
             segments = _segment_trace_flatten_frames(
                 _trace_flatten_frames(events))
-            substantive = [s for s in segments if len(s["frames"]) >= 30]
-            if len(substantive) >= needed_substantive:
+            try:
+                select_expected_segments(segments, ordered_specs)
+            except ValueError as exc:
+                summary = _trace_flatten_capture_summary(events)
+                raise RuntimeError(
+                    f"trace_flatten frame count stabilised at "
+                    f"{len(_trace_flatten_frames(events))}, but fixture "
+                    f"segments did not match the spec contract: {exc}\n"
+                    f"partial trace summary:\n{summary}"
+                ) from exc
+            else:
                 return events
-            summary = _trace_flatten_capture_summary(events)
-            raise RuntimeError(
-                f"trace_flatten frame count stabilised at "
-                f"{len(_trace_flatten_frames(events))}, but only "
-                f"{len(substantive)} substantive segment(s) were captured "
-                f"(raw segments: {[len(s['frames']) for s in segments]})\n"
-                f"partial trace summary:\n{summary}")
         time.sleep(poll_interval)
     summary = _stop_record_for_failure_summary(tracer)
     raise RuntimeError(
@@ -1393,9 +1399,23 @@ def run_case(engine, spec: dict, *, port_frames: list,
         out["status"] = "error"
         out["error"] = "no oracle frames provided"
         return out
+    expected_frames = int(spec["frames"])
+    contract_mismatches = []
+    if len(port_frames) != expected_frames:
+        contract_mismatches.append({
+            "kind": "port_spec_frame_count",
+            "port": len(port_frames),
+            "spec": expected_frames,
+        })
+    if len(oracle_frames) != expected_frames:
+        contract_mismatches.append({
+            "kind": "oracle_spec_frame_count",
+            "oracle": len(oracle_frames),
+            "spec": expected_frames,
+        })
     mismatches = diff_frames(port_frames, oracle_frames,
                              structural_only=structural_only)
-    out["mismatches"] = mismatches
-    if mismatches:
+    out["mismatches"] = contract_mismatches + mismatches
+    if out["mismatches"]:
         out["status"] = "mismatch"
     return out

@@ -15,6 +15,11 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.motion_timing import (  # noqa: E402
+    DEFAULT_STARTUP_XP3_NAME,
+    select_expected_segments,
+    validate_simulation_contract,
+)
 
 SCHEMA = "motion-stage-oracle-v1"
 SOURCE = "native-lldb-macos"
@@ -82,8 +87,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Path to the motion_playback_native executable")
     p.add_argument("--startup-xp3",
                    default=str(REPO_ROOT / "reference" / "xp3" /
-                               "logo_test_oracle.xp3"),
-                   help="Host path to logo_test_oracle.xp3")
+                               DEFAULT_STARTUP_XP3_NAME),
+                   help=f"Host path to {DEFAULT_STARTUP_XP3_NAME}")
     p.add_argument("--spec-dir",
                    default=str(REPO_ROOT / "tests" / "differential" /
                                "specs" / "motion_playback"),
@@ -261,28 +266,28 @@ def build_case_segments(
 
     frames = trace_flatten_frames(events)
     segments = segment_trace_frames(frames)
-    substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if len(substantive) < len(specs_by_id):
+    ordered_specs = [specs_by_id[spec_id] for spec_id in segment_order]
+    try:
+        fixture_segments = select_expected_segments(segments, ordered_specs)
+    except ValueError as exc:
         raise RuntimeError(
-            f"only {len(substantive)} substantive native trace_flatten "
-            f"segment(s) captured (raw segments: "
-            f"{[len(s['frames']) for s in segments]})."
-        )
+            f"failed to identify native staged fixture segments: {exc}"
+        ) from exc
 
     out: list[dict[str, Any]] = []
     for i, spec_id in enumerate(segment_order):
         wanted = int(specs_by_id[spec_id]["frames"])
-        frames_for_case = substantive[i]["frames"]
-        if len(frames_for_case) < wanted:
+        frames_for_case = fixture_segments[i]["frames"]
+        if len(frames_for_case) != wanted:
             raise RuntimeError(
                 f"native trace_flatten segment {i} ({spec_id}) has "
                 f"{len(frames_for_case)} frames; spec requires {wanted}."
             )
-        clipped = frames_for_case[:wanted]
+        clipped = frames_for_case
         out.append({
             "caseId": spec_id,
             "spec": specs_by_id[spec_id],
-            "player": substantive[i]["player"],
+            "player": fixture_segments[i]["player"],
             "frames": clipped,
             "firstSeq": int(clipped[0]["seq"]),
             "lastSeq": int(clipped[-1]["seq"]),
@@ -1344,6 +1349,12 @@ def main(argv: list[str]) -> int:
         return 2
 
     specs = load_specs(spec_dir)
+    try:
+        validate_simulation_contract(specs)
+    except ValueError as exc:
+        print(f"invalid motion_playback timing contract: {exc}",
+              file=sys.stderr)
+        return 2
     if not specs:
         print(f"no specs in {spec_dir}", file=sys.stderr)
         return 0

@@ -29,6 +29,13 @@ from oracle_runner.motion_capture_window import (
     captured_case_ranges,
     frame_capture_window_from_args,
 )
+from oracle_runner.motion_timing import (
+    DEFAULT_STARTUP_XP3_NAME,
+    SIMULATION_DELTA_MS,
+    SIMULATION_FPS,
+    select_expected_segments,
+    validate_simulation_contract,
+)
 
 
 SCHEMA = "motion-stage-oracle-v1"
@@ -71,7 +78,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Output root for staged oracle JSON files")
     p.add_argument("--startup-xp3",
                    default=str(REPO_ROOT / "reference" / "xp3" /
-                               "logo_test_oracle.xp3"),
+                               DEFAULT_STARTUP_XP3_NAME),
                    help="Host path to the oracle startup XP3")
     p.add_argument("--case", action="append", default=[],
                    help="Motion case id to record; repeat for multiple cases. "
@@ -161,10 +168,10 @@ def wait_for_stage_trace(
     tracer,
     *,
     expected_frames: int,
+    specs: list[dict[str, Any]] | None,
     timeout: float,
     poll_interval: float = 0.4,
     stabilise_seconds: float = 2.0,
-    require_substantive_segments: bool = True,
 ) -> list[dict[str, Any]]:
     deadline = time.time() + timeout
     last_count = -1
@@ -180,19 +187,20 @@ def wait_for_stage_trace(
         if stable_since is not None and \
                 time.time() - stable_since >= stabilise_seconds:
             events = tracer.stop_record()
+            if specs is None:
+                return events
             frames = trace_flatten_frames(events)
             segments = segment_trace_frames(frames)
-            substantive = [s for s in segments if len(s["frames"]) >= 30]
-            if not require_substantive_segments:
+            try:
+                select_expected_segments(segments, specs)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"trace_flatten frame count stabilised at {len(frames)}, "
+                    f"but fixture segments did not match the spec contract: "
+                    f"{exc}"
+                ) from exc
+            else:
                 return events
-            if len(substantive) >= 2:
-                return events
-            raise RuntimeError(
-                f"trace_flatten frame count stabilised at {len(frames)}, "
-                f"but only {len(substantive)} substantive segment(s) were "
-                f"captured (raw segments: "
-                f"{[len(s['frames']) for s in segments]})"
-            )
         time.sleep(poll_interval)
 
     raise RuntimeError(
@@ -280,12 +288,13 @@ def build_case_segments(
 
     frames = trace_flatten_frames(events)
     segments = segment_trace_frames(frames)
-    substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if len(substantive) < len(specs_by_id):
+    ordered_specs = [specs_by_id[spec_id] for spec_id in segment_order]
+    try:
+        fixture_segments = select_expected_segments(segments, ordered_specs)
+    except ValueError as exc:
         raise RuntimeError(
-            f"only {len(substantive)} substantive trace_flatten segment(s) "
-            f"captured (raw segments: {[len(s['frames']) for s in segments]})."
-        )
+            f"failed to identify Android fixture segments: {exc}"
+        ) from exc
 
     out: list[dict[str, Any]] = []
     total_frames = sum(int(s["frames"]) for s in specs_by_id.values())
@@ -303,17 +312,17 @@ def build_case_segments(
     }
     for i, spec_id in enumerate(segment_order):
         wanted = int(specs_by_id[spec_id]["frames"])
-        frames_for_case = substantive[i]["frames"]
-        if len(frames_for_case) < wanted:
+        frames_for_case = fixture_segments[i]["frames"]
+        if len(frames_for_case) != wanted:
             raise RuntimeError(
                 f"trace_flatten segment {i} ({spec_id}) has "
                 f"{len(frames_for_case)} frames; spec requires {wanted}."
             )
-        clipped = frames_for_case[:wanted]
+        clipped = frames_for_case
         out.append({
             "caseId": spec_id,
             "spec": specs_by_id[spec_id],
-            "player": substantive[i]["player"],
+            "player": fixture_segments[i]["player"],
             "frames": clipped,
             "firstSeq": int(clipped[0]["seq"]),
             "lastSeq": int(clipped[-1]["seq"]),
@@ -1254,7 +1263,8 @@ def write_render_stage_artifacts(
         "fixture": {
             "xp3": str(startup_xp3),
             "window": {"width": 1920, "height": 1080},
-            "deltaMs": 1000.0 / 60.0,
+            "simulationFps": SIMULATION_FPS,
+            "deltaMs": SIMULATION_DELTA_MS,
             "segmentOrder": [s["caseId"] for s in case_segments],
         },
         "stages": list(stages),
@@ -1335,6 +1345,7 @@ def main(argv: list[str]) -> int:
 
     try:
         specs = filter_specs(load_specs(spec_dir), args.case)
+        validate_simulation_contract(specs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1414,10 +1425,12 @@ def main(argv: list[str]) -> int:
                 events = wait_for_stage_trace(
                     tracer,
                     expected_frames=expected_frames,
+                    specs=None if capture_window.enabled else [
+                        specs_by_id[spec_id]
+                        for spec_id in mpb.segment_order_for_specs(specs_by_id)
+                    ],
                     timeout=args.playback_timeout,
                     stabilise_seconds=5.0 if render_path else 2.0,
-                    require_substantive_segments=(
-                        not capture_window.enabled and len(specs) > 1),
                 )
                 render_step_checkpoints = tracer.image_checkpoints()
 
@@ -1510,7 +1523,7 @@ def main(argv: list[str]) -> int:
         print(
             "Diagnostics: verify harness APK is installed, frida-server is "
             "running as root, the serial is reachable, and "
-            "reference/xp3/logo_test_oracle.xp3 exists.",
+            f"reference/xp3/{DEFAULT_STARTUP_XP3_NAME} exists.",
             file=sys.stderr,
         )
         return 1

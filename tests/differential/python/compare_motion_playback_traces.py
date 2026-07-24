@@ -11,6 +11,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.motion_timing import validate_simulation_contract  # noqa: E402
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -168,6 +169,12 @@ def main(argv: list[str]) -> int:
     if not specs:
         print(f"no specs in {spec_dir}", file=sys.stderr)
         return 0
+    try:
+        validate_simulation_contract(specs)
+    except ValueError as exc:
+        print(f"invalid motion_playback timing contract: {exc}",
+              file=sys.stderr)
+        return 2
 
     from oracle_runner.adapters import motion_playback as mpb
 

@@ -1,0 +1,200 @@
+// Single-motion oracle-recording variant for yuzulogo.mtn.
+//
+// Keep the same KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint()
+// path as logo_test_oracle/startup.tjs, while packaging a logo.ks that contains
+// only the yuzulogo [ev]/[waitmovie] pair.
+
+Plugins.link("scriptsEx.dll");
+Plugins.link("motionplayer.dll");
+Plugins.link("emoteplayer.dll");
+
+function CanLoadPlugin(name) { return true; }
+
+var d3dMotion = false;
+Motion.enableD3D = 0;
+System.setArgument("-hdresomode", "1080");
+
+Scripts.execStorage("system/AffineMatrix.tjs");
+Scripts.execStorage("system/AffineSource.tjs");
+Scripts.execStorage("system/motion.tjs");
+Scripts.execStorage("system/KAGLayer.tjs");
+Scripts.execStorage("system/AffineSourceBMPBase.tjs");
+Scripts.execStorage("system/AffineSourceBitmap.tjs");
+Scripts.execStorage("system/AffineSourceImage.tjs");
+Scripts.execStorage("system/UpdateRegion.tjs");
+Scripts.execStorage("system/AffineLayer.tjs");
+Scripts.execStorage("system/AffineSourceMotion.tjs");
+&AffineSourceMotion._completionType = 0;
+
+var LOGO_WIDTH = 1920;
+var LOGO_HEIGHT = 1080;
+var LOGO_CENTER_X = 960;
+var LOGO_CENTER_Y = 540;
+var FIXED_DELTA_MS = 1000.0 / 15.0;
+global.baseScalex = 1;
+global.baseScaley = 1;
+
+class LogoLayer extends Layer {
+    function LogoLayer() { super.Layer(...); }
+    function getSubImageLayers() { return void; }
+}
+
+var win = new Window();
+win.setInnerSize(LOGO_WIDTH, LOGO_HEIGHT);
+win.caption = "logo_test oracle yuzulogo";
+win.getMultiResolutionInformation = function() {
+    return %["getInfo" => function() { return void; }];
+};
+
+var base = new LogoLayer(win, null);
+base.setImageSize(LOGO_WIDTH, LOGO_HEIGHT);
+base.setSizeToImageSize();
+base.visible = true;
+base.face = dfOpaque;
+base.type = ltOpaque;
+base.name = "logo_test_oracle_yuzulogo_base";
+base._completionType = 0;
+base.neutralColor = 0xFFFFFFFF;
+base.fillRect(0, 0, LOGO_WIDTH, LOGO_HEIGHT, 0xFFFFFFFF);
+win.add(base);
+base.setAttentionPos(0, 0);
+base.focusable = true;
+base.focus();
+
+var motionWorkLayer = new LogoLayer(win, base);
+motionWorkLayer.setImageSize(LOGO_WIDTH, LOGO_HEIGHT);
+motionWorkLayer.setSizeToImageSize();
+motionWorkLayer.visible = false;
+motionWorkLayer.face = dfAlpha;
+motionWorkLayer.type = ltAlpha;
+win.motionWorkLayer = motionWorkLayer;
+win.motionD3DAdaptor = void;
+win.motionCacheSize = 0;
+
+win.visible = true;
+
+var poolLayer = base;
+global.poolLayer = poolLayer;
+win._afnsrcpoollayer = poolLayer;
+win.sflags = %[];
+var logoLayer = new AffineLayer(win, base);
+logoLayer.setImageSize(LOGO_WIDTH, LOGO_HEIGHT);
+logoLayer.setSizeToImageSize();
+logoLayer.visible = true;
+logoLayer.face = dfAlpha;
+logoLayer.type = ltAlpha;
+logoLayer.name = "logo_test_oracle_yuzulogo_affine";
+logoLayer.completionType = 0;
+logoLayer.imagex = LOGO_CENTER_X;
+logoLayer.imagey = LOGO_CENTER_Y;
+var currentSource = void;
+var currentCaseId = void;
+var currentFrame = 0;
+var waitingMovie = false;
+var finished = false;
+var lastTick = System.getTickCount();
+
+var drawMatrix = new AffineMatrix();
+drawMatrix.m11 = 1;
+drawMatrix.m12 = 0;
+drawMatrix.m21 = 0;
+drawMatrix.m22 = 1;
+drawMatrix.m14 = LOGO_CENTER_X;
+drawMatrix.m24 = LOGO_CENTER_Y;
+
+var kag = new KAGParser();
+kag.ignoreCR = true;
+kag.processSpecialTags = true;
+kag.loadScenario("logo.ks");
+
+function savePhase(caseId, phase, frame)
+{
+    if(phase == "post_draw") {
+        Debug.message("__krkr2_motion_post_draw", caseId, frame,
+            motionWorkLayer, currentSource, base);
+    }
+    return;
+}
+
+function caseIdForStorage(storage)
+{
+    if(storage == "yuzulogo.mtn") return "yuzulogo";
+    if(storage == "m2logo.mtn") return "m2logo";
+    return storage;
+}
+
+function startMotion(storage, chara, motion)
+{
+    base.neutralColor = 0xFFFFFFFF;
+    base.fillRect(0, 0, LOGO_WIDTH, LOGO_HEIGHT, 0xFFFFFFFF);
+
+    logoLayer.loadImages(storage, clNone, %[
+        "chara" => chara,
+        "motion" => motion,
+        "flags" => Motion.PlayFlagForce
+    ]);
+    currentSource = logoLayer;
+    currentCaseId = caseIdForStorage(storage);
+    currentFrame = 0;
+    savePhase(currentCaseId, "initial", 0);
+}
+
+function pumpScript()
+{
+    while(!finished) {
+        var tag = kag.getNextTag();
+        if(tag === void) {
+            finished = true;
+            return;
+        }
+
+        var name = tag.tagname;
+        if(name == "ev") {
+            if(typeof tag.storage != "undefined") {
+                startMotion(tag.storage, tag.chara, tag.motion);
+            }
+            if(typeof tag.waitmovie != "undefined") {
+                waitingMovie = true;
+                return;
+            }
+        } else if(name == "s") {
+            finished = true;
+            return;
+        }
+    }
+}
+
+function drawFrame(tick)
+{
+    lastTick = tick;
+
+    if(currentSource !== void) {
+        currentSource._image._interval = FIXED_DELTA_MS;
+        currentSource.updateFlip();
+        currentSource.onPaint();
+        base.update();
+        win.update();
+
+        if(currentCaseId !== void) {
+            savePhase(currentCaseId, "post_draw", currentFrame);
+            currentFrame++;
+        }
+    }
+
+    if(waitingMovie) {
+        if(currentSource === void || !currentSource.canWaitMovie()) {
+            waitingMovie = false;
+            pumpScript();
+        }
+    } else {
+        pumpScript();
+    }
+
+    if(finished) {
+        base.fillRect(0, 0, LOGO_WIDTH, LOGO_HEIGHT, 0xFF000000);
+        System.removeContinuousHandler(drawFrame);
+    }
+}
+
+pumpScript();
+System.addContinuousHandler(drawFrame);

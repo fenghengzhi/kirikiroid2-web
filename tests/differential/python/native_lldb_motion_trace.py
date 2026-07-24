@@ -75,10 +75,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--runner", required=True,
                    help="Path to motion_playback_native")
     p.add_argument("--startup-xp3", required=True,
-                   help="Path to logo_test_oracle.xp3")
+                   help="Path to the deterministic 15 Hz oracle XP3")
     p.add_argument("--trace-out", required=True,
                    help="Path to write JSON trace events")
-    p.add_argument("--expected-frames", type=int, default=332,
+    p.add_argument("--expected-frames", type=int, required=True,
                    help="Minimum expected event count")
     p.add_argument("--timeout", type=float, default=90.0,
                    help="Soft timeout checked between LLDB stops")
