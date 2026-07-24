@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the deterministic 15 Hz motion_playback oracle fixtures.
+# Build the 15 Hz-targeted motion_playback oracle fixtures.
 #
 # Small fixture scripts are tracked beside this file so the simulation cadence
 # and KAG playback path are reviewable. Large game/system assets remain in the
@@ -98,5 +98,5 @@ mv -f "$BUILD_DIR/combined.xp3" "$OUT_COMBINED"
 mv -f "$BUILD_DIR/yuzulogo.xp3" "$OUT_YUZU"
 mv -f "$BUILD_DIR/m2logo.xp3" "$OUT_M2"
 
-echo "Built deterministic 15 Hz oracle fixtures:"
+echo "Built 15 Hz-targeted oracle fixtures:"
 shasum -a 256 "$OUT_COMBINED" "$OUT_YUZU" "$OUT_M2"

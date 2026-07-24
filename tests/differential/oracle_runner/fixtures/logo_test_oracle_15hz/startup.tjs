@@ -1,8 +1,8 @@
 // Oracle-recording variant of logo_test/startup.tjs.
 //
 // Keep the same KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint()
-// path as logo_test.xp3, while using a fixed delta so Frida oracle segments
-// remain deterministic enough for fresh compare runs.
+// path as logo_test.xp3. Motion interval follows the production
+// tick - lastTick flow; the runner pins the engine/display target to 15 Hz.
 
 Plugins.link("scriptsEx.dll");
 Plugins.link("motionplayer.dll");
@@ -30,7 +30,6 @@ var LOGO_WIDTH = 1920;
 var LOGO_HEIGHT = 1080;
 var LOGO_CENTER_X = 960;
 var LOGO_CENTER_Y = 540;
-var FIXED_DELTA_MS = 1000.0 / 15.0;
 global.baseScalex = 1;
 global.baseScaley = 1;
 
@@ -92,7 +91,7 @@ var currentCaseId = void;
 var currentFrame = 0;
 var waitingMovie = false;
 var finished = false;
-var lastTick = System.getTickCount();
+var lastTick = void;
 
 var drawMatrix = new AffineMatrix();
 drawMatrix.m11 = 1;
@@ -173,10 +172,12 @@ function pumpScript()
 
 function drawFrame(tick)
 {
+    if(lastTick === void) lastTick = tick;
+    var delta = tick - lastTick;
     lastTick = tick;
 
     if(currentSource !== void) {
-        currentSource._image._interval = FIXED_DELTA_MS;
+        currentSource._image._interval = delta;
         currentSource.updateFlip();
         currentSource.onPaint();
         base.update();

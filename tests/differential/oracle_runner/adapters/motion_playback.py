@@ -2,7 +2,7 @@
 
 Two modes:
   * Live oracle (`record_all_oracles`): attach Frida to the APK harness,
-    drop the deterministic 15 Hz oracle XP3 on the device, trigger
+    drop the 15 Hz-targeted oracle XP3 on the device, trigger
     `TVPMainScene::startupFrom` via the harness-RPC engine (pure
     scheduler call; doesn't touch GL thread state), and let the embedded
     `startup.tjs` play yuzulogo then m2logo on the cocos2d GL thread.
@@ -94,11 +94,12 @@ def segment_order_for_specs(specs_or_by_id) -> tuple[str, ...]:
     return tuple(sid for sid in SEGMENT_ORDER if sid in specs_by_id)
 
 
-# Deterministic 15 Hz oracle-recording XP3. Its startup.tjs keeps the same
+# 15 Hz oracle-recording XP3. Its startup.tjs keeps the same
 # KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint() playback path
-# as logo_test.xp3, with fixed delta timing so fresh oracles remain comparable.
-# The Wasmtime verifier loads this same XP3 and collects the port-side trace
-# samples. Small scripts are tracked beside the build script; large assets stay
+# as logo_test.xp3 and derives each motion interval from tick - lastTick. The
+# Android display and Kirikiroid playback preferences pin the callback target
+# to 15 Hz; the Wasmtime verifier advances its virtual clock at the same target
+# cadence. Small scripts are tracked beside the build script; large assets stay
 # under reference/xp3/logo_test. Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
 # whenever the spec frame counts change.
@@ -107,6 +108,8 @@ _REMOTE_APP_FILES_DIR = "/sdcard/Android/data/org.github.krkr2/files"
 _REMOTE_STARTUP_FILES_DIR = "/data/user/0/org.github.krkr2/files"
 ORACLE_RENDERER = "software"
 ORACLE_RENDERER_SOURCE = "explicit-oracle-preference"
+ORACLE_FPS_LIMIT = int(SIMULATION_FPS)
+ORACLE_FPS_LIMIT_SOURCE = "explicit-oracle-preference"
 _ORACLE_GLOBAL_PREFERENCE_PATH = (
     "/data/user/0/org.github.krkr2/files/.preference/GlobalPreference.xml"
 )
@@ -214,6 +217,7 @@ def _renderer_preference_xml(renderer: str = ORACLE_RENDERER) -> str:
         "<GlobalPreference>\n"
         f"    <Item key=\"renderer\" value=\"{renderer}\"/>\n"
         "    <Item key=\"ogl_accurate_render\" value=\"false\"/>\n"
+        f"    <Item key=\"fps_limit\" value=\"{ORACLE_FPS_LIMIT}\"/>\n"
         "</GlobalPreference>\n"
     )
 
@@ -281,6 +285,8 @@ def oracle_renderer_metadata() -> dict[str, str]:
     return {
         "renderer": ORACLE_RENDERER,
         "rendererSource": ORACLE_RENDERER_SOURCE,
+        "fpsLimit": str(ORACLE_FPS_LIMIT),
+        "fpsLimitSource": ORACLE_FPS_LIMIT_SOURCE,
     }
 
 
@@ -290,11 +296,11 @@ def ensure_oracle_renderer_software(
     remote_game: str | None = None,
     write_global: bool = True,
 ) -> None:
-    """Force Android oracle playback to use libkrkr2's software renderer.
+    """Force Android oracle playback to use software rendering at 15 Hz.
 
     The global preference must be written before HarnessActivity starts;
     the per-game preference is written again immediately before startupFrom
-    so stale device state cannot switch the parity lane to OpenGL/hardware.
+    so stale device state cannot switch the parity lane's renderer or FPS.
     """
     xml = _renderer_preference_xml()
     try:
@@ -305,8 +311,8 @@ def ensure_oracle_renderer_software(
                 serial, _ORACLE_GLOBAL_PREFERENCE_PATH, root=True)
             if global_text.strip() != xml.strip():
                 raise RuntimeError(
-                    "Android Oracle renderer=software verification failed; "
-                    "Oracle renderer cannot be guaranteed. "
+                    "Android Oracle playback preference verification failed; "
+                    "software renderer / 15 Hz cannot be guaranteed. "
                     "Global preference did not match: "
                     f"{_ORACLE_GLOBAL_PREFERENCE_PATH}")
 
@@ -315,14 +321,14 @@ def ensure_oracle_renderer_software(
         game_text = _read_remote_text(serial, game_pref, root=True)
         if game_text.strip() != xml.strip():
             raise RuntimeError(
-                "Android Oracle renderer=software verification failed; "
-                "Oracle renderer cannot be guaranteed. "
+                "Android Oracle playback preference verification failed; "
+                "software renderer / 15 Hz cannot be guaranteed. "
                 "Per-game preference did not match: "
                 f"{game_pref}")
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
-            "failed to enforce Android Oracle renderer=software; "
-            "Oracle renderer cannot be guaranteed. "
+            "failed to enforce Android Oracle playback preferences; "
+            "software renderer / 15 Hz cannot be guaranteed. "
             f"ADB error: {_subprocess_error_text(exc)}"
         ) from exc
 

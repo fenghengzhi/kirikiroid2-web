@@ -225,6 +225,34 @@ class WasmtimeEnvProvider:
         self._fds: dict[int, dict[str, Any]] = {}
         self.capture_swap_framebuffer = False
         self._swap_framebuffers: list[dict[str, Any]] = []
+        # The full guest is stepped synchronously, so wall-clock time would
+        # barely advance between mainLoop() calls. Keep the host's monotonic,
+        # emscripten_get_now and RAF timestamp imports on one virtual clock;
+        # startup.tjs can then use the production tick - lastTick data flow.
+        monotonic_ns = time.monotonic_ns()
+        self._simulation_monotonic_ns = (
+            monotonic_ns - monotonic_ns % 1_000_000
+        )
+        self._simulation_subnanoseconds = 0.0
+
+    @property
+    def simulation_time_ms(self) -> float:
+        return (
+            self._simulation_monotonic_ns +
+            self._simulation_subnanoseconds
+        ) / 1_000_000.0
+
+    def advance_simulation_time(self, delta_ms: float) -> None:
+        if not math.isfinite(delta_ms) or delta_ms < 0.0:
+            raise ValueError(f"invalid Wasmtime simulation delta: {delta_ms}")
+        total_subnanoseconds = (
+            self._simulation_subnanoseconds + delta_ms * 1_000_000.0
+        )
+        whole_nanoseconds = math.floor(total_subnanoseconds)
+        self._simulation_monotonic_ns += int(whole_nanoseconds)
+        self._simulation_subnanoseconds = (
+            total_subnanoseconds - whole_nanoseconds
+        )
 
     def begin_swap_framebuffer_capture(self) -> None:
         self._swap_framebuffers = []
@@ -371,7 +399,7 @@ class WasmtimeEnvProvider:
             "emscripten_asm_const_int": self._asm_const_int,
             "emscripten_asm_const_int_sync_on_main_thread":
                 self._asm_const_int,
-            "emscripten_asm_const_double": self._return_one_double,
+            "emscripten_asm_const_double": self._asm_const_double,
             "emscripten_asm_const_ptr_sync_on_main_thread": self._return_zero,
             "emscripten_notify_memory_growth": self._return_none,
             "emscripten_sample_gamepad_data": self._return_zero,
@@ -440,9 +468,9 @@ class WasmtimeEnvProvider:
                           *args: Any) -> int:
         return -1
 
-    def _return_one_double(self, _func_type: Any, _caller: Any,
-                           *args: Any) -> float:
-        return 1.0
+    def _asm_const_double(self, _func_type: Any, _caller: Any,
+                          *args: Any) -> float:
+        return self.simulation_time_ms
 
     def _asm_const_int(self, _func_type: Any, _caller: Any,
                        *args: Any) -> int:
@@ -617,9 +645,13 @@ class WasmtimeEnvProvider:
 
     def _wasi_clock_time_get(self, _func_type: Any, caller: Any,
                              *args: Any) -> int:
-        import time
         if len(args) >= 3:
-            self._write_i64(caller, int(args[2]), time.time_ns())
+            clock_id = int(args[0])
+            now_ns = (
+                self._simulation_monotonic_ns
+                if clock_id == 1 else time.time_ns()
+            )
+            self._write_i64(caller, int(args[2]), now_ns)
         return 0
 
     def _wasi_environ_sizes_get(self, _func_type: Any, caller: Any,
@@ -781,6 +813,8 @@ class WasmtimeEnvProvider:
 
     def _emscripten_get(self, name: str, func_type: Any, caller: Any,
                         *args: Any) -> Any:
+        if name == "emscripten_get_now":
+            return self.simulation_time_ms
         if name == "emscripten_get_canvas_element_size" and len(args) >= 3:
             self._write_i32(caller, int(args[1]), self.canvas_width)
             self._write_i32(caller, int(args[2]), self.canvas_height)
@@ -905,6 +939,16 @@ class WasmtimeBootstrapInfo:
         )
 
 
+def _wasmtime_preference_xml(renderer: str) -> str:
+    return (
+        "<?xml version=\"1.0\"?>\n"
+        "<GlobalPreference>\n"
+        f"    <Item key=\"renderer\" value=\"{renderer}\"/>\n"
+        f"    <Item key=\"fps_limit\" value=\"{SIMULATION_FPS:g}\"/>\n"
+        "</GlobalPreference>\n"
+    )
+
+
 def prepare_wasmtime_bootstrap(root: Path,
                               startup_xp3: Path) -> WasmtimeBootstrapInfo:
     preload_src = REPO_ROOT / "ui" / "cocos-studio"
@@ -917,10 +961,7 @@ def prepare_wasmtime_bootstrap(root: Path,
     renderer = os.environ.get("KRKR2_WASMTIME_RENDERER") or "software"
     pref = root / "save" / "GlobalPreference.xml"
     pref.write_text(
-        "<?xml version=\"1.0\"?>\n"
-        "<GlobalPreference>\n"
-        f"    <Item key=\"renderer\" value=\"{renderer}\"/>\n"
-        "</GlobalPreference>\n",
+        _wasmtime_preference_xml(renderer),
         encoding="utf-8",
     )
 
@@ -1775,6 +1816,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     max_ticks = int(frames)
     ticks_driven = 0
     for tick_index in range(max_ticks):
+        env_provider.advance_simulation_time(SIMULATION_DELTA_MS)
         tick_ok = tick(store, SIMULATION_DELTA_MS)
         ticks_driven += 1
         if not tick_ok:

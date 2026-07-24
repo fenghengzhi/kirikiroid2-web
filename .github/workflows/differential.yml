@@ -28,8 +28,8 @@ env:
   # Google Drive references are mutable; pin the exact oracle inputs each job consumes.
   REFERENCE_LIBKRKR2_SHA256: "ded611b9018cfca425e97d5f8aaaa5dff809c4bacefb66ba77806372ddb52b38"
   REFERENCE_APK_SHA256: "262bab07722b95d76e3e10170744d88f80141260502e3d0a7b4e005ed3090379"
-  REFERENCE_YUZULOGO_15HZ_XP3_SHA256: "00a3fd21cccd217f7e4f49e5787db1ff88332e870e94d0148f064d35cbaad974"
-  REFERENCE_M2LOGO_15HZ_XP3_SHA256: "54e8f9c696c12ccec8e0b82a0c04e7c325ee4f0f169354a539b0f69618ad915e"
+  REFERENCE_YUZULOGO_15HZ_XP3_SHA256: "038bab92728c80e917ed55224aa8c96cc04474d112d8a0e42730d908acd7e3df"
+  REFERENCE_M2LOGO_15HZ_XP3_SHA256: "704729939ceabc2d93388cdc8b980bfd79506bedf660d0911c3dd13e9f78cb94"
 
 jobs:
   # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
@@ -613,7 +613,8 @@ jobs:
           docker run -d --rm --name redroid \
             --privileged \
             --network=host \
-            "${REDROID_IMAGE}"
+            "${REDROID_IMAGE}" \
+            androidboot.redroid_fps=15
           # Wait for boot: adb connect + sys.boot_completed=1.
           for i in $(seq 1 60); do
             sleep 5
@@ -630,6 +631,13 @@ jobs:
               exit 1
             fi
           done
+          redroid_fps=$(adb -s localhost:5555 shell getprop ro.boot.redroid_fps 2>/dev/null | tr -d '\r\n')
+          if [ "${redroid_fps}" != "15" ]; then
+            echo "::error::Redroid FPS contract mismatch: expected 15, got ${redroid_fps:-unset}" >&2
+            docker logs redroid >&2 || true
+            exit 1
+          fi
+          echo "Redroid display FPS=${redroid_fps}"
           adb devices -l
 
       - name: Set up ADB+Frida oracle runtime
