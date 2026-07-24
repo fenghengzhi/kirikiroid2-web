@@ -50,12 +50,12 @@ namespace PSB {
                 (0xffffffffu >> shift);
         }
 
-        // The same-game Win32 psbfile.dll independently materializes this
-        // four-DWORD record before calling its packed-array operator[].  The
-        // stripped Android build scalar-replaces the corresponding values in
         // FindNameIndex @ 0x59641C, FindDictionaryValueOffset @ 0x59659C and
-        // DecodeName @ 0x597B1C.  The cross-build evidence supports the
-        // four-field source topology, but not the exact Android type name.
+        // DecodeName @ 0x597B1C expose the count, width, values base and
+        // next-table displacement calculations.  Some optimized paths retain
+        // only width and the values base.  This record is an explicitly
+        // guessed local factorization: libkrkr2.so does not prove that those
+        // values belonged to one C++ object or had this field organization.
         struct PsbArray_guess {
             std::uint32_t nBytes;
             std::uint32_t nElementCount;

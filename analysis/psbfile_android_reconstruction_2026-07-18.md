@@ -2272,10 +2272,11 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   更新顺序可证；2026-07-24 又以 identity refcount store 和 AArch64 对照闭合两个真实
   rvalue 调用点的 copy + temporary destruction。helper 原名/member 身份、不可见位置是否
   另有显式 special members/self guards、`sub_597AD4` 第一实参的一指针 holder 精确类型、
-  当时仅凭 Android stripped O3 尚不能确认 `PackedArrayView_guess` 是否真实源类型；后续同游戏
-  Win32 DLL 已把候选收敛为四字段 `PsbArray_guess`，但 Android 精确类型名仍不可证明，
-  以及 `memcpy`/unaligned cast 写法均不可辨识。代码与本文已删除把其中任一等价形状冒充
-  唯一源码事实的表述。
+  Android stripped O3 不能确认 `PackedArrayView_guess` 或当前四字段 `PsbArray_guess`
+  是否为真实源类型；目标只能证明 `nBytes/count/width/values-base` 四个语义量及其运算，
+  不能证明它们来自同一个对象。当前结构是显式推测的本地 factorization，精确类型名、字段
+  组织以及 `memcpy`/unaligned cast 写法均不可辨识；代码与本文不再把任一等价形状冒充
+  唯一源码事实。
 
 - 2026-07-22 的最终 local→Android 与生命周期复核又修正四组细节。①
   `LoadStorage@0x598570..0x59858C` 的 placed-path `ttstr` 在 `TVPCreateStream` 返回后立即
@@ -2381,9 +2382,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   iterator-range assign 模板调用面。其余三张 packed view、无 reserve 的
   `vector<char>`、逐 parent push、reverse、`vector<string>::reserve(count)`、复用一只
   string 后 copy-emplace、W32 回绕/UXTW 加址及异常析构顺序均未发现可证偏差。
-  当时的 `PackedArrayView_guess` 是否为真实类型、inline/member factorization 与 unaligned read
-  的源码拼写仍超出单独 Android stripped O3 二进制的证据上限；后续同游戏 Win32 DLL 已提供
-  四字段形态的独立交叉证据。macOS Release 两目标重编后，
+  `PackedArrayView_guess` 或当前 `PsbArray_guess` 是否为真实类型、inline/member
+  factorization 与 unaligned read 的源码拼写仍超出 Android stripped O3 二进制的证据上限；
+  四字段仅是对上述 Android 语义量的本地推测性 factorization。macOS Release 两目标重编后，
   `psbfile-dll` **577/577**、`motionplayer-dll` **1376/1376**；Debug `PSBRawFile.cpp.o`
   仅保留 undefined `basic_string::assign(const char*, unsigned long)`，不再发射 iterator
   assign template。Wasmtime full guest 重链成功，15 Hz timing contract **7/7** 继续通过。
@@ -2449,26 +2450,16 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `psbfile-dll` **577/577**、`motionplayer-dll` **1374/1374**。此前 1376/1376 数字均保留为
   历史 checkpoint，不应与当前测试集合混读。
 
-- 2026-07-24 又对同游戏 Win32 原始插件
-  `reference/xp3/dracu_boot/DRACU-RIOT/plugin/psbfile.dll`（SHA-256
-  `465abd6c0483a7df7b4d7818b844378b23c6436585688b09a84ba79fd13cd0eb`）做独立谱系复核。
-  Win32 `0x1000AAE0` 在栈上连续物化 `+0 nBytes/+4 count/+8 width/+0xC values`
-  四字段记录，再把其地址传给 packed operator `0x1000A7A0`；相同构造在
-  `0x1000AB40/0x1000ABA0` 重复。Android `FindNameIndex@0x59641C`、
-  `FindDictionaryValueOffset@0x59659C`、`DecodeName@0x597B1C` 则按实际消费字段标量
-  替换同一构造结果：需要 next-table 的对象保留 `count/width/values/nBytes`，只作
-  `operator[]` 的对象经 DCE 后仅剩 `width/values`；`0x597B40..0x597C10` 仍清楚呈现三张
-  连续 table 的基址派生与消费拓扑，但不能声称每张表的四字段在优化产物中都同时存活。
-  外部 KrkrExtract commit `a2904bc1afb8aa87f1df99951bdf9c854784628d` 的
-  `EMoteDumper.cpp` 也给出同形 `PsbArray`，但它是 2019 年逆向工具，只作二级交叉证据，
-  不能覆盖 Android。三方证据足以把本地人为六字段 view 收敛为四字段
-  `PsbArray_guess {nBytes,nElementCount,nSizeOf,pCode}`；Android 自身没有残留该类型名，
-  所以仍保留 `_guess`。
-- 同轮明确记录跨版本边界差异：Win32 `operator[]@0x1000A7A0` 只接受 width 1..4，
-  width 5 会抛 “access to uninitialized array structure”；Android 三个独立消费者都以
-  `(tag-0x0D)<=4` 接受 width 1..5，width 5 经 AArch64 shift-modulo 只保留低 8 位，非法
-  width 返回 0，且目标中不存在 Win32 异常串。本地四字段实现因此只采用 Win32 证明的
-  容器拓扑，边界严格保留 Android：`nBytes` 全式 W32，operator 的 index product 为 W32
+- 2026-07-24 在证据范围收紧为仅使用 Android `libkrkr2.so` 后，fresh decompile/disasm
+  `FindNameIndex@0x59641C`、`FindDictionaryValueOffset@0x59659C` 与
+  `DecodeName@0x597B1C`。三者反复呈现 `count/width/values-base/next-table offset` 运算；
+  需要进入下一张 table 的路径会在 W32 内计算完整 `headerBytes + count*width`，只读取元素的
+  路径则只消费 `width/values-base`。当前四字段 `PsbArray_guess` 仅是一种显式推测的本地
+  factorization，**不能**据此宣称原源码存在该结构、字段名、字段顺序或独立构造器；因此
+  `_guess` 与限制说明必须保留，完成度也不再引用任何其他平台二进制或外部逆向源码。
+- 同轮仅据 Android 三个独立消费者确认 `(tag-0x0D)<=4` 接受 width 1..5；width 5 经
+  AArch64 shift-modulo 只保留低 8 位，非法 width 返回 0。本地四字段分组严格保持目标边界：
+  `nBytes` 全式 W32，operator 的 index product 为 W32
   后 UXTW，array value 地址保持两次 UXTW pointer add，dictionary relative 在 W32 合并，
   `PropGetByNum@0x5976C4` 仍在 bounds 后第二次构造并以 SXTW 形成最终 node 地址。
   重构后的本地非回归为 `psbfile-dll` **577/577**、`motionplayer-dll` **1374/1374**；
