@@ -1299,19 +1299,41 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
     `tTJSVariant` owner，+504 按 binary 保持 ctor 不初始化、由 type-1 play 先写 -1。
     对 `Player_initEmoteMotion` 的 9 个 code xref 已全部复核并接入；调用可能重建节点树，
     因此 child/particle caller 在调用后重新取得 root 节点，不保留失效引用。
+53. `motionplayer_static_init@0x42EE18` 在 TU 初始化阶段默认构造进程级
+    `OwnerFilter@0x1AB82E0`，并立即为它注册 `__cxa_atexit`；它不是带
+    `__cxa_guard` 的 function-local static。两个 setter `0x685D30/0x685E60`
+    都先构造自己的临时 `std::function`，再把 const 引用交给
+    `sub_6A87D0@0x6A87D0`。该 helper 以 manager op=2 copy-clone target，交换进
+    全局对象后以 op=3 销毁旧 target；setter 返回前还会独立销毁原临时对象。
+    `ResourceManager_loadResource@0x6A8D8C` 则直接把全局对象地址传给
+    `PSBFile::LoadStorage@0x598538`。本地已把惰性 accessor + prvalue move 改回
+    TU 级 owner、const-ref copy helper、命名临时对象及直接加载引用，从而恢复静态
+    初始化时机、目标复制次数和旧/新闭包析构顺序。seed target 也已按
+    `0x685DC8..0x685DE0` 与 manager `0x686450` 恢复为完整 8 字节 TJS Integer capture；
+    只有 invoker `0x6863CC` 初始化 xorshift 状态时才读取低 32 位。setter 指令流没有
+    全局 seed 写入或日志调用，注入入口 `0x682528` 也只注册两个 setter，因此删除了本地
+    测试旁路 `_decryptSeed`、getter 和额外日志。
 
 ## 验证
 
+- 2026-07-24 全局 PSB decrypt filter 生命周期修正后，macOS Release
+  `motionplayer-dll` 完成 33/33 增量构建步骤，21/21 test cases、1374/1374
+  assertions 全部通过；Web Debug 完成 32/32 增量步骤并最终链接 `index.html`。
+  对新生成的 ARM64 `ResourceManager.cpp.o` 独立反汇编确认：
+  `__GLOBAL__sub_I_ResourceManager.cpp` 直接初始化 TU 级 filter 并注册
+  `__cxa_atexit`，没有该 filter 的 guard；seed setter 保留 64 位 capture，复制出第二只
+  target 后才与全局交换；func setter也分配第二只 lambda target、增加控制块引用，再交换
+  全局并独立销毁源 target。该检查排除了优化器把修复重新折叠成原先 move 路径的可能。
 - 2026-07-23 source consumer/cache/RNG 纠正后，Web Debug 从 32 个受影响目标重新编译并
   最终链接 `index.html` 成功，`git diff --check` 通过；显式
   `psb_rl_decompress_wasm` 目标为最新。独立 Wasmtime driver 使用仓库现有 8 个
   `psb_rl_decompress` case 全部完成（8 host calls，无 crash）。标准 LLDB runner 仍因本机
   缺少 `wasm-objdump` 无法进入 probe；此前隔离 LLDB 尝试又受 macOS attach 权限阻止，
   因而这 8 项只记作 port-wasm 执行验证，不冒充 LLDB/Android oracle 差分。
-- 当前 macOS Release `psbfile-dll`：5 test cases、437 assertions 全部通过。测试 target
+- 当前 macOS Release `psbfile-dll`：10 test cases、577 assertions 全部通过。测试 target
   已链接 `krkr2plugins_ncbind`，补齐 `TVPGetD3DImageNative`/
   `TVPGetD3DImageScaleX` 所属 D3D bridge；这是测试构建接线修复，不改变产品实现。
-- 当前 macOS Release `motionplayer-dll`：14 test cases、398 assertions 全部通过。
+- 当前 macOS Release `motionplayer-dll`：21 test cases、1374 assertions 全部通过。
 - 当前 Web Debug：曲线 raw-owner/离线类型剥离后的增量目标完成，`index.html` 最终链接通过。
 - Web Debug：本轮完成 217/217 targets，`index.html` 完整链接通过；
   `ResourceManager` 内联容器、D3DImage owner 与 last-loaded 状态删除均进入最终 wasm 链接。

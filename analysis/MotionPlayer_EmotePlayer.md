@@ -173,14 +173,22 @@ sub_530C3C():
 
 EmotePlayer 注册了两个 PSB (E-mote 数据格式) 解密相关方法到 ResourceManager：
 
-1. **setEmotePSBDecryptSeed** (`sub_685D30`, 0x685D30, 1048 bytes)
-   - 接收一个参数 (种子值)
-   - 根据参数类型 (string/int/float) 进行转换
-   - 将种子传递给 `sub_6A87D0` 进行解密配置
-   - 支持的参数类型: 1=string→int, 2=string, 3=octet→int, 4=int, 5=float→int
+1. **setEmotePSBDecryptSeed**
+   (`EmotePlayer_setEmotePSBDecryptSeed_callback`, `0x685D30..0x685E60`)
+   - 参数数少于 1 时返回 `TJS_E_BADPARAMCOUNT`；只转换首参数，额外参数忽略
+   - 使用普通 `tTJSVariant`→64 位 TJS Integer 转换规则取得 seed；lambda target
+     保存并 copy-clone 全部 8 字节，只在 xorshift 调用时读取低 32 位
+   - 构造捕获 seed 的临时 `std::function`，再经 `sub_6A87D0` copy-clone 到
+     进程级 filter；setter 返回前独立销毁临时对象
 
-2. **setEmotePSBDecryptFunc** (`loc_685E60`)
-   - 设置自定义解密函数回调
+2. **setEmotePSBDecryptFunc** (`0x685E60..0x686148`)
+   - 参数数少于 1 时返回 `TJS_E_BADPARAMCOUNT`，否则把首参数转换为 object closure
+   - closure 经 `tRefHolder` 控制块进入临时 `std::function`，随后同样由
+     `sub_6A87D0` copy-clone 到全局 filter
+
+3. **全局 filter 生命周期**
+   - `motionplayer_static_init@0x42EE18` 默认构造 `0x1AB82E0` 并注册 atexit 析构
+   - `ResourceManager_loadResource@0x6A8D8C` 直接把它传给 `PSBFile::LoadStorage`
 
 ---
 

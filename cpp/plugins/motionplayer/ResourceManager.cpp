@@ -118,18 +118,24 @@ namespace {
         TVPExecuteExpression(TJS_W("new Math.RandomGenerator()"), &generator);
     }
 
-    PSB::PSBFile::OwnerFilter &emotePSBDecryptFilter() {
-        // Global std::function at xmmword_1AB82E0, replaced through
-        // sub_6A87D0.  It is process-wide rather than a ResourceManager field.
-        static PSB::PSBFile::OwnerFilter filter;
-        return filter;
+    // motionplayer_static_init @0x42EE18 default-constructs the process-wide
+    // std::function at 0x1AB82E0 and registers its destructor with atexit.
+    PSB::PSBFile::OwnerFilter emotePSBDecryptFilter;
+
+    void replaceEmotePSBDecryptFilter_guess(
+        const PSB::PSBFile::OwnerFilter &filter) {
+        // sub_6A87D0 @0x6A87D0 copy-constructs a temporary target through the
+        // source manager's op=2, swaps it into 0x1AB82E0, then destroys the
+        // former global target through op=3.
+        emotePSBDecryptFilter = filter;
     }
 
     PSB::PSBFile::OwnerFilter makeEmotePSBDecryptSeedFilter(
-        std::uint32_t seed) {
+        tjs_int64 seed) {
         // sub_6863CC @0x6863CC: decrypt [header.encryptData,
         // header.chunkOffsets) with a four-word xorshift stream seeded by the
-        // captured integer installed at 0x685D30.
+        // low word of the captured 64-bit TJS Integer installed at 0x685D30.
+        // Its std::function manager @0x686450 allocates and clones all 8 bytes.
         return [seed](PSB::PSBRawOwner &owner) {
             auto *header = owner.GetHeader();
             auto *cursor = header->encryptData;
@@ -143,7 +149,7 @@ namespace {
             std::uint32_t x = 123456789u;
             std::uint32_t y = 362436069u;
             std::uint32_t z = 521288629u;
-            std::uint32_t w = seed;
+            std::uint32_t w = static_cast<std::uint32_t>(seed);
             std::uint32_t bytes = 0;
             do {
                 if(bytes == 0) {
@@ -262,10 +268,6 @@ motion::ResourceManager::~ResourceManager() {
     _loadedModules.clear();
 }
 
-tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {
-    return _decryptSeed;
-}
-
 tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
                                                           tjs_int count,
                                                           tTJSVariant **p,
@@ -276,10 +278,9 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
     if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
-    _decryptSeed = static_cast<tjs_int>(*p[0]);
-    emotePSBDecryptFilter() = makeEmotePSBDecryptSeedFilter(
-        static_cast<std::uint32_t>(_decryptSeed));
-    LOGGER->info("setEmotePSBDecryptSeed: {}", _decryptSeed);
+    const tjs_int64 seed = static_cast<tjs_int64>(*p[0]);
+    const auto filter = makeEmotePSBDecryptSeedFilter(seed);
+    replaceEmotePSBDecryptFilter_guess(filter);
     return TJS_S_OK;
 }
 
@@ -293,7 +294,8 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *,
     if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
-    emotePSBDecryptFilter() = makeEmotePSBDecryptFuncFilter(*p[0]);
+    const auto filter = makeEmotePSBDecryptFuncFilter(*p[0]);
+    replaceEmotePSBDecryptFilter_guess(filter);
     return TJS_S_OK;
 }
 
@@ -315,7 +317,7 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
         }
 
         PSB::PSBFile loaded;
-        if(!loaded.LoadStorage(path, emotePSBDecryptFilter())) {
+        if(!loaded.LoadStorage(path, emotePSBDecryptFilter)) {
             TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"), path);
         }
 

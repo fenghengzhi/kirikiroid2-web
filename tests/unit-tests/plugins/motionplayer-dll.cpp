@@ -750,13 +750,11 @@ TEST_CASE("setEmotePSBDecryptSeed follows the Android raw callback boundary") {
     tTJSVariant *realParams[] = { &realSeed, &ignored };
     REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
                 nullptr, 2, realParams, nullptr) == TJS_S_OK);
-    REQUIRE(motion::ResourceManager::getEmotePSBDecryptSeed() == 42);
 
     tTJSVariant stringSeed{ TJS_W("314") };
     tTJSVariant *stringParams[] = { &stringSeed };
     REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
                 nullptr, 1, stringParams, nullptr) == TJS_S_OK);
-    REQUIRE(motion::ResourceManager::getEmotePSBDecryptSeed() == 314);
 
     setEmoteSeed();
 }

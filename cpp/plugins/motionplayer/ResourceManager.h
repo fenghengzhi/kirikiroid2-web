@@ -209,8 +209,6 @@ namespace motion {
         static tjs_error random(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                                 iTJSDispatch2 *obj);            // @0x6AB56C
 
-        [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
-
         static tjs_error setEmotePSBDecryptSeed(tTJSVariant *r, tjs_int count,
                                                 tTJSVariant **p,
                                                 iTJSDispatch2 *obj);
@@ -237,8 +235,6 @@ namespace motion {
         tTJSVariant _randomGenerator;
         std::set<tjs_int> _usedLayerIds{0};
         tjs_int _nextLayerId = 1;
-        inline static int _decryptSeed;
-
         // --- R-M9 Phase 1 binary-aligned scaffolding (empty in phase 1) ---
 
         // C-1 (2026-06-07): the binary RM +40 bufLayer (Layer variant) and the
