@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -161,6 +162,7 @@ class FridaMotionStageTracer:
         self,
         stages: Sequence[str],
         *,
+        simulation_fps: float | None = None,
         record_render_step_checkpoints: bool = False,
         record_layer_raw_probes: bool = False,
         record_save_layer_visual_readback_probes: bool = False,
@@ -172,7 +174,18 @@ class FridaMotionStageTracer:
     ) -> None:
         if self._api is None:
             raise RuntimeError("tracer not attached; call attach() first")
+        if simulation_fps is not None and (
+            not math.isfinite(simulation_fps) or simulation_fps <= 0.0
+        ):
+            raise ValueError(
+                f"invalid continuous-handler simulation fps: "
+                f"{simulation_fps!r}"
+            )
         self._api.start_record(list(stages), {
+            "simulationFps": (
+                float(simulation_fps)
+                if simulation_fps is not None else 0.0
+            ),
             "recordRenderStepCheckpoints": bool(
                 record_render_step_checkpoints),
             "recordLayerRawProbes": bool(record_layer_raw_probes),

@@ -35,6 +35,12 @@ const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
 const DRAW_DEVICE_UPLOAD_LAYER_TO_TEXTURE_OFF = 0x850528;
 const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
 const DEBUG_MESSAGE_OFF          = 0xA18FBC;
+// TVPContinuousEventDispatch @0x8DF8AC calls TVPGetRoughTickCount32
+// @0xA2BF90 at 0x8DF8F0, then consumes the returned tick at 0x8DF8F4.
+// Restrict the differential clock override to that one call edge: timers,
+// input, storage and worker-thread clocks must continue to see real time.
+const TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF = 0x8DF8F4;
+const TVP_GET_ROUGH_TICK_COUNT32_OFF = 0xA2BF90;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
 const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
 const BITMAP_NATIVE_IMPL_OFF = 88;
@@ -147,6 +153,9 @@ let frameCounter = 0;
 let seqCounter = 0;
 let startTimeMs = 0;
 let enabledStages = new Set(ALL_STAGES);
+let virtualContinuousTickFps = 0;
+let virtualContinuousTickBase = null;
+let virtualContinuousTickIndex = 0;
 
 let inCompat = false;
 let samplesInFrame = [];
@@ -3015,6 +3024,37 @@ function leaveAccurateSlaRenderExecute(ctx, retval) {
 
 function installHook() {
     if (hooked) return;
+
+    attachAt(TVP_GET_ROUGH_TICK_COUNT32_OFF, 'TVPGetRoughTickCount32', {
+        onEnter() {
+            this.virtualizeContinuousTick = recording &&
+                virtualContinuousTickFps > 0 &&
+                this.returnAddress.equals(
+                    ensureBase().add(TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF));
+        },
+        onLeave(retval) {
+            if (!this.virtualizeContinuousTick) return;
+
+            if (virtualContinuousTickBase === null) {
+                virtualContinuousTickBase = uint64(retval.toString());
+            }
+
+            // Wasmtime advances its monotonic clock before the first guest
+            // tick. Preserve that phase: the first handler tick is the epoch,
+            // then floor(n * 1000 / fps) produces the same 67/67/66 ms cycle
+            // at 15 Hz. startup.tjs still observes a zero first-frame delta
+            // through its production lastTick === void guard.
+            const firstGridTick = Math.floor(
+                1000 / virtualContinuousTickFps);
+            const gridTick = Math.floor(
+                (virtualContinuousTickIndex + 1) * 1000 /
+                virtualContinuousTickFps);
+            const offsetMs = gridTick - firstGridTick;
+            retval.replace(ptr(
+                virtualContinuousTickBase.add(offsetMs).toString()));
+            virtualContinuousTickIndex++;
+        },
+    });
     ensureBase();
 
     attachAt(DEBUG_MESSAGE_OFF, 'Debug_message', {
@@ -4008,6 +4048,9 @@ rpc.exports = {
                 tvpSaveAsPng: TVP_SAVE_AS_PNG_OFF,
                 bitmapGetScanLine: BITMAP_GET_SCANLINE_OFF,
                 debugMessage: DEBUG_MESSAGE_OFF,
+                continuousEventTickReturn:
+                    TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF,
+                getRoughTickCount32: TVP_GET_ROUGH_TICK_COUNT32_OFF,
                 layerClassId: LAYER_CLASS_ID_OFF,
             },
         };
@@ -4016,6 +4059,14 @@ rpc.exports = {
         const requested = Array.isArray(stageNames) ? stageNames : ALL_STAGES;
         enabledStages = new Set(requested);
         enabledStages.add(STAGE_TRACE_FLATTEN);
+        const requestedSimulationFps = Number(
+            options && options.simulationFps);
+        virtualContinuousTickFps =
+            Number.isFinite(requestedSimulationFps) &&
+            requestedSimulationFps > 0
+                ? requestedSimulationFps : 0;
+        virtualContinuousTickBase = null;
+        virtualContinuousTickIndex = 0;
         recordRenderStepCheckpoints =
             !!(options && options.recordRenderStepCheckpoints);
         recordLayerRawProbes =

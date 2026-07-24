@@ -1403,6 +1403,7 @@ def main(argv: list[str]) -> int:
                 tracer.configure_image_checkpoints(checkpoint_raw_dir)
                 tracer.start_record(
                     stages,
+                    simulation_fps=SIMULATION_FPS,
                     record_render_step_checkpoints=(
                         args.record_render_step_checkpoints),
                     record_layer_raw_probes=(

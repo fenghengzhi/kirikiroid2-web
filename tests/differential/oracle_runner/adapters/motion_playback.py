@@ -98,9 +98,12 @@ def segment_order_for_specs(specs_or_by_id) -> tuple[str, ...]:
 # KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint() playback path
 # as logo_test.xp3 and derives each motion interval from tick - lastTick. The
 # Android display and Kirikiroid playback preferences pin the callback target
-# to 15 Hz; the Wasmtime verifier advances its virtual clock at the same target
-# cadence. Small scripts are tracked beside the build script; large assets stay
-# under reference/xp3/logo_test. Regenerate via
+# to 15 Hz. Software rendering can miss that target, so the Frida oracle
+# virtualizes only TVPContinuousEventDispatch's tick-source call edge at the
+# same 15 Hz cadence as Wasmtime. The production script data flow remains
+# tick - lastTick; host performance cannot turn one simulated frame into a
+# several-hundred-ms jump. Small scripts are tracked beside the build script;
+# large assets stay under reference/xp3/logo_test. Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
 # whenever the spec frame counts change.
 _LOGO_TEST_XP3_REL = f"reference/xp3/{DEFAULT_STARTUP_XP3_NAME}"
@@ -1204,7 +1207,8 @@ def record_all_oracles(
     ensure_oracle_renderer_software(
         serial, remote_game=remote_game, write_global=False)
     with FridaMotionStageTracer(engine, device_id=serial) as tracer:
-        tracer.start_record(["trace_flatten"])
+        tracer.start_record(
+            ["trace_flatten"], simulation_fps=SIMULATION_FPS)
         engine.tjs_init()
         trigger_startup(engine, remote_game)
 
@@ -1266,6 +1270,13 @@ def _wait_for_trace_flatten_segments(
     ]
 
     deadline = time.time() + timeout
+    # A target-FPS preference is not a delivery guarantee. If playback has
+    # naturally stopped below the contract (for example because a software
+    # renderer exposed large wall-clock deltas), fail with the captured segment
+    # lengths instead of waiting the full five-minute timeout. Ten seconds is
+    # deliberately much longer than the expected 15 Hz cadence and the normal
+    # per-frame CI render cost.
+    shortfall_stabilise_seconds = max(10.0, stabilise_seconds)
     stable_since: float | None = None
     last_count = -1
     while time.time() < deadline:
@@ -1273,10 +1284,14 @@ def _wait_for_trace_flatten_segments(
         if count != last_count:
             stable_since = None
             last_count = count
-        elif count >= needed_frames and stable_since is None:
+        elif count > 0 and stable_since is None:
             stable_since = time.time()
+        required_stability = (
+            stabilise_seconds
+            if count >= needed_frames else shortfall_stabilise_seconds
+        )
         if stable_since is not None and \
-                time.time() - stable_since >= stabilise_seconds:
+                time.time() - stable_since >= required_stability:
             events = tracer.stop_record()
             segments = _segment_trace_flatten_frames(
                 _trace_flatten_frames(events))

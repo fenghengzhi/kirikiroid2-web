@@ -8,6 +8,7 @@ import sys
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -22,6 +23,9 @@ from oracle_runner.motion_timing import (  # noqa: E402
     validate_simulation_contract,
 )
 from oracle_runner.adapters import motion_playback as mpb  # noqa: E402
+from oracle_runner.frida_motion_stage_tracer import (  # noqa: E402
+    FridaMotionStageTracer,
+)
 from run_motion_playback_wasmtime import (  # noqa: E402
     WasmtimeEnvProvider,
     _wasmtime_preference_xml,
@@ -65,7 +69,7 @@ class MotionTimingTest(unittest.TestCase):
                     "currentSource._image._interval = delta;", source)
                 self.assertNotIn("FIXED_DELTA_MS", source)
 
-    def test_android_oracle_pins_display_and_engine_to_15hz(self) -> None:
+    def test_android_oracle_pins_and_virtualizes_15hz_tick(self) -> None:
         root = ET.fromstring(mpb._renderer_preference_xml())
         items = {
             item.attrib["key"]: item.attrib["value"]
@@ -81,6 +85,50 @@ class MotionTimingTest(unittest.TestCase):
         self.assertIn("androidboot.redroid_fps=15", workflow)
         self.assertIn("getprop ro.boot.redroid_fps", workflow)
         self.assertIn('[ "${redroid_fps}" != "15" ]', workflow)
+
+        class RecordingApi:
+            def __init__(self) -> None:
+                self.calls: list[tuple[list[str], dict]] = []
+
+            def start_record(self, stages: list[str], options: dict) -> None:
+                self.calls.append((stages, options))
+
+        api = RecordingApi()
+        tracer = object.__new__(FridaMotionStageTracer)
+        tracer._api = api
+        tracer.start_record(
+            ["trace_flatten"], simulation_fps=SIMULATION_FPS)
+        self.assertEqual(api.calls[0][1]["simulationFps"], 15.0)
+        for invalid in (0.0, -1.0, float("nan")):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    tracer.start_record(
+                        ["trace_flatten"], simulation_fps=invalid)
+
+        agent_source = (
+            REPO_ROOT / "tests" / "differential" / "oracle_runner" /
+            "frida_motion_stage_agent.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF = 0x8DF8F4",
+            agent_source,
+        )
+        self.assertIn(
+            "TVP_GET_ROUGH_TICK_COUNT32_OFF = 0xA2BF90",
+            agent_source,
+        )
+        self.assertIn("this.returnAddress.equals(", agent_source)
+        self.assertIn(
+            "virtualContinuousTickBase.add(offsetMs)", agent_source)
+
+        grid = [
+            int((index + 1) * 1000 / SIMULATION_FPS)
+            for index in range(4)
+        ]
+        self.assertEqual(
+            [grid[index] - grid[index - 1] for index in range(1, 4)],
+            [67, 67, 66],
+        )
 
     def test_wasmtime_uses_the_same_preference_and_virtual_cadence(self) -> None:
         root = ET.fromstring(_wasmtime_preference_xml("software"))
@@ -135,6 +183,51 @@ class MotionTimingTest(unittest.TestCase):
         spec["simulation_fps"] = 60
         with self.assertRaisesRegex(ValueError, "runner/fixture contract"):
             validate_simulation_contract([spec])
+
+    def test_short_stable_android_segment_fails_before_full_timeout(self) -> None:
+        events = [
+            {
+                "stage": "trace_flatten",
+                "kind": "frame",
+                "frameId": frame,
+                "diagnostics": {"topPlayer": "fixture-player"},
+            }
+            for frame in range(13)
+        ]
+
+        class StableTracer:
+            def event_count(self) -> int:
+                return len(events)
+
+            def stop_record(self) -> list[dict]:
+                return events
+
+        class Clock:
+            def __init__(self) -> None:
+                self.now = 0.0
+
+            def time(self) -> float:
+                return self.now
+
+            def sleep(self, seconds: float) -> None:
+                self.now += seconds
+
+        clock = Clock()
+        with (
+            mock.patch.object(mpb.time, "time", side_effect=clock.time),
+            mock.patch.object(mpb.time, "sleep", side_effect=clock.sleep),
+            self.assertRaisesRegex(
+                RuntimeError, "frame count stabilised at 13"
+            ),
+        ):
+            mpb._wait_for_trace_flatten_segments(
+                StableTracer(),
+                {"yuzulogo": self.specs["yuzulogo"]},
+                timeout=300.0,
+                stabilise_seconds=2.0,
+            )
+        self.assertGreaterEqual(clock.now, 10.0)
+        self.assertLess(clock.now, 20.0)
 
 
 if __name__ == "__main__":
