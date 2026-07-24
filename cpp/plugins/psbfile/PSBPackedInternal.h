@@ -11,7 +11,7 @@ namespace PSB {
     namespace detail {
         // The Android binary repeats these expressions inline in collection
         // consumers.  It cannot distinguish hand-written expressions from a
-        // header-inline view type, hence the explicit _guess suffix.
+        // header-inline helper, hence the explicit _guess suffix.
         template <typename T>
         T ReadUnaligned_guess(const std::uint8_t *data) {
             T result;
@@ -50,35 +50,44 @@ namespace PSB {
                 (0xffffffffu >> shift);
         }
 
-        struct PackedArrayView_guess {
-            const std::uint8_t *begin;
-            std::uint32_t count;
-            int width;
-            std::uint8_t valueTag;
-            const std::uint8_t *values;
-            const std::uint8_t *end;
+        // The same-game Win32 psbfile.dll independently materializes this
+        // four-DWORD record before calling its packed-array operator[].  The
+        // stripped Android build scalar-replaces the corresponding values in
+        // FindNameIndex @ 0x59641C, FindDictionaryValueOffset @ 0x59659C and
+        // DecodeName @ 0x597B1C.  The cross-build evidence supports the
+        // four-field source topology, but not the exact Android type name.
+        struct PsbArray_guess {
+            std::uint32_t nBytes;
+            std::uint32_t nElementCount;
+            std::uint32_t nSizeOf;
+            const std::uint8_t *pCode;
 
-            explicit PackedArrayView_guess(const std::uint8_t *data) :
-                begin(data), count(ReadPackedCount_guess(data)),
-                width(static_cast<int>(
-                          data[static_cast<std::ptrdiff_t>(data[0]) - 0x0b]) -
-                      0x0c),
-                valueTag(
-                    data[static_cast<std::ptrdiff_t>(data[0]) - 0x0b]),
-                values(data + static_cast<std::ptrdiff_t>(data[0]) - 0x0a),
-                // FindNameIndex @ 0x596478..0x596480 and
-                // FindDictionaryValueOffset @ 0x596608..0x59667C form the
-                // complete relative displacement in W before UXTW pointer
-                // addition.  Keeping the header displacement inside this
-                // uint32_t expression preserves that wraparound boundary.
-                end(data +
-                    (static_cast<std::uint32_t>(data[0]) - 0x0au +
-                     count * static_cast<std::uint32_t>(width))) {}
+            explicit PsbArray_guess(const std::uint8_t *code) {
+                const auto l =
+                    static_cast<std::ptrdiff_t>(code[0]) - 0x0b;
+                nElementCount = ReadPackedCount_guess(code);
+                nSizeOf = static_cast<std::uint32_t>(code[l]) - 0x0cu;
+                pCode = code + l + 1;
+                // The Android consumers form the complete relative
+                // displacement in W before adding it to the original table
+                // base with UXTW.  Do not derive the end from pCode.
+                nBytes = nElementCount * nSizeOf +
+                    static_cast<std::uint32_t>(l + 1);
+            }
 
             [[nodiscard]] std::uint32_t
             operator[](std::uint32_t index) const {
-                return ReadPackedValue_guess(values + index * width,
-                                             valueTag);
+                // Android accepts widths 1..5. Width 5 deliberately follows
+                // AArch64's register-shift modulo rule and keeps the low byte;
+                // invalid widths return zero without forming the value
+                // address. The index product remains W32 before UXTW.
+                if(nSizeOf - 1u >= 5u) {
+                    return 0;
+                }
+                const auto shift = (8u * (4u - nSizeOf)) & 31u;
+                return ReadUnaligned_guess<std::uint32_t>(
+                           pCode + index * nSizeOf) &
+                    (0xffffffffu >> shift);
             }
         };
 

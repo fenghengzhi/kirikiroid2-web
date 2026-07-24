@@ -126,10 +126,11 @@ namespace {
     bool getArrayElement(const PSB::PSBRawNode &node, std::uint32_t index,
                          PSB::PSBRawNode &value) {
         if(node.GetType() != 0x20u) return false;
-        const PSB::detail::PackedArrayView_guess offsets(node.GetNode() + 1);
-        if(index >= offsets.count) return false;
-        value = PSB::PSBRawNode(node.GetOwner(),
-                                offsets.end + offsets[index]);
+        const std::uint8_t *packed = node.GetNode() + 1;
+        const PSB::detail::PsbArray_guess offsets(packed);
+        if(index >= offsets.nElementCount) return false;
+        value = PSB::PSBRawNode(
+            node.GetOwner(), packed + offsets.nBytes + offsets[index]);
         return true;
     }
 

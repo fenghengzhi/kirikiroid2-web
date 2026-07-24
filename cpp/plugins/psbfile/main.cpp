@@ -44,7 +44,7 @@ namespace PSB {
         // sub_596BC4 @ 0x596BC4 is a distinct dispatch member even though no
         // code xref survives in libkrkr2.so. It reads owner from value_.
         const PSBRawHeader *header = value_.GetOwner()->GetHeader();
-        const detail::PackedArrayView_guess offsets(header->strings);
+        const detail::PsbArray_guess offsets(header->strings);
         std::uint32_t index = 0;
         switch(node[0]) {
             case 0x15:
@@ -74,8 +74,8 @@ namespace PSB {
         if(header->chunkData == nullptr) {
             return nullptr;
         }
-        const detail::PackedArrayView_guess offsets(header->chunkOffsets);
-        const detail::PackedArrayView_guess lengths(header->chunkLengths);
+        const detail::PsbArray_guess offsets(header->chunkOffsets);
+        const detail::PsbArray_guess lengths(header->chunkLengths);
         std::uint32_t index = 0;
         switch(node[0]) {
             case 0x19:
@@ -359,52 +359,14 @@ namespace PSB {
             result->Clear();
             return TJS_S_OK;
         }
-        // sub_5976C4 @ 0x5977AC repeats the count-tag decoder after the
-        // bounds check rather than carrying the first decoded count through.
-        tjs_int elementCount;
-        switch(packed[0]) {
-            case 0x0d:
-                elementCount = packed[1];
-                break;
-            case 0x0e:
-                elementCount = detail::ReadUnaligned_guess<std::uint16_t>(
-                    packed + 1);
-                break;
-            case 0x0f:
-                elementCount = detail::ReadUnaligned_guess<std::uint32_t>(
-                                   packed + 1) &
-                    0xffffffu;
-                break;
-            case 0x10:
-                elementCount = static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(packed + 1));
-                break;
-            default:
-                elementCount = 0;
-                break;
-        }
-        // 0x5977F0..0x5977F4 reads the element tag only after the second
-        // count decoder, preserving the first-fault order for truncated data.
-        const std::uint8_t valueTag =
-            packed[static_cast<std::ptrdiff_t>(packed[0]) - 0x0b];
-        const int width = static_cast<int>(valueTag) - 0x0c;
-        const std::uint8_t *values =
-            packed + static_cast<std::ptrdiff_t>(packed[0]) - 0x0a;
-        // sub_5976C4 @ 0x597810..0x597814 multiplies in W and then
-        // zero-extends that product for the entry-table address.
-        const std::uint32_t entryOffset =
-            static_cast<std::uint32_t>(index) *
-            static_cast<std::uint32_t>(width);
-        const std::uint32_t offset = detail::ReadPackedValue_guess(
-            values + entryOffset, valueTag);
-        // sub_5976C4 @ 0x597800..0x597848 forms this relative address in W9
-        // (including 32-bit wraparound), then adds it to the packed-array base
-        // with SXTW.  Do not zero-extend corrupt/high-bit packed offsets here.
+        // sub_5976C4 @ 0x5977AC repeats the packed-array construction only
+        // after the bounds check. Its count decoder therefore still precedes
+        // the element-tag read for the truncated-input first-fault boundary.
+        const detail::PsbArray_guess offsets(packed);
+        // 0x597800..0x597848 combines the complete table size and entry in W,
+        // then adds the relative address to packed with SXTW.
         const std::uint32_t relativeOffset =
-            static_cast<std::uint32_t>(packed[0]) - 0x0au +
-            static_cast<std::uint32_t>(elementCount) *
-                static_cast<std::uint32_t>(width) +
-            offset;
+            offsets.nBytes + offsets[static_cast<std::uint32_t>(index)];
         assign(result, packed + static_cast<std::int32_t>(relativeOffset));
         return TJS_S_OK;
     }
@@ -698,24 +660,27 @@ namespace PSB {
         }
 
         if(category == 6) {
-            const detail::PackedArrayView_guess offsets(value_.GetNode() + 1);
-            const tjs_int count = static_cast<tjs_int>(offsets.count);
+            const std::uint8_t *packed = value_.GetNode() + 1;
+            const detail::PsbArray_guess offsets(packed);
+            const tjs_int count =
+                static_cast<tjs_int>(offsets.nElementCount);
             for(tjs_int index = 0; index < count; ++index) {
                 name = ttstr(index);
                 if(!noValue) {
                     assign(
                         &memberValue,
-                        offsets.end +
+                        packed + offsets.nBytes +
                             offsets[static_cast<std::uint32_t>(index)]);
                 }
                 callback->FuncCall(0, nullptr, nullptr, &callbackResult,
                                    noValue ? 2 : 3, params, this);
             }
         } else {
-            const detail::PackedArrayView_guess keys(value_.GetNode() + 1);
-            const detail::PackedArrayView_guess offsets(keys.end);
+            const std::uint8_t *packed = value_.GetNode() + 1;
+            const detail::PsbArray_guess keys(packed);
+            const detail::PsbArray_guess offsets(packed + keys.nBytes);
             std::string key;
-            for(std::uint32_t index = 0; index < keys.count; ++index) {
+            for(std::uint32_t index = 0; index < keys.nElementCount; ++index) {
                 detail::DecodeName_guess(key, value_.GetOwner(), keys[index]);
                 // 0x597350..0x59735C assigns the decoded narrow buffer
                 // directly; no ttstr temporary participates in this lifetime.
@@ -724,12 +689,9 @@ namespace PSB {
                     // PSBValueDispatch_EnumMembers @ 0x597388..0x59739C
                     // adds the table-end displacement and entry offset in W8,
                     // then zero-extends that wrapped value from node + 1.
-                    const std::uint32_t relativeOffset =
-                        static_cast<std::uint32_t>(
-                            offsets.end - (value_.GetNode() + 1)) +
-                        offsets[index];
-                    assign(&memberValue,
-                           value_.GetNode() + 1 + relativeOffset);
+                    const std::uint32_t relativeOffset = keys.nBytes +
+                        offsets.nBytes + offsets[index];
+                    assign(&memberValue, packed + relativeOffset);
                 }
                 callback->FuncCall(0, nullptr, nullptr, &callbackResult,
                                    noValue ? 2 : 3, params, this);
@@ -963,7 +925,7 @@ namespace PSB {
             case 0x18:
             case 0x2c: {
                 const PSBRawHeader *header = value_.GetOwner()->GetHeader();
-                const detail::PackedArrayView_guess offsets(header->strings);
+                const detail::PsbArray_guess offsets(header->strings);
                 std::uint32_t index = 0;
                 switch(node[0]) {
                     case 0x15:
@@ -1005,9 +967,9 @@ namespace PSB {
                 const std::uint8_t *data;
                 std::uint32_t size;
                 if(header->chunkData != nullptr) {
-                    const detail::PackedArrayView_guess offsets(
+                    const detail::PsbArray_guess offsets(
                         header->chunkOffsets);
-                    const detail::PackedArrayView_guess lengths(
+                    const detail::PsbArray_guess lengths(
                         header->chunkLengths);
                     std::uint32_t index = 0;
                     switch(node[0]) {

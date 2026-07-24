@@ -2244,7 +2244,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `motionplayer-dll` **1197/1197** 通过，Mac 目标、Wasmtime 默认 Debug build、显式
   `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接成功，`git diff --check` 通过。当前
   112-entry 主实现 manifest 仍未发现漏写的 Android 业务入口或源码触发的容器慢路径；尚不能唯一证明的是
-  `Transfer_guess@0x598A64`、若干 zero-xref helper、`PackedArrayView_guess` 及
+  `Transfer_guess@0x598A64`、若干 zero-xref helper、当时的 `PackedArrayView_guess` 及
   `ReadPackedCount_guess` 等 inline helper 的原始名字、成员身份和源码拼写；但上述三个
   已审计调用面中的本地产物额外调用边界已经消除。ARM64 对象字段偏移在这些判断中只作为反编译定位坐标；本地
   复刻字段语义、类型、顺序、容器和生命周期，不硬凑 ARM64 ABI 字节偏移。PSB 文件内的
@@ -2254,8 +2254,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `FindNameIndex@0x596478..0x596480`、`FindDictionaryValueOffset@0x596608..0x59667C`、
   `DecodeName@0x597BA0..0x597C10` 及 `EnumMembers@0x597114..0x597308` 都先在 W
   寄存器内把 header displacement 与 `count*width` 合并回绕，再从原始 table begin 做
-  UXTW 加址。本地 `PackedArrayView_guess::end = values + count*width` 在 64-bit host 上漏掉
-  整体回绕，现改为 `begin + uint32_t(header-10+count*width)`。同轮确认
+  UXTW 加址。本地旧 `PackedArrayView_guess::end = values + count*width` 在 64-bit host 上漏掉
+  整体回绕，当时改为 `begin + uint32_t(header-10+count*width)`；后续四字段复原又把同一
+  相对量收敛为 `PsbArray_guess::nBytes`。同轮确认
   `PropGetByNum@0x597810..0x597814` 的 entry 索引是 W32 product 后 UXTW；本地已从 signed
   host 乘法改成显式 `uint32_t entryOffset`，而最终 node relative 继续保持既有 SXTW。
 
@@ -2271,7 +2272,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   更新顺序可证；2026-07-24 又以 identity refcount store 和 AArch64 对照闭合两个真实
   rvalue 调用点的 copy + temporary destruction。helper 原名/member 身份、不可见位置是否
   另有显式 special members/self guards、`sub_597AD4` 第一实参的一指针 holder 精确类型、
-  `PackedArrayView_guess` 是否真实源类型，
+  当时仅凭 Android stripped O3 尚不能确认 `PackedArrayView_guess` 是否真实源类型；后续同游戏
+  Win32 DLL 已把候选收敛为四字段 `PsbArray_guess`，但 Android 精确类型名仍不可证明，
   以及 `memcpy`/unaligned cast 写法均不可辨识。代码与本文已删除把其中任一等价形状冒充
   唯一源码事实的表述。
 
@@ -2379,8 +2381,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   iterator-range assign 模板调用面。其余三张 packed view、无 reserve 的
   `vector<char>`、逐 parent push、reverse、`vector<string>::reserve(count)`、复用一只
   string 后 copy-emplace、W32 回绕/UXTW 加址及异常析构顺序均未发现可证偏差。
-  `PackedArrayView_guess` 是否为真实类型、inline/member factorization 与 unaligned read
-  的源码拼写仍超出 stripped O3 二进制的证据上限。macOS Release 两目标重编后，
+  当时的 `PackedArrayView_guess` 是否为真实类型、inline/member factorization 与 unaligned read
+  的源码拼写仍超出单独 Android stripped O3 二进制的证据上限；后续同游戏 Win32 DLL 已提供
+  四字段形态的独立交叉证据。macOS Release 两目标重编后，
   `psbfile-dll` **577/577**、`motionplayer-dll` **1376/1376**；Debug `PSBRawFile.cpp.o`
   仅保留 undefined `basic_string::assign(const char*, unsigned long)`，不再发射 iterator
   assign template。Wasmtime full guest 重链成功，15 Hz timing contract **7/7** 继续通过。
@@ -2446,6 +2449,33 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `psbfile-dll` **577/577**、`motionplayer-dll` **1374/1374**。此前 1376/1376 数字均保留为
   历史 checkpoint，不应与当前测试集合混读。
 
+- 2026-07-24 又对同游戏 Win32 原始插件
+  `reference/xp3/dracu_boot/DRACU-RIOT/plugin/psbfile.dll`（SHA-256
+  `465abd6c0483a7df7b4d7818b844378b23c6436585688b09a84ba79fd13cd0eb`）做独立谱系复核。
+  Win32 `0x1000AAE0` 在栈上连续物化 `+0 nBytes/+4 count/+8 width/+0xC values`
+  四字段记录，再把其地址传给 packed operator `0x1000A7A0`；相同构造在
+  `0x1000AB40/0x1000ABA0` 重复。Android `FindNameIndex@0x59641C`、
+  `FindDictionaryValueOffset@0x59659C`、`DecodeName@0x597B1C` 则按实际消费字段标量
+  替换同一构造结果：需要 next-table 的对象保留 `count/width/values/nBytes`，只作
+  `operator[]` 的对象经 DCE 后仅剩 `width/values`；`0x597B40..0x597C10` 仍清楚呈现三张
+  连续 table 的基址派生与消费拓扑，但不能声称每张表的四字段在优化产物中都同时存活。
+  外部 KrkrExtract commit `a2904bc1afb8aa87f1df99951bdf9c854784628d` 的
+  `EMoteDumper.cpp` 也给出同形 `PsbArray`，但它是 2019 年逆向工具，只作二级交叉证据，
+  不能覆盖 Android。三方证据足以把本地人为六字段 view 收敛为四字段
+  `PsbArray_guess {nBytes,nElementCount,nSizeOf,pCode}`；Android 自身没有残留该类型名，
+  所以仍保留 `_guess`。
+- 同轮明确记录跨版本边界差异：Win32 `operator[]@0x1000A7A0` 只接受 width 1..4，
+  width 5 会抛 “access to uninitialized array structure”；Android 三个独立消费者都以
+  `(tag-0x0D)<=4` 接受 width 1..5，width 5 经 AArch64 shift-modulo 只保留低 8 位，非法
+  width 返回 0，且目标中不存在 Win32 异常串。本地四字段实现因此只采用 Win32 证明的
+  容器拓扑，边界严格保留 Android：`nBytes` 全式 W32，operator 的 index product 为 W32
+  后 UXTW，array value 地址保持两次 UXTW pointer add，dictionary relative 在 W32 合并，
+  `PropGetByNum@0x5976C4` 仍在 bounds 后第二次构造并以 SXTW 形成最终 node 地址。
+  重构后的本地非回归为 `psbfile-dll` **577/577**、`motionplayer-dll` **1374/1374**；
+  Wasmtime full guest 与 Web Debug 均完成最终链接，15 Hz timing 合约 **7/7**，五个
+  `run_all.py` LLDB guest-debug family 全部通过。完整 15 Hz XP3 驱动又成功记录
+  `m2logo` **25** 帧、`yuzulogo` **63** 帧，`git diff --check` 通过。
+
 ## 后续闭合条件
 
 要对“psbfile 插件自身”给出 100% 结论，至少还需要：
@@ -2475,8 +2505,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 已确定为
    owner-holder-ref/slot 与 node 两个实参，但第一实参究竟是 `const PSBFile&`、共同 holder
    引用还是 `PSBRawOwner *const&` 仍不可区分；另有 PSBFile/raw-node 的显式
-   special members 与 self guards、若干 inline helper 的原名/member 身份、
-   `PackedArrayView_guess` 是否为真实源类型，以及 unaligned read 的具体写法。若要把“尽可能”
+   special members 与 self guards、若干 inline helper 的原名/member 身份、四字段
+   `PsbArray_guess` 的精确 Android 类型名，以及 unaligned read 的具体写法。若要把“尽可能”
    提升为字面 100%，需要带符号/未优化构建、调试类型或原始源码等新增证据，不能从当前
    ARM64 优化产物反向唯一指定其中一种等价源码形状。
 

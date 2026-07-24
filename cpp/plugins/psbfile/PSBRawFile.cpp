@@ -108,12 +108,12 @@ namespace PSB {
                                      std::uint32_t &nameIndex) {
         // sub_59641C @ 0x59641C walks the three consecutive packed arrays as
         // a double-array trie and returns the encoded terminal name index.
-        const PackedArrayView_guess charset(names);
-        const PackedArrayView_guess namesData(charset.end);
+        const PsbArray_guess charset(names);
+        const PsbArray_guess namesData(names + charset.nBytes);
         const auto *cursor = reinterpret_cast<const std::uint8_t *>(name);
         std::uint32_t parent = 0;
         std::uint32_t state = charset[0] + *cursor;
-        if(state >= charset.count) {
+        if(state >= charset.nElementCount) {
             return false;
         }
         for(;;) {
@@ -127,7 +127,7 @@ namespace PSB {
             ++cursor;
             parent = state;
             state = charset[state] + *cursor;
-            if(state >= charset.count) {
+            if(state >= charset.nElementCount) {
                 return false;
             }
         }
@@ -139,9 +139,9 @@ namespace PSB {
         // sub_59659C @ 0x59659C uses a lower<upper loop.  Even the equal
         // branch joins the post-loop lower>=upper failure gate at
         // 0x596674..0x596678 before decoding the parallel offset table.
-        const PackedArrayView_guess keys(dictionary);
+        const PsbArray_guess keys(dictionary);
         std::uint32_t lower = 0;
-        std::uint32_t upper = keys.count;
+        std::uint32_t upper = keys.nElementCount;
         std::uint32_t middle;
         while(lower < upper) {
             middle = (upper + lower) / 2;
@@ -158,10 +158,8 @@ namespace PSB {
         if(lower >= upper) {
             return false;
         }
-        const PackedArrayView_guess offsets(keys.end);
-        valueOffset =
-            static_cast<std::uint32_t>(offsets.end - dictionary) +
-            offsets[middle];
+        const PsbArray_guess offsets(dictionary + keys.nBytes);
+        valueOffset = keys.nBytes + offsets.nBytes + offsets[middle];
         return true;
     }
 
@@ -172,9 +170,13 @@ namespace PSB {
         // reverses that vector, then calls std::string::assign(const char *,
         // size_t) @ 0x597E10; the empty path supplies the vector's null begin
         // pointer and a zero length through the same overload.
-        const PackedArrayView_guess charset(owner->GetHeader()->names);
-        const PackedArrayView_guess namesData(charset.end);
-        const PackedArrayView_guess nameIndexes(namesData.end);
+        const std::uint8_t *names = owner->GetHeader()->names;
+        const PsbArray_guess charset(names);
+        const std::uint8_t *namesDataCode = names + charset.nBytes;
+        const PsbArray_guess namesData(namesDataCode);
+        const std::uint8_t *nameIndexesCode =
+            namesDataCode + namesData.nBytes;
+        const PsbArray_guess nameIndexes(nameIndexesCode);
         std::vector<char> bytes;
         std::uint32_t node = namesData[nameIndexes[nameIndex]];
         while(node != 0) {
@@ -451,9 +453,9 @@ namespace PSB {
         // Dictionary tag gate; non-container and unknown-tag paths never own
         // it, which also changes their exception cleanup layer.
         std::string key;
-        const detail::PackedArrayView_guess keys(node_ + 1);
-        result.reserve(keys.count);
-        for(std::size_t index = 0; index < keys.count; ++index) {
+        const detail::PsbArray_guess keys(node_ + 1);
+        result.reserve(keys.nElementCount);
+        for(std::size_t index = 0; index < keys.nElementCount; ++index) {
             detail::DecodeName_guess(
                 key, owner_, keys[static_cast<std::uint32_t>(index)]);
             result.emplace_back(key);
@@ -607,7 +609,7 @@ namespace PSB {
             case 0x18:
             case 0x2c: {
                 const PSBRawHeader *header = owner_->GetHeader();
-                const detail::PackedArrayView_guess offsets(header->strings);
+                const detail::PsbArray_guess offsets(header->strings);
                 std::uint32_t index = 0;
                 switch(node_[0]) {
                     case 0x15:
@@ -690,8 +692,8 @@ namespace PSB {
         if(header->chunkData == nullptr) {
             return nullptr;
         }
-        const detail::PackedArrayView_guess offsets(header->chunkOffsets);
-        const detail::PackedArrayView_guess lengths(header->chunkLengths);
+        const detail::PsbArray_guess offsets(header->chunkOffsets);
+        const detail::PsbArray_guess lengths(header->chunkLengths);
         std::uint32_t index = 0;
         switch(node_[0]) {
             case 0x19:

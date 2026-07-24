@@ -251,7 +251,8 @@ source 调 `TJSAlignedDealloc`；三个失败点 `0x598328/0x59840C/0x59869C` �
 
 2026-07-22 的全站点 packed-width 审计又确认，所有会消费 table end 的站点都先把
 `header-10 + count*width` 在 W32 内整体回绕，再从原始 table begin 做 UXTW 加址；本地
-`PackedArrayView_guess::end` 已恢复这一根地址规则。`PropGetByNum@0x597810..0x597814`
+现由四字段 `PsbArray_guess::nBytes` 保存这一完整 W32 相对长度，并始终从原始 table begin
+做 UXTW 加址。`PropGetByNum@0x597810..0x597814`
 的 entry-table 索引也已从 signed host product 改为 W32 product + UXTW。其最终 node
 relative 仍按 `0x59783C..0x597840` 保持 W32 + SXTW；两类扩展没有互相泛化。
 

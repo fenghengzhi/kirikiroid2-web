@@ -123,8 +123,8 @@ namespace PSB {
         if(header->chunkData == nullptr) {
             return nullptr;
         }
-        const detail::PackedArrayView_guess offsets(header->chunkOffsets);
-        const detail::PackedArrayView_guess lengths(header->chunkLengths);
+        const detail::PsbArray_guess offsets(header->chunkOffsets);
+        const detail::PsbArray_guess lengths(header->chunkLengths);
         const std::uint8_t *node = value.GetNode();
         std::uint32_t index;
         switch(node[0]) {
