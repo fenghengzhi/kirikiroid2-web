@@ -1,5 +1,12 @@
 # Android `libkrkr2.so` 内嵌 psbfile 插件函数覆盖 manifest（2026-07-19）
 
+## 证据边界
+
+本 manifest 唯一权威来源是 Android kirikiroid2 `libkrkr2.so` 中内嵌的 psbfile
+实现；不查看、引用或从任何外部 `psbfile.dll` 推导源码结构或行为。下文出现的
+`L"PSBFile.dll"` 仅是 `libkrkr2.so` 自身静态初始化器中的 NCB 模块注册字面量，
+不表示存在另一份可作参考的 DLL 实现。
+
 ## 2026-07-23 真实 Android oracle 状态
 
 Android 12 / API 31 `userdebug` arm64-v8a AVD 上的正式 ADB/RPC/Frida runner 已闭合
@@ -34,6 +41,20 @@ IDA 枚举证明 PSBFile 的业务/NCB 入口覆盖 `0x59641C..0x59B708`，共 1
 function。旧审计不仅把 `0x59AA84` 错当成终点，还被 IDA 的函数合并漏掉
 `0x59A8D8`、`0x59A968` 与 `0x59B14C` 三个独立序言；三者拆分后均有唯一 vtable
 data xref。
+
+2026-07-24 又从两侧交叉确认了该起止边界。紧邻起点之前的八只函数
+`0x596144/0x596168/0x596170/0x596240/0x596264/0x59626C/0x5963F0/0x596414`
+各自唯一的 data xref 槽依次为
+`0x1A0B170/0x1A0B180/0x1A0B1A8/0x1A0B290/0x1A0B2A0/0x1A0B2C8/`
+`0x1A0B3B0/0x1A0B3C0`。前两槽位于 `noise@0x1A0B078`，中间三槽位于
+`generateWhiteNoise@0x1A0B198`，末三槽位于
+`gaussianBlur@0x1A0B2B8`；三张连续的 `0x120`-byte NCB vtable 都只由
+`layerExImage_NCB_ClassBody@0x594814` 安装。因此这八只函数属于前一只
+layerExImage 插件而非 psbfile。末端的
+`std::vector<std::string>` 慢路径 `0x59B7E8` 由 PSB
+`GetDictionaryKeys@0x598E64` 直接触发，故仍计入；下一只独立序言
+`0x59B9C8` 则由下一静态初始化器注册为 `PackinOne.dll` callback；再后的独立代码
+布局可枚举到 `TextRenderBase_ncb_registerMembers@0x59BCCC`，均不属于 psbfile。
 
 2026-07-23 又证伪了“下一函数与 PSBFile 无调用关系”的结论：
 `GetDictionaryKeys@0x598E64` 在 vector 容量耗尽时由 `0x598FFC` 调 PLT

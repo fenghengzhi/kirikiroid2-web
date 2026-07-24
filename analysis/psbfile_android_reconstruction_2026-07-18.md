@@ -1,5 +1,12 @@
 # Android `libkrkr2.so` 内嵌 psbfile 插件复原审计（2026-07-18）
 
+## 证据边界
+
+本审计只把 Android kirikiroid2 `libkrkr2.so` 内嵌的 psbfile 实现视为权威；
+不查看、引用或从任何外部 `psbfile.dll` 推导结构、数据流、调用链、生命周期、
+容器或边界行为。文中 `"PSBFile.dll"` 只表示同一 `libkrkr2.so` 内 NCB 自动注册器
+使用的模块名字符串，不是外部参考二进制。
+
 ## 2026-07-23：真实 arm64 Android ADB/RPC/Frida oracle 闭合
 
 - 本轮在 Android 12 / API 31 `userdebug` arm64-v8a AVD
