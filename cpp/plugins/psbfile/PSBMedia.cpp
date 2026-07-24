@@ -92,12 +92,11 @@ namespace PSB {
                 if(!current.ContainsDictionaryKey(key.Buf)) {
                     return false;
                 }
-                // sub_59A4B0 @ 0x59A694..0x59A704 has the net sequence release
-                // old -> install the strict getter's returned owner/node ->
-                // keep the incoming zero-ref deletion boundary. Optimized
-                // code cannot distinguish a source move from copy plus
-                // temporary destruction, so this assignment spelling is not
-                // claimed as uniquely proven.
+                // sub_59A4B0 @ 0x59A694..0x59A704 copy-assigns the strict
+                // getter's retained temporary and then destroys that
+                // temporary.  0x59A6D0/0x59A6D8 reads and writes back the same
+                // refcount: the optimizer's remnant of AddRef followed by
+                // Release, including its incoming-zero deletion boundary.
                 current = current.GetDictionaryValueStrict(key.Buf);
             }
             if(last) {

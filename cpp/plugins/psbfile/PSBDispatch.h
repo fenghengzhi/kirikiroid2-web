@@ -8,8 +8,10 @@
 
 namespace PSB {
     // Raw collection dispatch reconstructed from sub_597AD4 @ 0x597AD4.
-    // PSBRawNode is the local semantic holder for the retained owner+node pair;
-    // optimized code cannot distinguish that source shape from two raw fields.
+    // Its constructor has two distinct source arguments: X1 refers to a
+    // one-pointer owner holder/slot and X2 supplies the node.  The exact C++
+    // type behind X1 remains unrecoverable, but a single PSBRawNode parameter
+    // is ruled out by all three emitted call sites.
     // valid_ is the independent byte toggled by sub_596F0C @ 0x596F0C.
     class PSBValueDispatch final : public iTJSDispatch2,
                                    public iTJSNativeInstance {

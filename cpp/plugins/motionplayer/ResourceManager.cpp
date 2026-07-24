@@ -356,14 +356,15 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
             TVPThrowExceptionMessage(message.c_str());
         }
 
-        // sub_598A64 @ 0x598A64 moves loaded into the common selected holder.
-        // sub_6EBB0C/sub_6EBCFC then default-construct the mapped record and
-        // 0x6A926C..0x6A92A8 copy selected into record.file.
+        // sub_598A64 @ 0x598A64 returns a transferred holder; the caller at
+        // 0x6A9238..0x6A9258 copy-assigns that temporary into selected and
+        // destroys the temporary. sub_6EBB0C/sub_6EBCFC then default-construct
+        // the mapped record and 0x6A926C..0x6A92A8 copies selected into it.
         selected = loaded.Transfer_guess();
         _loadedModules[path].file = selected;
     }
 
-    // 0x6A92AC..0x6A92F8 destroys root and the moved-from loaded holder before
+    // 0x6A92AC..0x6A92F8 destroys root and the cleared loaded holder before
     // both hit/miss paths construct the fresh dispatch directly from selected
     // @0x6A92FC..0x6A9358.  There is no PSBFile::GetRoot call and thus no
     // retained PSBRawNode temporary on this boundary.

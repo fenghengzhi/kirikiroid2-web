@@ -12,32 +12,43 @@
 本地 C++ 不应硬凑这些数值偏移。PSB 文件内部 serialized offset 属于另一类数据格式契约，
 仍需精确复刻。
 
-The function processes each image resource entry in a PSB file. For each entry, it:
+The function processes each image resource record in a PSB file. For each record, it:
 
 1. Reads `width` and `height` from the entry struct (offsets +40, +44)
 2. Allocates a pixel buffer: `4 * width * height` bytes, 4-byte aligned (`sub_A0DE48`)
-3. Checks for `"pal"` (palette) key in the entry dict (`sub_5995D8`)
-4. Checks for `"compress"` key and whether its value is `"RL"`
-5. Dispatches to one of 3 decode paths based on these flags
+3. Checks `"pal"` on the function-wide persistent raw node **before** assigning
+   the current record node (`0x696F94..0x696FA4` before `0x696FC0..0x697004`)
+4. Assigns the current record node, then checks its `"compress"`/`"pal"` values
+5. Dispatches to one of four decode paths using that deliberately lagged gate
 6. After decoding, checks if all alpha bytes are zero (fully transparent) — if so, frees the pixel buffer
 
 ## Decision Tree
 
 ```
-has_pal = entry.has("pal")
-has_compress_rl = entry.has("compress") && entry["compress"] == "RL"
+has_pal_gate = persistent_node_before_assignment.has("pal")
+persistent_node = current_record.node
+has_compress_rl = persistent_node.has("compress") &&
+                  persistent_node["compress"] == "RL"
 
-if (has_pal):
+if (has_pal_gate):
     if (has_compress_rl):
         → Path A: RL decompress with align=1, then palette expand
     else:
         → Path B: Raw memcpy of indexed pixels, then palette expand
-else:  // no palette
+    // The expansion itself performs a second, current-node try-get("pal").
+    // If it fails, the temporary index buffer is freed without expansion.
+else:
     if (!has_compress_rl):
         → Path C: Raw pixel copy with TVPReverseRGB
     else:
         → Path D: RL decompress with align=4, then TVPReverseRGB
 ```
+
+The pre-assignment `"pal"` lookup is not equivalent to
+`current_record.node.has("pal")`. The persistent node survives between records,
+so the gate is one record behind; the current node is used only after the gate.
+The former decision tree in this document incorrectly collapsed these two raw
+nodes and was superseded by the full `0x695DE8` lifetime trace.
 
 ## Path A: RL + Palette (align=1)
 
@@ -79,7 +90,8 @@ After RL decompression:
 
 ```c
 // Load palette data from "pal" resource
-pal_data = PSB_getResourceData(&p, v269);           // 0x6970D4
+pal_data = PSBRawNode_GetResource_guess(&p, v269);  // call at 0x6970D4,
+                                                    // callee 0x5996E4
 pal_size = v269[0];                                  // 0x6970D8
 
 // Allocate palette array (pal_size / 4 entries)
@@ -101,7 +113,8 @@ free(index_buf);                                      // 0x697204
 **Address range**: `0x697060–0x6970A8` (raw copy), then same palette expand as Path A.
 
 ```c
-raw_data = PSB_getResourceData(v262, v269);          // 0x697070
+raw_data = PSBRawNode_GetResource_guess(v262, v269); // call at 0x697070,
+                                                     // callee 0x5996E4
 memcpy(index_buf, raw_data, compressed_size);        // 0x6970A8
 // Then identical palette expansion as Path A
 ```
@@ -111,7 +124,8 @@ memcpy(index_buf, raw_data, compressed_size);        // 0x6970A8
 **Address range**: `0x697150–0x6971A4`
 
 ```c
-raw_data = PSB_getResourceData(v262, v269);          // 0x697160
+raw_data = PSBRawNode_GetResource_guess(v262, v269); // call at 0x697160,
+                                                     // callee 0x5996E4
 TVPReverseRGB(output_buf, raw_data, pixel_count);    // 0x6971A4
 ```
 

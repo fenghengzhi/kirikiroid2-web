@@ -77,7 +77,8 @@ namespace motion {
             const PSB::PSBRawNode pixelNode =
                 textureNode.GetDictionaryValueStrict("pixel");
             // 0x694E08 passes an uninitialized 32-bit stack slot.  A null
-            // resource chunk leaves it untouched in PSB_getResourceData.
+            // resource chunk leaves it untouched in
+            // PSBRawNode_GetResource_guess @ 0x5996E4.
             std::uint32_t sourceSize;
             const std::uint8_t *sourcePixels =
                 pixelNode.GetResource(sourceSize);

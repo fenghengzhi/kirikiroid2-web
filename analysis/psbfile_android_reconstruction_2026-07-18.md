@@ -17,7 +17,7 @@
   5,366,313，过滤区 203,302 字节与独立 host xorshift 逐字节相等，strict refresh=true，
   root type=`0x21`。Frida 链为
   `0x598268 → 0x598708 → 0x6863CC → 0x598960`。
-- 当前普通、ignored 的 `reference/` 中有 142 只天然 `mdf\0` 文件；只读普查得到
+- 该次 2026-07-23 普通、ignored `reference/` 快照中有 142 只天然 `mdf\0` 文件；只读普查得到
   `142/142` zlib 成功、声明长度一致且输出均为 `PSB\0`，没有天然 failure 样本。抽取
   `ニコラ－その２（デビュー）.ks.scn` 的 octet/storage Android oracle 均为
   `status=ok`：50,708 字节 MDF 解为 700,308 字节 PSB，owner/header/refcount/strict
@@ -646,10 +646,10 @@ manifest 见 [psbfile_function_coverage_2026-07-19.md](psbfile_function_coverage
 | name decode | `0x5975C0`, `0x597B1C` | 先经 `namesData[nameIndexes[index]]` 找 terminal，再沿 parent 回溯并 reverse |
 | NCB 注册 | `0x597E98..0x5981F8`, `0x59A8D8`, `0x59A968`, `0x59AA84..0x59B708` | typed class state、自动注册/反注册、factory、native holder、`root` property、`load` method；本地由 ncbind 模板承接通用注册机制；factory 在 load 抛异常时析构已写入 result 的 native holder、保留悬挂 result slot 后原样重抛 |
 | root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；小写 `mdf` 解压及失败 fallback；storage 数据 buffer 使用裸指针，异常清理只析构 stream |
-| owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；`0x598A64` 是按值返回并消费 source 的 transfer helper，但内部源级 special member 不可辨识；Adopt/transfer 均保留零引用删除分支；filter 后刷新 header view |
-| node helper | `0x598A3C..0x5996E4` | raw-pair 构造/复制/消费的净语义、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node；是否存在用户声明的 copy/move special member 不可由优化后二进制唯一判定 |
+| owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；`0x598708/0x598A64` 的真实 rvalue 路径是 Rule-of-Three copy + 临时析构，AddRef/Release 相消后保留零引用删除分支；filter 后刷新 header view；transfer helper 原名及 member/free 身份仍不可辨识 |
+| node helper | `0x598A3C..0x5996E4` | raw-pair Rule-of-Three copy 生命周期、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node；当前生产 rvalue assignment 已由 `0x59A6D0/0x59A6D8` 的 identity refcount store 闭合为 copy + 临时析构，但优化后二进制不能数学上排除不可见位置曾声明其他 special member |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
-| media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历；strict 返回 pair 只净更新局部 current，失败保持 caller out 不变，成功尾块才 copy/AddRef 写回 out；循环内源码是 move 还是 copy+临时析构不可辨识 |
+| media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历；strict 返回 retained 临时，循环内 copy-assign current 后析构临时，失败保持 caller out 不变，成功尾块才 copy/AddRef 写回 out |
 | motionplayer 原始加载链 | `0x6A8D8C`, `0x6A87D0`, `0x685D30`, `0x6863CC` | 规范化路径→缓存 raw owner→全局 `std::function` filter→严格读取 id/spec/version→每次新建 root dispatch；seed setter 接受至少一个可转整数的 TJS 参数 |
 | motionplayer motion 查找 | `0x6A96F8`, `0x6A9ED4` | direct map hit 与 fallback node-chain 分别展开；`isExistMotion` 全程 raw-node，`findMotion` 只把最终命中 node 包成 dispatch，并返回 `[motion, matchedKey]`；三处 dispatch ctor xref 与 Release 对象一致 |
 | callable 解密/注册 | `0x682528`, `0x685E60`, `0x6864C0`, `0x6864C8`, `0x6865B4`, `0x62C808` | emoteplayer entry 动态注入两个 static method；callable 由 `tRefHolder` 形状的 pointer+refcount 控制块共享；每次以同一个 `CBinaryAccessor` 类型传 `(whole-file view,size)`，返回值忽略；替换 filter 释放旧 Object/ObjThis |
@@ -728,8 +728,10 @@ path→snapshot 或 dispatch-pointer→snapshot 映射。Player 也不再维护 
 模块名、typed NCB factory/property/method、pre-register media singleton、
 `psb:` resolve/open/list 链已按二进制复原。NCB 通用模板由仓库现有 ncbind
 实现承接。旧分析曾把 `PSBFile.load` 误判为 `const tTJSVariant&` 且补了
-borrow-only converter；后续 fresh decompile `0x59B570/0x59B708/0x5980F4` 已证伪：
+borrow-only 参数/调用形状；后续 fresh decompile `0x59B570/0x59B708/0x5980F4` 已证伪：
 原版按值构造参数并经历明确的 Variant AddRef/Release 临时生命周期，本地已同步纠正。
+源码中仍保留一组未实例化的 `PSBFileConvertor` 模板声明；Android O3 与本地 Debug object
+均没有其 emitted 符号或调用，但这不能证明原源码不存在同样 inert 的声明，故不据此删除。
 motionplayer 侧新增共享的 `Motion_propGet*` 层，`ResourceManager` 与变量轨道均复用
 同一调用形状；变量轨道不再为前进、后退、重定位各复制一套 eager 读取器，而是调用
 Android 中独立存在的 step `0x6B786C` 与 merge `0x6B7A70` 对应 helper。
@@ -753,17 +755,19 @@ owner，element 1 原样回写 motionKey/project 单槽；不再经过全局 sna
 - owner intrusive refcount 管理 raw allocation；holder、node view 和 dispatch 共享它。
 - ResourceManager cache hit `0x6A8E94..0x6A8EB8` 可证明一指针 holder 的 copy+AddRef；
   miss insert `0x6A926C..0x6A92A8` 可证明 mapped record 上的 Release-old→copy→AddRef，
-  两处临时 holder 随后各自 Release。这里只证明具体 callsite 的净序列；优化后二进制不能
-  唯一证明 `PSBFile` 声明了哪种 copy/move special member，也不能证明通用 assignment
-  是否存在 self guard。本地 copy-shaped 表示只负责保留上述已观察生命周期。
+  两处临时 holder 随后各自 Release。`0x6A9238..0x6A9258` 进一步证明 transfer 返回临时也走
+  copy assignment + temporary destruction；本地因此采用 Rule-of-Three copy 生命周期。
+  优化后二进制仍不能数学上排除不可见位置的其他声明，也不能证明通用 assignment 的
+  self guard。
 - holder 替换文件只释放自己的 owner 引用，旧 node/dispatch 仍保持 allocation 存活。
-- `0x598A64` 不是 move ctor 函数本体，而是按值返回并消费 source/this 的 transfer helper；
-  可证明的是复制 owner、incoming zero-ref 删除和清 source，不能证明其中内联了何种
-  special member。`Transfer_guess` 的名字/member 身份因此继续标为猜测。
-- `PSBMedia::Resolve@0x59A698..0x59A6EC` 可证明的净序列是 release current、安装 strict
-  getter 返回的 owner/node、保留 incoming zero-ref 删除边界。优化后指令既可由 move
-  assignment 产生，也可由 copy assignment + 临时析构经相消产生；本地采用的 move-shaped
-  special member 只是一个保持净语义的表示，不能标成已恢复的唯一源码结构。
+- `0x598A64` 不是 move ctor 函数本体，而是按值返回并消费 source/this 的 transfer helper。
+  AArch64 对照证明 `result(*this); *this = empty; return result` 的 AddRef/Release 相消会逐项
+  生成复制 owner、incoming zero-ref 删除和清 source；`Transfer_guess` 现按这条
+  Rule-of-Three 链复原，名字/member 身份仍标为猜测。
+- `PSBMedia::Resolve@0x59A698..0x59A6EC` 在 strict getter 已 AddRef 返回临时之后，release
+  current、复制 owner/node，并于 `0x59A6D0/0x59A6D8` 把同一 refcount 原值读回写；这是
+  copy assignment 的 AddRef 与临时析构 Release 相消后的指令残留。生产路径不再用本地
+  猜测性 move special member。
 - `sub_598D58@0x598D58` 只证明该 try-get hit 的 out 参数按
   Release-old→copy owner→AddRef→write node 更新，不能单独证明原始类存在通用
   `PSBRawNode::operator=(const&)`。后续已在 `sub_695DE8@0x696A90` 找到同一 raw-node
@@ -822,9 +826,11 @@ getter 也不调用该 helper，而是在 guard 后直接构造 dispatch 内的 
 曾把 guard 下沉到 raw helper并让 typed getter绕经它，掩盖直接调用空 holder 的崩溃边界、
 增加额外调用层；现已恢复两层职责。
 dispatch ctor `sub_597AD4@0x597AD4` 的 ABI 可观察到 incoming owner-slot value 与 node
-pointer，函数体把二者写入 dispatch 并对 owner AddRef；各调用点产物也没有本地旧版 retained temporary 的
-额外引用计数边界。本地用两个裸参数表达这条净数据流，但二进制不能排除源码参数原本是一只
-零开销 raw-node holder 子对象，因此不把“两裸字段签名”升格为唯一源码形状。typed root
+pointer，函数体从 X1 解引用一指针 owner holder/slot、从独立 X2 写入 node，并对 owner
+AddRef；三个直接 caller 都分别准备 X1/X2，异常路径也没有按值 holder 临时量的额外
+AddRef/Release。因此“构造器只接收一只两指针 raw-node holder”已被排除。本地用
+`ownerSlot + node` 表达这条数据流；仍不能唯一恢复的只是 X1 原类型究竟为
+`const PSBFile&`、共同一指针 holder 引用、`PSBRawOwner *const&` 还是等价 slot pointer。typed root
 getter、ResourceManager load 尾段和 findMotion 两个命中分支均由该 ctor 建立 dispatch owner
 引用，不再经过本地通用 Create factory。
 raw node validity `sub_598E44@0x598E44` 独立检查 `owner && node`；类型消费者
@@ -1957,7 +1963,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `0x59B570/0x59B708` 与 module/media callback `0x42CF28/0x59849C`：`PSBFile.load`
   的 Variant 参数是按值复制并经历 AddRef/Release，不是 borrow-only `const&`；pre-register
   descriptor 也直接指向包含 function-local media singleton 的 callback，中间不存在额外
-  `initPSBMedia` 转发层。本地已删除错误 converter/转发函数并恢复直接调用形状。
+  `initPSBMedia` 转发层。本地已删除错误的 borrow-only load 参数/调用形状与 media
+  转发函数并恢复直接调用；未实例化的 `PSBFileConvertor` 模板声明仍保留，因为 stripped
+  O3 不能判定一个完全 inert 的源码声明是否存在。
 
 - 同轮 fresh decompile/disasm `ResourceManager_loadResource@0x6A8D8C` 进一步确认 holder
   生命周期：cache hit 在 `0x6A8E94..0x6A8EB8` copy/AddRef 临时 holder；miss 在
@@ -1993,8 +2001,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `PSBMedia::Resolve@0x59A4B0` 时曾把两条生命周期错误合并：try-get 命中及 Resolve
   最终 out 写回确实走 Release-old→copy owner→AddRef→write node；Resolve 循环内的
   `0x59A694..0x59A704` 则只有 release/install/zero-ref-delete 的优化后净序列。2026-07-22
-  source-shape 交叉审计证明该指令序列既可来自 move，也可来自经优化相消的 copy + 临时
-  析构；本段曾先后把它唯一解释成 copy 和 move，两种强断言均作废，只保留净语义。
+  当时的 source-shape 审计只证明该净序列可由 copy + 临时析构产生，尚未检查
+  `0x59A6D0/0x59A6D8` 的 identity refcount store；2026-07-24 的逐指令与旧 NDK AArch64
+  代码生成对照已把真实生产路径收敛为 Rule-of-Three copy + temporary destruction。
 
 - 2026-07-19 重新从 IDA 枚举当时定义为 `0x59641C..0x59AA84` 的 **90** 个函数，并 fresh
   decompile/disasm typed state/registrar `0x597E98..0x5980F4`、完整 dispatch 微型 vtable
@@ -2030,8 +2039,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   owner/node；新 owner 非空时读取观测 refcount，零值直接析构并保留 destination 悬挂
   边界。只有循环结束写回调用者 out 的 `0x59A730..0x59A774` 才明确执行
   Release-old→copy→AddRef→write node。本地删除了人为强制的 `const child` 作用域，采用
-  能产生同一净序列的直接赋值；2026-07-22 复核确认“这必然是 prvalue move assignment”
-  仍是过度推断，copy + 临时析构经优化也可生成同形指令。该阶段
+  能产生同一净序列的直接赋值；该阶段否定了“必然是 prvalue move assignment”，但尚未
+  利用 identity refcount store 收敛到 copy + 临时析构；该结论由 2026-07-24 复核补齐。该阶段
   仍错误地把 caller out 本身当作循环 current，未真正复原“仅成功尾块写回 out”。这一遗漏
   已由后续 fresh audit 纠正。Mac 四目标构建、`psbfile-dll` **484/484**、
   `motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；冷启动
@@ -2053,7 +2062,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 
 - 2026-07-19 fresh decompile/disasm `PSBMedia::Resolve@0x59A4B0` 的完整 owner/out 链，
   纠正上述遗漏：`0x59A548..0x59A55C` 把 root 只写入局部 current，循环
-  `0x59A698..0x59A704` 也只净更新该局部（源码 move/copy 形状不可辨识）；无首个 slash、任一 contains miss 或其他
+  `0x59A698..0x59A704` 也只更新该局部；其 copy + 临时析构源码形状后来由
+  `0x59A6D0/0x59A6D8` 闭合。无首个 slash、任一 contains miss 或其他
   非成功退出都不写 caller out。只有最后 segment 成功后的 `0x59A730..0x59A774` 才对
   caller out 执行 Release-old→copy current owner→AddRef→write node。本地此前在函数入口
   `value = root` 并直接沿 value 遍历，会让失败调用泄漏部分解析状态到 out；现已恢复独立
@@ -2158,10 +2168,10 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `PSBMedia::Open → new tTVPMemoryStream(data,size)`、通用 memory-stream ctor/dtor 与上述
   存储、标志和释放条件逐项一致。
 
-- 同日对当前 `reference/` 与 `tests/` 中的天然二进制资产做只读盘点：共识别 142 个
+- 同日对当时的外部 `reference/` 快照与 `tests/` 中天然二进制资产做只读盘点：共识别 142 个
   lower-case `mdf\0` wrapper，全部 zlib 解压成功且实际长度等于 wrapper 声明长度；连同
   raw PSB 共识别 222 个解包后 `PSB\0` 文件，全部满足 `sub_598960` 的八项 header-offset
-  比较。因此当前工作区确实没有 MDF zlib-failure 或 filter 后 offset-failure 的天然样本；
+  比较。因此该次物料快照没有 MDF zlib-failure 或 filter 后 offset-failure 的天然样本；
   这不是从一次扩展名负搜索得出的结论，而是逐文件 signature、zlib 与 header 数值检查。
   按“不从零制造 fixture”约束，两项损坏输入 Android runtime 边界继续如实保留为验证缺口。
 
@@ -2218,9 +2228,10 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   当前为 **554 assertions / 8 cases**。
 
 - source-shape 复核还限定了证据强度：`Transfer_guess@0x598A64` 的 hidden-sret 消费行为、
-  `Resolve@0x59A698..0x59A6EC` 的净 owner 生命周期及 `sub_598D58@0x598D58` 的 hit out
-  更新顺序可证；helper 原名/member 身份、Resolve 的 move-vs-copy+temporary、显式 special
-  members/self guards、`sub_597AD4` 的两裸参数-vs-零开销 raw-node holder 参数、
+  `Resolve@0x59A698..0x59A6EC` 的 owner 生命周期及 `sub_598D58@0x598D58` 的 hit out
+  更新顺序可证；2026-07-24 又以 identity refcount store 和 AArch64 对照闭合两个真实
+  rvalue 调用点的 copy + temporary destruction。helper 原名/member 身份、不可见位置是否
+  另有显式 special members/self guards、`sub_597AD4` 第一实参的一指针 holder 精确类型、
   `PackedArrayView_guess` 是否真实源类型，
   以及 `memcpy`/unaligned cast 写法均不可辨识。代码与本文已删除把其中任一等价形状冒充
   唯一源码事实的表述。
@@ -2300,6 +2311,91 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   macOS Release `psbfile-dll` 为 **577/577 assertions（10 cases）**。该轮没有运行或修改
   oracle runner，也没有使用 Frida。
 
+- 同日 fresh decompile/disasm `Adopt@0x598708`、`Transfer_guess@0x598A64`、
+  `PSBMedia::Resolve@0x59A4B0`、`ResourceManager_loadResource@0x6A8D8C`，并与
+  Android-target AArch64 `-O2/-O3` 最小样本交叉核对。`Resolve` 的 strict getter 临时先在
+  `0x598CBC..0x598CD8` AddRef，随后 `0x59A6D0` 读取 refcount、`0x59A6D8` 把同值写回、
+  `0x59A6DC` 再做 zero gate；该 identity store 是 copy AddRef + temporary Release 相消的
+  直接残留，不是常规 move 的 source-clear。`0x6A9238..0x6A9258` 对 PSBFile 返回临时也走
+  同一 copy-shaped 路径。`0x598708` 的 replacement 与 `0x598A64` 的 transfer 则分别由
+  临时 holder copy assignment、以及 `result(copy); source=empty` 自然生成 observed zero
+  gate。本地已删除 2026-07-23 才加入、且无 Android 正证据的两组 move special members，
+  恢复 Rule-of-Three 数据流；不能据此宣称 stripped O3 二进制数学上证明原始类在任何不可见
+  位置绝无 move 声明。公开源码检索也未找到 M2/wamsoft 原始 holder 定义，故 helper 原名和
+  member/free 身份继续保持未知。macOS Release `psbfile-dll` **577/577 assertions
+  （10 cases）**、`motionplayer-dll` **1376/1376 assertions（21 cases）** 全绿；显式
+  `krkr2_wasmtime_guest` 目标链接成功，Debug Wasm 符号只保留两类 holder 的 copy ctor、
+  copy assignment 与 destructor，不再发射本地 move special members；15 Hz
+  `tick-lastTick` 合约测试 **7/7** 通过。
+
+- 同日 fresh decompile/disasm packed 查找与名称反解链
+  `0x59641C/0x59659C/0x597B1C/0x598E64/0x599174`，并补查其六组真实 caller 与两只
+  `vector<string>` 慢路径。`FindDictionaryValueOffset_guess@0x59659C` 的
+  `0x596620..0x596660` 是 `while (lower < upper)` 循环，相等分支仍在
+  `0x596674..0x596678` 经过循环后的 `lower >= upper` failure gate；本地已从
+  `if(count==0)+for(;;)+循环内失败` 改为直接表达这条二进制可见 CFG；stripped O3 仍不能
+  排除另一种等价源码写法被优化成同一 CFG。`DecodeName_guess@0x597B1C`
+  则在 reverse 后于 `0x597E08..0x597E10` 以 begin 指针和长度直接调用 mangled
+  `std::string::assign(const char *, size_t)`，空 vector 也传 null/0；本地已删除额外的
+  iterator-range assign 模板调用面。其余三张 packed view、无 reserve 的
+  `vector<char>`、逐 parent push、reverse、`vector<string>::reserve(count)`、复用一只
+  string 后 copy-emplace、W32 回绕/UXTW 加址及异常析构顺序均未发现可证偏差。
+  `PackedArrayView_guess` 是否为真实类型、inline/member factorization 与 unaligned read
+  的源码拼写仍超出 stripped O3 二进制的证据上限。macOS Release 两目标重编后，
+  `psbfile-dll` **577/577**、`motionplayer-dll` **1376/1376**；Debug `PSBRawFile.cpp.o`
+  仅保留 undefined `basic_string::assign(const char*, unsigned long)`，不再发射 iterator
+  assign template。Wasmtime full guest 重链成功，15 Hz timing contract **7/7** 继续通过。
+
+- 同日继续 fresh decompile/disasm `PSBFile::Load@0x598268`、
+  `ttstr_c_str@0xA13390`、`ttstr_createFromWide@0xA136C0`、
+  `PSBRawOwner::Refresh@0x598960`、`Adopt@0x598708` 与 decrypt callback
+  `0x6865B4`。String load 在 `0x598340..0x59834C` 明确先取得输入 VariantString 的
+  `tjs_char*`，再由 `0xA136C0` 为局部 path 分配并复制新字符串；本地旧
+  `ttstr(value)` 只 AddRef 同一 VariantString，现改为 `ttstr(value.GetString())`，恢复
+  独立 path 对象、异常清理和数据别名。Debug ARM64 object 的 relocation 链为
+  `GetString → tTJSString(const tjs_char*) → LoadStorage → tTJSString dtor`，不再经过
+  `tTJSString(const tTJSVariant&)`。
+- owner size 的字段语义也由条件码闭合：standalone Refresh
+  `0x5989F0..0x598A2C` 为 `B.LE/B.LT/CSET GT`，Adopt 内联 refresh
+  `0x598894..0x598940` 为 signed `GT/GE`；Adopt 入口的 `size < 0x40` 则仍是
+  unsigned `B.CC`。本地因此保留 `Adopt(..., size_t, ...)`，只把 owner `size_` 与
+  `GetSize()` 改成 `int64_t` 语义。decrypt callback 对同一字段分别在 `0x6865E8`
+  读取 W32、在 `0x686610` 读取 X64，本地既有 `unsigned int` / `tjs_int64` 显式转换
+  无需变化。精确 typedef 名不能从 stripped O3 唯一判定；macOS ARM64 Release object
+  已产生 signed `CCMP GE/GT` 与 `CSET GT`，证明本地产物不再保留 unsigned 比较边界。
+
+- 同日完成 `PSBValueDispatch` 的双 vtable、对象布局和生命周期全槽复审。main address
+  point `0x1A0B3D8` 的 32 槽、secondary `0x1A0B4E8` 的 3 槽与 `-8`
+  offset-to-top 硬证 `iTJSDispatch2` primary + `iTJSNativeInstance` secondary；所有 ctor
+  caller 均分配 `0x30`，字段语义为 `ref@+16, owner@+24, node@+32, valid@+40`，与本地
+  ARM64 record-layout 一致。`Release@0x597A40`、dispatch valid 状态机、native no-op
+  生命周期与 NIS `this+8` 返回也逐项一致，未发现可证 `cpp/` 差异。Android raw-pair
+  构造的 owner-store→AddRef→node-store 顺序不能唯一反推 initializer-list/body 写法，故未
+  为代码生成形状改源码。
+
+- typed NCB 尾链也已逐函数复审 `0x5980F4/0x5981F8/0x59A8D8..0x59B708`。factory
+  异常后删除已发布 holder 但保留悬挂 result、root ignored-result 泄漏/null-result 崩溃、
+  raw factory error 不清 native pointer、load 按值 Variant 的分阶段析构、注册 End 的异常
+  清理以及 adaptor sticky/no-delete 生命周期，均由本地现有 ncbind 模板自然生成。文档中
+  “converter 已删除”的旧说法已纠正：删除的是错误的 borrow-only load 调用形状；源码仍
+  保留 inert `PSBFileConvertor` 声明，而 Android/local object 都没有 emitted 使用证据。
+  stripped O3 不能证明未实例化声明不存在，因此不据此删除或接入生产调用链。
+
+- owner/Adopt/LoadStorage 与全部 raw-node getter 又分别完成独立逐指令复审，未发现新的
+  可证 `cpp/` 差异。owner null-data 未初始化 header、Refresh 失败不回滚、filter 异常后保留
+  新 owner、Storage 拒绝泄漏与 Octet 拒绝直接 delete[] aligned pointer 均继续保留。raw
+  try/strict/contains/keys 的 out 与临时量生命周期、GetInt/GetDouble 的正式 ABI、String
+  tag `0x2C`/Resource 非资源 tag 的 index-0 fallback、chunkData-null 不写 size，以及 packed
+  W32 wrap/UXTW/SXTW 全部与 `0x598B58..0x5996E4` 对齐。没有用额外 guard、copy 或范围
+  检查“安全化”这些原版边界。
+
+- 以上修改后的完整本地非回归矩阵：macOS Release `psbfile-dll` **577/577**、
+  `motionplayer-dll` **1376/1376**，macOS Debug `psbfile-dll` **577/577**；Web Debug 完成
+  `index.html` 最终链接，Wasmtime guest 重链成功，15 Hz `tick-lastTick` 合约 **7/7**，
+  `git diff --check` 通过。远端父提交 `2655178` 的 `differential.yml` run
+  `30074302352` 为 success；该远端结果不包含当前未提交的 psbfile 修改，不能替代上述
+  本地验证。
+
 ## 后续闭合条件
 
 要对“psbfile 插件自身”给出 100% 结论，至少还需要：
@@ -2307,8 +2403,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 1. 使用现有天然损坏资产覆盖 MDF zlib 失败及 filter 后 offset 校验失败；MDF 成功路径已
    用本机现有 `.ks.scn` 在 Android oracle 验证，但仓库没有已提交 MDF fixture；media/TJS
    注册路径已由现有 PIMG 闭合。2026-07-19 曾对当时外部可用的 142 个 MDF 与 222 个
-   解包后 PSB 做只读普查，未发现天然失败样本。`reference/` 后续已由用户改为普通、ignored
-   本地目录并恢复物料；当前重新普查到 142 只天然 MDF，全部成功且无 failure 样本。
+   解包后 PSB 做只读普查，未发现天然失败样本。那是 2026-07-23 外部物料快照；截至
+   2026-07-24 当前 checkout 的 `reference/` 含 0 个普通文件，不能再写成“当前有 142 只”。
    没有现成失败物料时记录验证缺口，不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
    Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 的 7-byte
@@ -2322,8 +2418,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
    `autoskip.psb/source/main/icon` 在真实 arm64 API 31 AVD 上取得精确三键回调及
    ADB/RPC/Frida `status=ok`；仍未覆盖的是 CreateAdaptor-null。上述结果均来自真实
    `libkrkr2.so`，不再由离线协议模拟替代。
-4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 是两裸参数还是零开销 raw-node
-   holder 参数、PSBFile/raw-node 的显式
+4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 已确定为
+   owner-holder-ref/slot 与 node 两个实参，但第一实参究竟是 `const PSBFile&`、共同 holder
+   引用还是 `PSBRawOwner *const&` 仍不可区分；另有 PSBFile/raw-node 的显式
    special members 与 self guards、若干 inline helper 的原名/member 身份、
    `PackedArrayView_guess` 是否为真实源类型，以及 unaligned read 的具体写法。若要把“尽可能”
    提升为字面 100%，需要带符号/未优化构建、调试类型或原始源码等新增证据，不能从当前

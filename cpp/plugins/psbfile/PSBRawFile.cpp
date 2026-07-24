@@ -5,7 +5,6 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <utility>
 
 #include <zlib.h>
 
@@ -135,16 +134,14 @@ namespace PSB {
     bool detail::FindDictionaryValueOffset_guess(
         const std::uint8_t *dictionary, std::uint32_t nameIndex,
         std::uint32_t &valueOffset) {
-        // sub_59659C @ 0x59659C returns a byte offset relative to the packed
-        // dictionary and stops at the first midpoint equal to nameIndex.
+        // sub_59659C @ 0x59659C uses a lower<upper loop.  Even the equal
+        // branch joins the post-loop lower>=upper failure gate at
+        // 0x596674..0x596678 before decoding the parallel offset table.
         const PackedArrayView_guess keys(dictionary);
         std::uint32_t lower = 0;
         std::uint32_t upper = keys.count;
-        if(upper == 0) {
-            return false;
-        }
         std::uint32_t middle;
-        for(;;) {
+        while(lower < upper) {
             middle = (upper + lower) / 2;
             const std::uint32_t candidate = keys[middle];
             if(candidate == nameIndex) {
@@ -155,9 +152,9 @@ namespace PSB {
             } else {
                 lower = middle + 1;
             }
-            if(lower >= upper) {
-                return false;
-            }
+        }
+        if(lower >= upper) {
+            return false;
         }
         const PackedArrayView_guess offsets(keys.end);
         valueOffset =
@@ -170,7 +167,9 @@ namespace PSB {
                                   const PSBRawOwner *owner,
                                   std::uint32_t nameIndex) {
         // sub_597B1C @ 0x597B1C follows parent links into a byte vector,
-        // reverses that vector, then assigns the result to std::string.
+        // reverses that vector, then calls std::string::assign(const char *,
+        // size_t) @ 0x597E10; the empty path supplies the vector's null begin
+        // pointer and a zero length through the same overload.
         const PackedArrayView_guess charset(owner->GetHeader()->names);
         const PackedArrayView_guess namesData(charset.end);
         const PackedArrayView_guess nameIndexes(namesData.end);
@@ -182,7 +181,7 @@ namespace PSB {
             node = parent;
         }
         std::reverse(bytes.begin(), bytes.end());
-        name.assign(bytes.begin(), bytes.end());
+        name.assign(bytes.data(), bytes.size());
     }
 
     PSBRawOwner::PSBRawOwner(std::uint8_t *data, std::size_t size) :
@@ -711,19 +710,25 @@ namespace PSB {
     }
 
     PSBFile PSBFile::Transfer_guess() noexcept {
-        // sub_598A64 @ 0x598A64 has a hidden return slot, copies the owner into
-        // it, preserves the incoming zero-ref deletion branch, and consumes
-        // its input.  This ABI proves neither a source move constructor nor a
-        // zero-argument member versus one-argument free helper; the member
-        // shape is only a minimal local representation.  The binary exposes
-        // no source name, hence the required _guess suffix.
-        return static_cast<PSBFile &&>(*this);
+        // sub_598A64 @ 0x598A64 is the optimized Rule-of-Three sequence:
+        // copy into the hidden return slot (AddRef), then copy-assign an empty
+        // holder back to the source (Release + clear).  The paired operations
+        // naturally retain the incoming-zero deletion edge visible at
+        // 0x598A7C..0x598A94; it is not a hand-written move-member check.
+        // The binary still cannot recover this helper's original source name
+        // or member/free-function identity, hence the _guess suffix.
+        PSBFile result(*this);
+        *this = PSBFile();
+        return result;
     }
 
     bool PSBFile::Load(tTJSVariant value) {
         // sub_598268 @ 0x598268 is the typed NCB method registered as "load".
         if(value.Type() == tvtString) {
-            const ttstr path(value);
+            // 0x598340..0x59834C first obtains the source VariantString's
+            // tjs_char pointer, then constructs a fresh ttstr allocation from
+            // that pointer.  Do not share/AddRef the source VariantString.
+            const ttstr path(value.GetString());
             if(!LoadStorage(path)) {
                 TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"),
                                          path);
@@ -827,20 +832,15 @@ namespace PSB {
            detail::ReadUnaligned_guess<std::uint32_t>(data) != PSB_SIGNATURE) {
             return false;
         }
-        auto *next = new PSBRawOwner(data, size);
-        next->refCount_ = 1;
-
-        if(owner_ != nullptr) {
-            owner_->Release();
-        }
-        owner_ = next;
-        // This source-level check compiles to the sub_598708
-        // @ 0x598828..0x598840 zero-reference deletion branch.  The sibling
-        // old-owner-null path loses the check because the code just set the
-        // count to one; reproducing that optimized ARM64 CFG in source would
-        // incorrectly encode a compiler artifact.
-        if(next->refCount_ == 0) {
-            delete next;
+        {
+            PSBFile replacement;
+            replacement.owner_ = new PSBRawOwner(data, size);
+            replacement.owner_->AddRef();
+            // sub_598708 @ 0x5987FC..0x598844 copy-assigns this temporary
+            // holder and then destroys it.  The AddRef/Release pair cancels;
+            // its optimized remnant is the old-owner path's incoming-zero
+            // deletion gate, while the old-owner-null sibling folds it away.
+            *this = replacement;
         }
 
         if(filter) {

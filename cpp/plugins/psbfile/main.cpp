@@ -27,7 +27,8 @@ namespace PSB {
     PSBValueDispatch::PSBValueDispatch(
         PSB::PSBRawOwner *const *ownerSlot, const std::uint8_t *node) :
         // sub_597AD4 @ 0x597AD4 first dereferences X1 as an owner slot, then
-        // copies that owner and performs AddRef inside the constructor.
+        // copies that owner and performs AddRef; node arrives separately in
+        // X2.  Its three callers have no by-value holder temporary lifetime.
         value_(*ownerSlot, node) {}
 
     void PSBValueDispatch::decodeName_guess(

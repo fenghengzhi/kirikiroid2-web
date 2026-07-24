@@ -46,7 +46,7 @@ namespace PSB {
         [[nodiscard]] const PSBRawHeader *GetHeader() const { return header_; }
         [[nodiscard]] std::uint8_t *GetData() { return data_; }
         [[nodiscard]] const std::uint8_t *GetData() const { return data_; }
-        [[nodiscard]] std::size_t GetSize() const { return size_; }
+        [[nodiscard]] std::int64_t GetSize() const { return size_; }
 
     private:
         friend class PSBFile;
@@ -59,12 +59,20 @@ namespace PSB {
         PSBRawHeader *header_;
         PSBRawHeader headerStorage_;
         std::uint8_t *data_{};
-        std::size_t size_{};
+        // Refresh @0x5989E8..0x598A2C and its Adopt-inline copy
+        // @0x598894..0x598940 compare this full-width field with signed
+        // GT/GE conditions.  Adopt's incoming size remains unsigned for the
+        // separate <0x40 gate; only the stored owner field has signed-64
+        // semantics.  The stripped binary cannot recover the original
+        // typedef spelling, so use the explicit semantic type here.
+        std::int64_t size_{};
     };
 
     // Two-pointer raw node handle used throughout the Android implementation.
-    // Call sites prove retained-copy and consuming-transfer net semantics, but
-    // not whether the original source declared these exact special members.
+    // The real rvalue assignment in PSBMedia::Resolve @ 0x59A694 follows the
+    // retained-copy path plus temporary destruction, so this holder
+    // deliberately exposes Rule-of-Three copy lifetime rather than a
+    // speculative move path.
     class PSBRawNode final {
     public:
         PSBRawNode() = default;
@@ -76,11 +84,6 @@ namespace PSB {
         }
         PSBRawNode(const PSBRawNode &other) :
             PSBRawNode(other.owner_, other.node_) {}
-        PSBRawNode(PSBRawNode &&other) noexcept :
-            owner_(other.owner_), node_(other.node_) {
-            other.owner_ = nullptr;
-            other.node_ = nullptr;
-        }
         ~PSBRawNode() {
             if(owner_ != nullptr) {
                 owner_->Release();
@@ -105,28 +108,6 @@ namespace PSB {
             node_ = other.node_;
             return *this;
         }
-        PSBRawNode &operator=(PSBRawNode &&other) noexcept {
-            if(this == &other) {
-                return *this;
-            }
-            if(owner_ != nullptr) {
-                owner_->Release();
-            }
-            owner_ = other.owner_;
-            node_ = other.node_;
-            // PSBMedia::Resolve @ 0x59A698..0x59A6EC proves the same net
-            // installation and incoming zero-reference deletion boundary.
-            // Its optimized instructions cannot distinguish move assignment
-            // from copy assignment plus temporary destruction; this source
-            // special-member shape therefore remains an explicit uncertainty.
-            if(owner_ != nullptr && owner_->refCount_ == 0) {
-                delete owner_;
-            }
-            other.owner_ = nullptr;
-            other.node_ = nullptr;
-            return *this;
-        }
-
         [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
         // sub_597AD4 @ 0x597AD4 receives the address of this first slot at
         // all PSBValueDispatch construction sites.  The binary cannot prove
@@ -183,31 +164,6 @@ namespace PSB {
             if(owner_ != nullptr) {
                 owner_->AddRef();
             }
-            return *this;
-        }
-        PSBFile(PSBFile &&other) noexcept : owner_(other.owner_) {
-            // Chosen local representation of the consuming net behavior in
-            // sub_598A64 @ 0x598A64; that hidden-sret helper is not itself a
-            // move-constructor body and cannot prove this source declaration.
-            if(owner_ != nullptr && owner_->refCount_ == 0) {
-                delete owner_;
-            }
-            other.owner_ = nullptr;
-        }
-        PSBFile &operator=(PSBFile &&other) noexcept {
-            if(this == &other) {
-                return *this;
-            }
-            if(owner_ != nullptr) {
-                owner_->Release();
-            }
-            owner_ = other.owner_;
-            // ResourceManager::load @ 0x6A9240..0x6A9258 proves this net
-            // install/zero-ref/consume sequence, not the special-member name.
-            if(owner_ != nullptr && owner_->refCount_ == 0) {
-                delete owner_;
-            }
-            other.owner_ = nullptr;
             return *this;
         }
         [[nodiscard]] PSBFile Transfer_guess() noexcept;
