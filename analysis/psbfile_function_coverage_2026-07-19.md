@@ -39,7 +39,7 @@ data xref。
 `GetDictionaryKeys@0x598E64` 在 vector 容量耗尽时由 `0x598FFC` 调 PLT
 `0x423250/0x42325C`，最终进入
 `std::vector<std::string>::_M_emplace_back_aux<std::string &>@0x59B7E8`。
-因此完整相关集合是 111 个业务/NCB 入口加 1 个本源码触发的 STL 扩容慢路径，
+因此连续主实现簇是 111 个业务/NCB 入口加 1 个本源码触发的 STL 扩容慢路径，
 共 **112** 个；最后一只函数的 exclusive end 是 `0x59B9C8`。该地址有独立
 `SUB SP,#0x30` 序言，`sub_42CFA0@0x42CFB0..0x42CFC8` 又把它作为字面
 `PackinOne.dll` 的 callback 注册；函数体从 `fstat.dll` 起加载一组子插件。因此
@@ -47,8 +47,10 @@ data xref。
 `0x59B7E8..0x59BC2C` 拆成 `0x59B7E8..0x59B9C8` 与
 `0x59B9C8..0x59BC2C` 两只函数并保存。
 
-下列分组穷举 112 个相关函数；每组地址数之和为
-`42 + 1 + 10 + 19 + 17 + 22 + 1 = 112`。
+下列 A–G 分组穷举连续主实现簇的 112 个相关函数；每组地址数之和为
+`42 + 1 + 10 + 19 + 17 + 22 + 1 = 112`。H 组另列 code xref 普查不会覆盖、但由
+PSBFile 翻译单元发射的两只静态初始化函数；完整 PSBFile 模块专属 emitted-function 拓扑因此为
+`112 + 2 = 114`。
 
 ## A. PSBValueDispatch 与 packed dispatch ABI（42）
 
@@ -167,8 +169,8 @@ W32 offset 合成及无 bounds gate均保持原样。
 `std::string::assign(const char *, size_t)`，包括空 vector 的 null/0 调用；本地已从
 iterator-range overload 改为 `data()+size()` 数据流，不再发射额外 range-template 调用面。
 二进制能证明 overload 与实参，不能唯一证明 begin pointer 的源码 accessor 拼写。Debug
-对象复核只剩 `basic_string::assign(const char*, unsigned long)` undefined symbol；macOS Release
-`psbfile-dll` **577/577**、`motionplayer-dll` **1376/1376**，Wasmtime full guest 链接与
+对象复核只剩 `basic_string::assign(const char*, unsigned long)` undefined symbol；该次
+macOS Release checkpoint 的 `psbfile-dll` **577/577**、`motionplayer-dll` **1376/1376**，Wasmtime full guest 链接与
 15 Hz timing contract **7/7** 均通过。
 
 ## C. PSBFile typed NCB 前段与 factory/root（10）
@@ -352,7 +354,7 @@ IDB 已把除两只既有 nullsub 外的 media/辅助边界按证据强度命名
 `current = current.GetDictionaryValueStrict(key)` 依赖 copy assignment 与返回临时析构，
 不是本地此前手写的 move assignment。两组猜测性 holder move special members已删除；
 zero-ref 删除边界继续由原始 AddRef/Release 相消自然产生。
-本地验证为 macOS Release `psbfile-dll` **577/577**（10 cases）、
+该次本地验证为 macOS Release `psbfile-dll` **577/577**（10 cases）、
 `motionplayer-dll` **1376/1376**（21 cases）；Wasmtime guest 链接成功且 Debug Wasm 不再
 发射两个 holder 的 move special-member 符号，15 Hz timing contract **7/7** 通过。
 
@@ -425,27 +427,33 @@ global。这些边界均由现有 ncbind 模板自然生成。当前 `PSBFileCon
 符号或调用，但 stripped O3 不能证明原源码不存在一个未实例化模板；因此既不删除它，也不
 把 Resolve/load 等生产链改走它。
 
-2026-07-24 的静态数据拓扑复扫又把 code-xref 之外的构造入口纳入范围：
-`.init_array@0x19EA090` 指向 `0x42CF28`，后者不调用额外 helper，而是在
-`0x1AB50A0..0x1AB50E7` 原位建立两只对象并插入全局 autoreg 链。第一只为
+2026-07-24 的静态数据拓扑复扫又把 code-xref 之外的两只构造入口纳入范围。
+`.init_array@0x19EA088` 先指向 `0x42CEF8`：guard `0x1AB5118` 首次进入时依次把
+`ncbClassInfo<PSBFile>` 的 `initialized/name/id/class-object` 四字段
+`0x1AB50F8/0x1AB5100/0x1AB5108/0x1AB5110` 清为 `false/null/0/null`，再把 guard 置 1；
+这与 `ncbClassInfo<T>::info` 的默认构造函数逐字段一致。`.init_array@0x19EA090` 再指向
+`0x42CF28`，后者不调用额外 helper，而是在 `0x1AB50A0..0x1AB50E7` 原位建立两只对象
+并插入全局 autoreg 链。第一只为
 `{vptr=off_1A0B578, module=L"PSBFile.dll", next, className=L"PSBFile"}`；
 第二只为 `{vptr=off_19FD8E8, module=L"PSBFile.dll", next,
 preRegist=0x59849C, postRegist=null}`。`off_1A0B578` 的两个虚槽正是
 `Regist@0x59A8D8/Unregist@0x59A968`；callback vtable 的两个槽落在通用 ncbind
 实现。该构造函数没有 PSB 专属 `__cxa_atexit`，也没有对应 `.fini_array` 入口。
 
-剩余 PSB 专属可写静态状态只有三组：`dword_1AB5098` 是
+PSB 专属可写静态状态只有三组：`dword_1AB5098` 是
 `PSBValueDispatch::NativeInstanceSupport@0x596D90` 的 lazy `PSBValueClass` id；
 `qword_1AB50E8 + guard@0x1AB50F0` 是 `0x59849C` 的函数局部
-`PSBMedia*`；`0x1AB50F8/0x1AB5100/0x1AB5108/0x1AB5110` 依次承载
+`PSBMedia*`；`0x1AB50F8/0x1AB5100/0x1AB5108/0x1AB5110 + guard@0x1AB5118` 依次承载
 `ncbClassInfo<PSBFile>` 的 initialized/name/id/class-object 状态，并由
 `0x597E98..0x597F08`、`0x59A968` 和 `0x59AA84` 读写。跳转表、GOT、全引擎共享的
 空字符串与 libstdc++/pthread 状态另有大量非 PSB xref，不属于插件自有静态对象。
 
-本地 macOS Debug object 对应发射
+本地 object 对应发射
 `ncbNativeClassAutoRegister_PSBFile`、
 `ncbCallbackAutoRegister_PreRegist_initPsbFile_0`、函数局部 `valueClassId`、
-`ncbClassInfo<PSBFile>::_info`/guard，以及 `initPsbFile()::psbMedia`/guard；Release
+`ncbClassInfo<PSBFile>::_info`/guard，以及 `initPsbFile()::psbMedia`/guard。macOS Release
+`main.cpp.o` 的 `__mod_init_func` 也保持 class-info initializer 在
+`__GLOBAL__sub_I_main.cpp` 之前的次序；Release
 把两组 BSS 分别合并为 `main.cpp.o` 与 `PSBMediaRegistry.cpp.o` 的
 `__MergedGlobals`，但 relocation 仍完整指向同一 vtable、`initPsbFile`、
 `__cxa_guard_*` 与 `TVPRegisterStorageMedia`。这是优化后的符号合并，不是源级对象缺失；
@@ -483,15 +491,32 @@ vector 容器和快/慢路径语义；Android 旧 libstdc++ 的 string 呈 COW r
 本地 libc++ 的 `std::string` 并非 COW。这里对齐 source-level copy token、元素构造与
 临时对象边界，不宣称跨标准库复刻 COW 内部布局或模板实体机器地址。
 
+## H. PSBFile 静态初始化入口（2）
+
+```text
+0x42CEF8 0x42CF28
+```
+
+两者分别由 `.init_array@0x19EA088` 与 `.init_array@0x19EA090` 引用。前者是
+`ncbClassInfo<PSBFile>::_info` 的 guarded 默认构造；后者构造 class/callback 两只 autoreg
+对象并把 `initPsbFile@0x59849C` 写入 pre-register 槽。完整 `.init_array` 扫描确认前一项
+`0x42CE6C` 属上一个模块、后一项 `0x42CFA0` 属 `PackinOne.dll`，没有第三只 PSB 专属初始化
+入口；`.fini_array`、`__cxa_atexit` 与 PSB 函数簇也没有额外 PSB 析构入口。本地分别由
+`ncbClassInfo<PSBFile>::_info` 静态对象、`NCB_REGISTER_CLASS(PSBFile)` 与
+`NCB_PRE_REGIST_CALLBACK(initPsbFile)` 发射相同生命周期拓扑，无需修改生产代码。
+
 ## 覆盖结论
 
-112 个 Android 相关函数均已归属于生产源码、明确的 NCB/iTJS ABI wrapper 或本源码触发的
-STL 实例化；没有未归属业务入口。该 manifest 只证明 **Android→local** 的入口归属完整，
+连续主实现簇的 112 个函数，加上两只静态初始化入口，共 **114 个** Android PSBFile 模块专属
+emitted functions，均已归属于生产源码、明确的 NCB/iTJS ABI wrapper、本源码触发的 STL
+实例化或静态对象生命周期；没有未归属业务入口。该 manifest 只证明 **Android→local** 的入口归属完整，
 不能反向证明 **local→Android** 没有额外抽取边界。另行完成的 local→Android Release
 对象审计已消除三类已确认额外边界：dispatch 三函数四站点的 count-helper 调用、
 `PSBMedia::Resolve→PSBFile::GetRoot`，以及
 `PSBMedia::GetResourceData→PSBRawNode::GetResource`。这不能反向证明原始源码没有
-等价 inline helper。当前 raw owner/node 的若干小方法只有
+等价 inline helper。最新 local→Android Release 对象符号普查也已逐项映射所有 strong PSB
+business functions；本地剩余额外符号只属于 ABI alias、weak COMDAT inline 析构和 ncbind
+模板实例，stripped O3 不能据此断言原源码不存在等价 inline/template 声明。当前 raw owner/node 的若干小方法只有
 上层调用点内联行为证据、没有独立 Android 入口；其名字与是否为原始 inline helper 仍不能
 仅由本地源码宣称。manifest 也不替代损坏输入的 Android runtime oracle；MDF zlib failure、
 filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage 和
@@ -518,3 +543,9 @@ checkout 缺少 `reference/xp3/logo_test_oracle.xp3`。2026-07-23 曾在外部 i
 该物料；提交 `9d731e0b21498d47886a0993a0bac03759b82bc9` 对应的独立 Differential run
 `30084689336` 已实际完成 Wasmtime guest、Android oracle 与最终 trace/PNG hash compare，
 workflow conclusion 为 success。
+
+最新生产代码 checkpoint `bfb0244cd03712e67dbc4c2009f3c894d2f53f68` 的独立
+Differential run `30086865716` 同样为 success：`build-legacy-harness`、`wasmtime`、
+`adb-frida`、`motion-playback-compare` 四个 job 全部通过。该 checkpoint 的 macOS Release
+非回归为 `psbfile-dll` **577/577**、`motionplayer-dll` **1374/1374**；上文的 1376/1376
+均保留为各自历史 checkpoint 的原始计数，不代表当前回归。

@@ -74,7 +74,9 @@
 - 尚未获得天然 runtime 覆盖的只剩损坏 MDF/zlib failure、filter 后 offset failure、损坏
   packed table、tag `0x0B` 极端值、>4 GiB storage 与 CreateAdaptor-null。当前资产没有
   相应可达样本；按物料规则不制造 fixture。这些验证缺口
-  不推翻 112 个函数的静态归属与本轮正常/替换生命周期实测，但也不能被误写成已闭合。
+  不推翻连续主实现簇 112 个函数、两只静态初始化入口（完整 PSBFile 模块专属 emitted
+  topology 114 个）的
+  静态归属与本轮正常/替换生命周期实测，但也不能被误写成已闭合。
 
 ## 2026-07-23：Player 内部 source resolver、四角颜色与 execute gate 纠正
 
@@ -344,8 +346,11 @@
   `0x423250/0x42325C` 调到
   `std::vector<std::string>::_M_emplace_back_aux<std::string &>@0x59B7E8`；此前仅看
   真实函数的 direct xref 而把它排除在 PSBFile coverage 外，是错误的 negative 结论。
-  manifest 已从 111 个业务/NCB入口纠正为 **112 个相关函数**（额外 1 个本源码触发的
-  vector 扩容慢路径），最后一只函数的 exclusive end 为 `0x59B9C8`。该地址的独立
+  主实现 manifest 已从 111 个业务/NCB入口纠正为 **112 个相关函数**（额外 1 个本源码触发的
+  vector 扩容慢路径），最后一只函数的 exclusive end 为 `0x59B9C8`。另计
+  `0x42CEF8/0x42CF28` 两只 PSB 静态初始化入口后，完整 PSBFile 模块专属
+  emitted-function topology 为 114。
+  `0x59B9C8` 的独立
   `SUB SP,#0x30` 序言及 `PackinOne.dll` 注册 callback xref 又证明，后续代码不属于
   vector helper；IDB 已同步拆分并保存。
 - 既有加密 motion PSB 可作为第二只有效 raw container。新增测试按
@@ -424,7 +429,7 @@
 - 删除无 Android 独立入口的 `CreatePSBValueDispatch/CreatePSBValueVariant`；
   `PSBValueDispatch` 的完整类声明位于 `PSBDispatch.h`，37 个定义仍在 `main.cpp`
   out-of-line（32 个接口槽、构造器、`assign` 与 3 个私有 helper）。此前“35 个方法”是
-  已过期的统计口径，现已与 112-entry manifest 纠正一致。`load@0x6A92FC..0x6A9358`
+  已过期的统计口径，现已与 112-entry 主实现 manifest 纠正一致。`load@0x6A92FC..0x6A9358`
   直接从 selected owner/root 构造 dispatch，
   不再生成 retained `PSBRawNode` 临时量。
 - fresh decompile `isExistMotion@0x6A96F8` 与 `findMotion@0x6A9ED4` 纠正了旧的 TJS root
@@ -620,12 +625,17 @@ oracle；测试通过只能证明现有覆盖未回归，不能把未覆盖边�
 load 方法 wrapper 和首参 Variant 转换。2026-07-23 继续沿
 `GetDictionaryKeys@0x598E64 → PLT 0x423250/0x42325C` 追踪，确认下一函数
 `0x59B7E8` 正是该源码触发的 `std::vector<std::string>::_M_emplace_back_aux`
-扩容慢路径；完整集合因此为 **112** 个相关函数，覆盖到该函数的 exclusive end
+扩容慢路径；连续主实现簇因此为 **112** 个相关函数，覆盖到该函数的 exclusive end
 `0x59B9C8`。紧随的 `sub_59B9C8` 被 `sub_42CFA0` 作为字面 `PackinOne.dll`
 callback 注册，且从 `fstat.dll` 起加载子插件，属于下一模块。完整分组
 manifest 见 [psbfile_function_coverage_2026-07-19.md](psbfile_function_coverage_2026-07-19.md)。
 
-模块注册点 `0x42CF28` 给出二进制字面名字：
+code-xref 之外的 `.init_array` 又给出两只 PSB 生命周期入口：`0x19EA088 → 0x42CEF8`
+guarded-default-construct `ncbClassInfo<PSBFile>::_info`，随后
+`0x19EA090 → 0x42CF28` 构造 class/callback autoreg；所以完整 PSBFile 模块专属 emitted-function topology
+为 `112 + 2 = 114`。本地 Release object 同样先发射 class-info initializer，再进入
+`__GLOBAL__sub_I_main.cpp`；这是既有 `ncbClassInfo<T>::info`、注册宏的产物，不是待补的 C++
+实现。模块注册点 `0x42CF28` 给出二进制字面名字：
 
 - module: `PSBFile.dll`
 - class: `PSBFile`
@@ -1334,6 +1344,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   已链接 `krkr2plugins_ncbind`，补齐 `TVPGetD3DImageNative`/
   `TVPGetD3DImageScaleX` 所属 D3D bridge；这是测试构建接线修复，不改变产品实现。
 - 当前 macOS Release `motionplayer-dll`：21 test cases、1374 assertions 全部通过。
+- 生产代码 checkpoint `bfb0244cd03712e67dbc4c2009f3c894d2f53f68` 的 GitHub
+  Differential run `30086865716` 为 success；`build-legacy-harness`、`wasmtime`、
+  `adb-frida`、`motion-playback-compare` 四个 job 全部通过。
 - 当前 Web Debug：曲线 raw-owner/离线类型剥离后的增量目标完成，`index.html` 最终链接通过。
 - Web Debug：本轮完成 217/217 targets，`index.html` 完整链接通过；
   `ResourceManager` 内联容器、D3DImage owner 与 last-loaded 状态删除均进入最终 wasm 链接。
@@ -2041,7 +2054,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
   通过。该轮覆盖后来发现漏计 `0x59AA84..0x59B708` 的 NCB tail；后续 manifest
   先补到 108，2026-07-22 再拆出三个被 IDA 合并的入口并纠正为 111 个业务/NCB函数；
-  2026-07-23 又沿 PLT 调用链补回 `0x59B7E8` 的 vector 扩容慢路径，当前为 112。
+  2026-07-23 又沿 PLT 调用链补回 `0x59B7E8` 的 vector 扩容慢路径，当时主簇口径为 112；
+  后续 `.init_array` 普查再补记两只静态初始化入口，完整 PSBFile 模块专属 topology 为 114。
   该历史阶段当时 `adb devices -l` 为空，Android oracle 未执行；这是外部验证缺口，不是
   实现失败，也不替代此前在线 AVD 的 `status=ok` 历史证据。
 
@@ -2150,7 +2164,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   先得到 108 个 IDA function，2026-07-22 进一步拆出被错误并入 `0x59A4B0/0x59AEEC`
   的 `0x59A8D8/0x59A968/0x59B14C`，得到 **111** 个业务/NCB函数。2026-07-23
   再确认 `0x598FFC` 经 PLT 调到 `0x59B7E8`，加入 1 个本源码触发的 vector 扩容慢路径，
-  当前相关函数总数为 **112**。早先把 `0x59AA84` 当终点
+  当前连续主实现簇总数为 **112**；另计 `0x42CEF8/0x42CF28` 两只静态初始化入口后，完整
+  PSBFile 模块专属 emitted-function topology 为 **114**。早先把 `0x59AA84` 当终点
   只覆盖 90 个入口的边界已纠正；最终 F 组共有 22 个 typed NCB 入口，相较旧 90-entry
   边界净新增 21 个；这些入口全部属于自动注册/反注册、
   holder/析构/成员/属性/方法/参数转换包装，并由
@@ -2228,7 +2243,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 - 上述三项修改及后续生命周期收口后，Mac `psbfile-dll` **554/554**、
   `motionplayer-dll` **1197/1197** 通过，Mac 目标、Wasmtime 默认 Debug build、显式
   `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接成功，`git diff --check` 通过。当前
-  112-entry manifest 仍未发现漏写的 Android 业务入口或源码触发的容器慢路径；尚不能唯一证明的是
+  112-entry 主实现 manifest 仍未发现漏写的 Android 业务入口或源码触发的容器慢路径；尚不能唯一证明的是
   `Transfer_guess@0x598A64`、若干 zero-xref helper、`PackedArrayView_guess` 及
   `ReadPackedCount_guess` 等 inline helper 的原始名字、成员身份和源码拼写；但上述三个
   已审计调用面中的本地产物额外调用边界已经消除。ARM64 对象字段偏移在这些判断中只作为反编译定位坐标；本地
@@ -2279,7 +2294,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 - 同轮函数序言复扫拆开 `0x59A8D8`（auto-register Regist）、`0x59A968`
   （Unregist）和 `0x59B14C`（raw factory FuncCall），随后又沿 PLT 补回
   `0x59B7E8` 的 vector 扩容慢路径，并把错并在其后的 `0x59B9C8`
-  （`PackinOne.dll` callback）拆成独立函数；112-entry manifest 已闭合，且所有
+  （`PackinOne.dll` callback）拆成独立函数；112-entry 主实现 manifest 已闭合，且所有
   `SUB SP` / pre-index `STP/STR` 序言均成为 function start。IDB 已追加 vtable xref/边界
   注释并保存；adaptor 第三字段的旧文档语义也由错误的 `constructed` 纠正为
   `_sticky/no-delete`。Mac `psbfile-dll` **554/554**、`motionplayer-dll` **1197/1197**、
@@ -2413,12 +2428,23 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   W32 wrap/UXTW/SXTW 全部与 `0x598B58..0x5996E4` 对齐。没有用额外 guard、copy 或范围
   检查“安全化”这些原版边界。
 
-- 以上修改后的完整本地非回归矩阵：macOS Release `psbfile-dll` **577/577**、
+- 以上修改后该 checkpoint 的完整本地非回归矩阵：macOS Release `psbfile-dll` **577/577**、
   `motionplayer-dll` **1376/1376**，macOS Debug `psbfile-dll` **577/577**；Web Debug 完成
   `index.html` 最终链接，Wasmtime guest 重链成功，15 Hz `tick-lastTick` 合约 **7/7**，
   `git diff --check` 通过。远端父提交 `2655178` 的 `differential.yml` run
   `30074302352` 为 success；该远端结果不包含当前未提交的 psbfile 修改，不能替代上述
   本地验证。
+
+- 2026-07-24 后续静态生命周期/符号双向复审确认：连续主实现簇仍为 112，但此前文档漏记
+  `.init_array@0x19EA088 → 0x42CEF8` 的 `ncbClassInfo<PSBFile>::_info` guarded 默认构造；
+  连同已记录的 `.init_array@0x19EA090 → 0x42CF28` autoreg 构造，完整 PSBFile 模块专属
+  emitted-function topology 为 **114**。本地 Release object 的两只 initializer 先后次序、
+  guard 机制与存在性、字段最终值和 autoreg 拓扑逐项一致；initializer 内部机器 store 顺序
+  不作相同宣称。所有 strong PSB business functions 也均有 Android 映射；未发现需修改的
+  `cpp/` 硬差异。生产代码 checkpoint `bfb0244cd03712e67dbc4c2009f3c894d2f53f68`
+  对应的 Differential run `30086865716` 四个 job 全部 success；当前本地非回归计数为
+  `psbfile-dll` **577/577**、`motionplayer-dll` **1374/1374**。此前 1376/1376 数字均保留为
+  历史 checkpoint，不应与当前测试集合混读。
 
 ## 后续闭合条件
 
