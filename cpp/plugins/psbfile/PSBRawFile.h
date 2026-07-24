@@ -33,7 +33,7 @@ namespace PSB {
     class PSBRawOwner final {
     public:
         // The owner retain/release operations are expanded at every Android
-        // call site; the PSBFile.dll function range has no standalone entry.
+        // call site; the libkrkr2.so psbfile plugin range has no standalone entry.
         void AddRef() { ++refCount_; }
         void Release() {
             if(--refCount_ == 0) {

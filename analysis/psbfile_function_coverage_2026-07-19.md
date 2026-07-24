@@ -1,4 +1,4 @@
-# PSBFile.dll 函数覆盖 manifest（2026-07-19）
+# Android `libkrkr2.so` 内嵌 psbfile 插件函数覆盖 manifest（2026-07-19）
 
 ## 2026-07-23 真实 Android oracle 状态
 
@@ -404,16 +404,35 @@ fresh IDA 也已把原来合并的 `0x8F7D04..0x8F7DC0` 拆为 complete destruct
 | `0x59AEE4` | missing native method返回 `TJS_E_NOTIMPL` | NCB method base |
 | `0x59AEEC` | duplicate-constructor gate与 member metadata 注册 | typed member registrar |
 | `0x59B14C` | raw factory `FuncCall`：void-shell、factory、NIS/install 边界 | `ncbNativeClassFactory<PSBFile>` |
-| `0x59B268` | root property wrapper deleting destructor | `Property("root", ...)` |
+| `0x59B268` | typed factory wrapper deleting destructor | `ncbNativeClassFactory<PSBFile>` |
 | `0x59B28C` | root property getter入口与 native-instance检查 | `Property("root", ...)` |
 | `0x59B378` | root property只读 setter边界 | `Property(..., setter=0)` |
-| `0x59B460` | root getter invoker deleting destructor | property invoker |
-| `0x59B484` | invoker base返回 0 | property invoker |
+| `0x59B460` | root property wrapper deleting destructor | `Property("root", ...)` |
+| `0x59B484` | root property specialization `GetFlags()` 返回 0 | `Property("root", ...)` |
 | `0x59B48C` | 调 native root getter并 CopyRef 到结果 | `PSBFile::GetRootDispatch` binding |
 | `0x59B570` | `load` method argc/native-instance/结果 wrapper | `Method("load", &PSBFile::Load)` |
 | `0x59B6DC` | load wrapper deleting destructor | method wrapper |
-| `0x59B700` | method wrapper base返回 0 | method wrapper |
+| `0x59B700` | load method specialization `GetFlags()` 返回 0 | method wrapper |
 | `0x59B708` | 首参数 Variant 按值转换链 | `PSBFile::Load(tTJSVariant)` binding |
+
+2026-07-24 的 Android-only vtable 边界复核纠正了这里此前的两项归属错误：factory
+vtable 以 `0x1A0B5C0/0x1A0B5C8` 的 `offset-to-top/typeinfo` 零前缀开始，address point
+为 `0x1A0B5D0`，其中 `FuncCall@0x1A0B5E0 → 0x59B14C`，deleting destructor
+`@0x1A0B6C8 → 0x59B268`。下一张 root-property vtable 的零前缀位于
+`0x1A0B6E0/0x1A0B6E8`，address point 为 `0x1A0B6F0`，其中
+`PropGet@0x1A0B710 → 0x59B28C`、`PropSet@0x1A0B720 → 0x59B378`、deleting
+destructor `@0x1A0B7E8 → 0x59B460`、`GetFlags@0x1A0B7F8 → 0x59B484`。
+因此旧表把 `0x59B268` 错写成 root-property 析构、又把 `0x59B460` 错写成独立 getter
+invoker 析构，现已就地纠正；`0x59B484` 也不再模糊写成“invoker base”。load-method
+vtable 同形地由 `0x1A0B800/0x1A0B808` 零前缀、`0x1A0B810` address point、
+`FuncCall@0x1A0B820 → 0x59B570`、deleting destructor `@0x1A0B908 → 0x59B6DC`
+与 `GetFlags@0x1A0B918 → 0x59B700` 闭合。
+
+同轮把本组及前段 class-info 中仍为 `sub_*` 的 30 个入口按上述 vtable、注册字面量与
+完整调用链补为带 `_guess` 的 IDB 语义名并保存；`_guess` 明确表示这些不是二进制保留的
+原始 C++ 符号。尤其 `0x59AA84/0x59AD84/0x59AEEC` 分别标成
+`RegistBegin/RegistEnd/RegistItem` 语义，`0x59B268/0x59B460` 分别标成 factory/property
+deleting destructor，避免错误的 wrapper 层级继续传播。
 
 尾链逐函数 fresh decompile 未发现本地手写简化：`Factory/Property/Method` 声明通过
 仓库同一 ncbind 模板生成 holder、注册状态、属性/方法 wrapper 和参数生命周期。

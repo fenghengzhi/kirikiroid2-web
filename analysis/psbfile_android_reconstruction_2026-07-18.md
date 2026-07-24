@@ -1,4 +1,4 @@
-# Android `PSBFile.dll` 复原审计（2026-07-18）
+# Android `libkrkr2.so` 内嵌 psbfile 插件复原审计（2026-07-18）
 
 ## 2026-07-23：真实 arm64 Android ADB/RPC/Frida oracle 闭合
 
@@ -415,7 +415,7 @@
 
 ## 2026-07-22：当前复核增量
 
-- 对 `0x59641C..0x59B708` 的 111 个 PSBFile.dll 业务/NCB入口重新枚举异常 helper
+- 对 `0x59641C..0x59B708` 的 111 个 `libkrkr2.so` 内嵌 psbfile 业务/NCB入口重新枚举异常 helper
   continuation，补齐 `assign@0x59673C`、`IsInstanceOf@0x596E24` 与
   `GetDictionaryKeys@0x598E64` 的精确默认值。该轮曾误记 `PSBFile::Load@0x598268`
   已闭合；后续逐指令复核 `0x5983AC..0x5983B0` 发现 throw helper 返回后必须显式 true，
@@ -2160,7 +2160,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   **398/398** 与 Web Debug 最终链接全部通过。motionplayer fixture 实际进入 `tTVPBitmap`
   分配路径；在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
-- 2026-07-19 对 PSBFile.dll 业务/NCB实现 `0x59641C..0x59B708` 重新做区间全枚举；当时
+- 2026-07-19 对 `libkrkr2.so` 内嵌 psbfile 业务/NCB实现 `0x59641C..0x59B708` 重新做区间全枚举；当时
   先得到 108 个 IDA function，2026-07-22 进一步拆出被错误并入 `0x59A4B0/0x59AEEC`
   的 `0x59A8D8/0x59A968/0x59B14C`，得到 **111** 个业务/NCB函数。2026-07-23
   再确认 `0x598FFC` 经 PLT 调到 `0x59B7E8`，加入 1 个本源码触发的 vector 扩容慢路径，
