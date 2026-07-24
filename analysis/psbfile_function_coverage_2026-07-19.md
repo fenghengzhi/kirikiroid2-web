@@ -7,6 +7,10 @@
 `L"PSBFile.dll"` 仅是 `libkrkr2.so` 自身静态初始化器中的 NCB 模块注册字面量，
 不表示存在另一份可作参考的 DLL 实现。
 
+完整 114-function emitted topology 的无重复树状索引、主要运行调用链与对象生命周期树见
+[`psbfile_function_tree_2026-07-25.md`](psbfile_function_tree_2026-07-25.md)。本 manifest
+继续作为地址集合与证据摘要的 canonical 来源。
+
 ## 2026-07-23 真实 Android oracle 状态
 
 Android 12 / API 31 `userdebug` arm64-v8a AVD 上的正式 ADB/RPC/Frida runner 已闭合
