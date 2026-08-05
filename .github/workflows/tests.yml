@@ -10,7 +10,7 @@ env:
 
 jobs:
   tests:
-    runs-on: depot-ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     env:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       EMSDK: ${{ github.workspace }}/.emsdk
