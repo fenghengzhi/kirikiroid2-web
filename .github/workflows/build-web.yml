@@ -2,17 +2,6 @@ name: Build Web
 
 on:
   workflow_dispatch:
-    inputs:
-      cloudflare_pages_deploy:
-        description: Cloudflare Pages deployment (none = don't upload)
-        required: false
-        type: choice
-        default: none
-        options:
-          - none
-          - preview
-          - production
-
   workflow_run:
     workflows: ["Code Format Check"]
     types: ["completed"]
@@ -135,141 +124,10 @@ jobs:
             out/web/release/vcpkg-manifest-install.log
             ${{ env.VCPKG_ROOT }}/buildtrees/**/*.log
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: web-build
-          path: |
-            out/web/release/index.html
-            out/web/release/index.js
-            out/web/release/index.wasm
-            ${{ env.KRKR2_WEB_SOURCE_MAP == 'true' && 'out/web/release/index.wasm.map' || '' }}
-            out/web/release/index.worker.js
-            out/web/release/vlfs.js
-            out/web/release/assets.zip
-            out/web/release/manifest.webmanifest
-            out/web/release/sw.js
-            out/web/release/pwa/
-            out/web/release/baidu_verify_codeva-3Z4bQwqyXI.html
-            out/web/release/robots.txt
-            out/web/release/sitemap.xml
+          path: out/web/release/
 
-      - name: Check Cloudflare credentials
-        run: |
-          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
-            echo "HAS_CLOUDFLARE_TOKEN=true" >> "$GITHUB_ENV"
-          fi
-
-      - name: Resolve Cloudflare Pages environment
-        id: deploy_env
-        run: |
-          # 环境解析规则：
-          #   - workflow_dispatch：用用户选择的环境（none/preview/production）
-          #   - push 到 web 分支：production
-          #   - push 到 dev/* 分支：preview
-          #   - 其它自动触发（workflow_run 等）：默认 preview
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            value="${{ inputs.cloudflare_pages_deploy }}"
-          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" = "web" ]; then
-            value="production"
-          else
-            value="preview"
-          fi
-          echo "value=$value" >> "$GITHUB_OUTPUT"
-          echo "Cloudflare Pages deploy environment resolved to: $value (event=${{ github.event_name }}, ref=${{ github.ref_name }})"
-
-      - name: Prepare Cloudflare Pages upload
-        if: ${{ success() && steps.deploy_env.outputs.value != 'none' && (github.event_name == 'workflow_dispatch' || env.HAS_CLOUDFLARE_TOKEN == 'true') }}
-        run: |
-          rm -rf /tmp/cloudflare-pages
-          mkdir -p /tmp/cloudflare-pages
-          cp out/web/release/index.html /tmp/cloudflare-pages/
-          cp out/web/release/index.js /tmp/cloudflare-pages/
-          cp out/web/release/index.wasm /tmp/cloudflare-pages/
-          if [ "$KRKR2_WEB_SOURCE_MAP" = "true" ]; then
-            test -f out/web/release/index.wasm.map
-            cp out/web/release/index.wasm.map /tmp/cloudflare-pages/
-          fi
-          # VirtualLazyFS: index.data(--preload-file) 已移除，
-          # UI 资源改为 assets.zip + vlfs.js 懒加载
-          cp out/web/release/vlfs.js /tmp/cloudflare-pages/
-          cp out/web/release/assets.zip /tmp/cloudflare-pages/
-          if [ -f out/web/release/index.worker.js ]; then
-            cp out/web/release/index.worker.js /tmp/cloudflare-pages/
-          fi
-          cp out/web/release/manifest.webmanifest /tmp/cloudflare-pages/
-          cp out/web/release/sw.js /tmp/cloudflare-pages/
-          cp -R out/web/release/pwa /tmp/cloudflare-pages/
-          cp out/web/release/baidu_verify_codeva-3Z4bQwqyXI.html /tmp/cloudflare-pages/
-          cp out/web/release/robots.txt /tmp/cloudflare-pages/
-          cp out/web/release/sitemap.xml /tmp/cloudflare-pages/
-          cp _headers /tmp/cloudflare-pages/
-
-      - name: Upload to Cloudflare Pages
-        id: cloudflare_pages
-        if: ${{ success() && steps.deploy_env.outputs.value != 'none' && (github.event_name == 'workflow_dispatch' || env.HAS_CLOUDFLARE_TOKEN == 'true') }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
-          CLOUDFLARE_PAGES_ENVIRONMENT: ${{ steps.deploy_env.outputs.value }}
-          CLOUDFLARE_PAGES_PRODUCTION_BRANCH: ${{ vars.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || secrets.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || 'main' }}
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN secret is required to upload to Cloudflare Pages"
-            exit 1
-          fi
-          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo "::error::CLOUDFLARE_ACCOUNT_ID secret is required to upload to Cloudflare Pages"
-            exit 1
-          fi
-          if [ -z "$CLOUDFLARE_PAGES_PROJECT_NAME" ]; then
-            echo "::error::CLOUDFLARE_PAGES_PROJECT_NAME variable or secret is required to upload to Cloudflare Pages"
-            exit 1
-          fi
-          deploy_branch="$BUILD_BRANCH"
-          if [ "$CLOUDFLARE_PAGES_ENVIRONMENT" = "production" ]; then
-            deploy_branch="$CLOUDFLARE_PAGES_PRODUCTION_BRANCH"
-          fi
-          echo "Uploading $CLOUDFLARE_PAGES_ENVIRONMENT deployment to Cloudflare Pages branch $deploy_branch"
-          set -o pipefail
-          npx wrangler@latest pages deploy /tmp/cloudflare-pages \
-            --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
-            --branch "$deploy_branch" 2>&1 | tee /tmp/wrangler-deploy.log
-
-          # 从 wrangler 输出提取部署 URL：
-          #   - deploy_url: "Take a peek over at https://<hash>.<project>.pages.dev"（每次部署唯一）
-          #   - alias_url:  "Deployment alias URL: https://<branch>.<project>.pages.dev"（分支别名）
-          # 注：本 step 跑在 bash -e + pipefail 下；grep 无匹配会返回 1，
-          # 故命令替换必须 `|| true`，否则 production(main) 部署无 alias URL 行时
-          # 解析失败会让已成功的部署整步报错(exit 1)。URL 为尽力提取,空值已被下方处理。
-          deploy_url="$(grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log | head -n 1 || true)"
-          alias_url="$(grep -ioE 'alias URL:[[:space:]]*https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log \
-            | grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' | head -n 1 || true)"
-
-          # 设为 step output，供后续 step 引用（steps.cloudflare_pages.outputs.*）。
-          echo "deploy_url=$deploy_url" >> "$GITHUB_OUTPUT"
-          echo "alias_url=$alias_url" >> "$GITHUB_OUTPUT"
-
-          # 写入 run Summary 页面，让部署地址直接显示在 CI 结果中。
-          {
-            echo "## Cloudflare Pages 部署"
-            echo ""
-            echo "| 项 | 值 |"
-            echo "| --- | --- |"
-            echo "| 环境 | \`$CLOUDFLARE_PAGES_ENVIRONMENT\` |"
-            echo "| 分支 | \`$deploy_branch\` |"
-            if [ -n "$deploy_url" ]; then
-              echo "| 部署 URL | <$deploy_url> |"
-            fi
-            if [ -n "$alias_url" ]; then
-              echo "| 分支别名 URL | <$alias_url> |"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -z "$deploy_url" ]; then
-            echo "::warning::未能从 wrangler 输出解析到部署 URL（输出格式可能已变化，请检查上方日志）"
-          else
-            echo "::notice title=Cloudflare Pages::部署地址 $deploy_url"
-          fi
