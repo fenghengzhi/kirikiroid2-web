@@ -133,5 +133,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: web-build
-          path: out/web/release/
+          path: |
+            out/web/release/index.html
+            out/web/release/index.js
+            out/web/release/index.wasm
+            ${{ env.KRKR2_WEB_SOURCE_MAP == 'true' && 'out/web/release/index.wasm.map' || '' }}
+            out/web/release/index.worker.js
+            out/web/release/build-config.js
+            out/web/release/vlfs.js
+            out/web/release/assets.zip
+            out/web/release/manifest.webmanifest
+            out/web/release/sw.js
+            out/web/release/css/
+            out/web/release/js/
+            out/web/release/pwa/
+            out/web/release/baidu_verify_codeva-3Z4bQwqyXI.html
+            out/web/release/robots.txt
+            out/web/release/sitemap.xml
 
