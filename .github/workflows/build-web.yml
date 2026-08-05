@@ -27,7 +27,11 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           lfs: true
-          submodules: recursive
+          submodules: false
+
+      - name: Checkout public submodules
+        run: |
+          git submodule update --init --recursive cpp/plugins/layerExImage
 
       - name: Install system dependencies
         run: |
