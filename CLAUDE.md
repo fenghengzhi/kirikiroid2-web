@@ -15,7 +15,8 @@
 - 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
 - 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`
 - 依赖：emsdk 已 source、VCPKG_ROOT 已设置、ninja、cmake 3.31.1+、bison 3.8.2+
-- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.worker.js, vlfs.js, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）
+- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.worker.js, vlfs.js, build-config.js, css/, js/, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）
+- **前端与 wasm 已解耦**：emscripten 只产 index.js/index.wasm（无 `--shell-file`）；index.html/css/js 是 `platforms/web/public/` 下的手写静态文件，构建时整目录复制。**改前端不触发 wasm 重链**，也可直接 `python3 coi-server.py platforms/web/public` 脱离 wasm 预览
 - 环境变量：见 `.claude.local.md`（机器特定的 EMSDK/VCPKG_ROOT 路径）
 
 ### 构建陷阱
@@ -34,7 +35,14 @@
 - `cpp/core/plugin/PluginImpl.cpp` — TVPLoadPlugin（由 Plugins.link 调用）、TVPLoadInternalPlugins（启动时）
 - `cpp/core/base/StorageIntf.cpp` — 自动路径表、TVPAddAutoPath、TVPGetPlacedPath
 - `cpp/core/environ/web/Platform.cpp` — Web 平台启动逻辑
-- `cpp/core/environ/web/VirtualLazyFS.{h,cpp}` + `platforms/web/vlfs.js` — VirtualLazyFS：游戏/UI 文件懒加载（JSPI 挂起读 + pthread 代理 + OPFS spill + 写 overlay），仅 Chromium 137+
+- `cpp/core/environ/web/VirtualLazyFS.{h,cpp}` + `platforms/web/public/vlfs.js` — VirtualLazyFS：游戏/UI 文件懒加载（JSPI 挂起读 + pthread 代理 + OPFS spill + 写 overlay），仅 Chromium 137+
+- `platforms/web/public/` — 静态前端（构建时整目录复制到产物目录，不经链接期烘焙）
+  - `index.html` + `css/app.css` — 页面骨架与样式
+  - `js/engine/` — 引擎引导层：`boot-guards`（单例锁/JSPI 检测/WebGL 精度补丁）、`memory`（wasm Memory 预分配）、`fs-util`、`vlfs-bridge`、`engine.js`
+  - `js/engine/engine.js` — **`window.KrKr2Engine` facade**：前端与 wasm 的唯一接口（`boot` / `loadSource` / `setSaveSpace` / `setHostDir`）。与 C++ 的契约字段 `Module._startupXp3Path`（被 `Platform.cpp` 经 EM_JS 读取）等在此文件头部有说明
+  - `js/loaders/` — 数据源加载器（xp3-url / zip-url / xp3-file / zip-file / folder / fsa-dir），只注册字节进 VLFS，进度经回调上报
+  - `js/ui/` + `js/app.js` — 产品前端（画廊/后台/存档空间/文件选择器）与装配层，整体删除后引擎仍可启动
+- `platforms/web/gen_build_config.cmake` — 链接后生成 `build-config.js`（从 index.js 读取烘焙的 INITIAL_MEMORY，另带 buildVersion/pwa/localZipPicker），取代原先注入 shell.html 的 configure_file 占位符；页面侧默认值兜底见 `public/js/config.js`
 - `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer 单元测试
 
 ## 代码模式

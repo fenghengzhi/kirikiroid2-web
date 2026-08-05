@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Kirikiroid2 Web — Run Kirikiri2 visual novels directly in your browser. Load .xp3 game files or folders, no installation required. Supports save/load, WebGL rendering, and mobile devices.">
+    <meta name="keywords" content="Kirikiroid2, Kirikiri2, KirikiriZ, KrKr2, KrKrZ, visual novel, browser, WebAssembly, xp3, galgame">
+    <link rel="canonical" href="https://krkr2.fenghengzhi.com/">
+    <meta property="og:title" content="Kirikiroid2 Web — Browser-based Kirikiri2 Engine">
+    <meta property="og:description" content="Run Kirikiri2 visual novels directly in your browser. Load .xp3 game files, no installation required.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://krkr2.fenghengzhi.com/">
+    <meta property="og:site_name" content="Kirikiroid2 Web">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Kirikiroid2 Web — Browser-based Kirikiri2 Engine">
+    <meta name="twitter:description" content="Run Kirikiri2 visual novels directly in your browser. Load .xp3 game files, no installation required.">
+    <title>Kirikiroid2 Web — Browser-based Kirikiri2 Visual Novel Engine</title>
+    <meta name="theme-color" content="#1a1a2e">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Kirikiroid2 Web",
+      "alternateName": ["KrKr2 Web", "吉里吉里2 Web"],
+      "url": "https://krkr2.fenghengzhi.com/",
+      "applicationCategory": "GameApplication",
+      "operatingSystem": "Any (WebAssembly)",
+      "browserRequirements": "Requires WebAssembly and WebGL",
+      "description": "Browser port of Kirikiroid2, the Android port of the Kirikiri2 visual novel engine. Run .xp3 game archives directly in your browser via WebAssembly, with persistent saves and no installation required.",
+      "inLanguage": ["en", "zh", "ja"],
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "fenghengzhi",
+        "url": "https://github.com/fenghengzhi"
+      }
+    }
+    </script>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-X4FRTWKHGR"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-X4FRTWKHGR');
+    </script>
+    <!-- PWA: 静态存在于两种构建；是否真正注册 service worker 由 build-config.js
+         的 pwa 标志在运行时决定（js/ui/pwa.js），不再有构建期的 HTML 分支。 -->
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Kirikiroid2 Web">
+    <link rel="apple-touch-icon" href="pwa/icon-192.png">
+    <link rel="stylesheet" href="css/app.css">
+    <!-- 必须在首次绘制和任何 canvas.getContext 之前执行，故同步置于 head。 -->
+    <script src="js/engine/early-boot.js"></script>
+</head>
+<body>
+    <noscript>
+        <style>
+            /* Without JS the picker buttons are dead — show the noscript notice instead. */
+            #file-picker { display: none !important; }
+            html, body { overflow: auto !important; }
+        </style>
+        <div style="padding:40px 20px;text-align:center;color:#e0e0e0;background:#1a1a2e;min-height:100vh;max-width:720px;margin:0 auto;line-height:1.7;">
+            <h1 style="color:#e94560;margin-bottom:16px;">Kirikiroid2 Web</h1>
+            <p style="margin-bottom:12px;">Kirikiroid2 Web is a browser port of <strong>Kirikiroid2</strong> — the Android port of the Kirikiri2 (吉里吉里2) visual novel engine that powers hundreds of Japanese ADV / galgame titles — compiled to WebAssembly via Emscripten.</p>
+            <p style="margin-bottom:12px;">Load .xp3 game archives or game folders directly in your browser. Save data persists locally in IndexedDB; nothing is uploaded.</p>
+            <p style="margin-bottom:12px;">This application requires JavaScript and WebAssembly to run. Please enable JavaScript and reload the page.</p>
+            <p><a href="https://github.com/fenghengzhi/krkr2" style="color:#e94560;">Source code on GitHub</a></p>
+        </div>
+    </noscript>
+
+    <div id="loading" class="hidden" data-nosnippet>
+        <h1>Kirikiroid2 Web</h1>
+        <div id="progress-bar">
+            <div id="progress-fill"></div>
+        </div>
+        <div id="status">Loading...</div>
+    </div>
+
+    <div id="error-overlay" data-nosnippet>
+        <div id="error-box">
+            <h2>Error</h2>
+            <p id="error-message"></p>
+            <button id="error-update-btn">Force Update &amp; Reload</button>
+        </div>
+    </div>
+
+    <div id="container">
+        <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+
+    <div id="save-space-picker" data-nosnippet>
+        <div id="space-box">
+            <h1>Save Spaces</h1>
+            <p class="subtitle">Select or create a save space to persist your game data</p>
+            <div id="space-list"></div>
+            <div id="space-create">
+                <input type="text" id="space-name-input" placeholder="New space name...">
+                <button id="space-create-btn">Create</button>
+            </div>
+            <div id="space-actions">
+                <button id="space-import-btn">Import ZIP</button>
+                <button id="space-skip-btn">Skip (no saving)</button>
+            </div>
+            <div id="space-status"></div>
+        </div>
+    </div>
+    <!-- Top Gallery Header -->
+    <div id="gallery-header" data-nosnippet>
+        <div class="header-title">
+            <h1>Kirikiroid2 Web</h1>
+        </div>
+        <div class="header-actions">
+            <button id="btn-add-game" class="btn-action primary">+ 新增游戏</button>
+            <button id="btn-open-admin" class="btn-action">⚙️ 管理后台</button>
+            <button id="btn-open-local" class="btn-action">📂 打开本地文件</button>
+        </div>
+    </div>
+
+    <!-- Main Game Gallery Container -->
+    <div id="game-gallery-view" data-nosnippet>
+        <div id="game-grid" class="game-grid">
+            <!-- Dynamic game cards rendered here -->
+        </div>
+    </div>
+
+    <!-- Admin Management Modal -->
+    <div id="admin-modal" class="modal-overlay" data-nosnippet>
+        <div class="modal-container">
+            <div class="modal-header">
+                <h2>游戏配置管理后台</h2>
+                <button class="modal-close-btn" onclick="closeAdminModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                    <p style="color:#aaa; font-size:13px;">配置和管理游戏库。所有的更改会自动保存在浏览器本地。</p>
+                    <div style="display:flex; gap:8px;">
+                        <button id="btn-export-json" class="btn-action" style="font-size:12px; padding:6px 12px;">导出配置 (JSON)</button>
+                        <button id="btn-import-json" class="btn-action" style="font-size:12px; padding:6px 12px;">导入配置</button>
+                        <input type="file" id="input-import-json" accept=".json" style="display:none;">
+                    </div>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table class="admin-table">
+                        <thead>
+                            <tr>
+                                <th>封面</th>
+                                <th>游戏名称</th>
+                                <th>资源类型</th>
+                                <th>存档空间 ID</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-game-tbody">
+                            <!-- Dynamic admin rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-action primary" onclick="openGameEditModal()">+ 添加新游戏</button>
+                <button class="btn-action" onclick="closeAdminModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add / Edit Game Modal -->
+    <div id="game-edit-modal" class="modal-overlay" data-nosnippet>
+        <div class="modal-container" style="max-width:540px;">
+            <div class="modal-header">
+                <h2 id="edit-modal-title">添加新游戏</h2>
+                <button class="modal-close-btn" onclick="closeGameEditModal()">&times;</button>
+            </div>
+            <form id="game-form" onsubmit="saveGameForm(event)">
+                <div class="modal-body">
+                    <input type="hidden" id="form-game-id">
+                    <div class="form-group">
+                        <label for="form-game-name">游戏名称 *</label>
+                        <input type="text" id="form-game-name" required placeholder="如：Fate/stay night">
+                    </div>
+                    <div class="form-group">
+                        <label for="form-game-cover">封面图片 URL</label>
+                        <input type="url" id="form-game-cover" placeholder="https://example.com/cover.jpg">
+                        <div class="form-hint">支持 JPG/PNG/WebP 图像直链，留空显示默认标志。</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-game-url">资源文件链接 (Remote URL) *</label>
+                        <input type="url" id="form-game-url" required placeholder="https://example.com/game.zip 或 .xp3">
+                        <div class="form-hint">可填写远端 .zip 压缩包或单文件 .xp3 的 HTTP/HTTPS 直链（必须支持跨域/CORS）。</div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="form-game-entry">主入口 XP3 (可选)</label>
+                            <input type="text" id="form-game-entry" placeholder="如：data.xp3">
+                            <div class="form-hint">包含多个 XP3 时指定启动目标。</div>
+                        </div>
+                        <div class="form-group">
+                            <label for="form-game-space">存档空间 ID (Space ID)</label>
+                            <input type="text" id="form-game-space" placeholder="自动生成独立 ID">
+                            <div class="form-hint">用于隔离不同游戏的 IndexedDB 存档。</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn-action primary">保存设置</button>
+                    <button type="button" class="btn-action" onclick="closeGameEditModal()">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="file-picker" class="modal-overlay">
+        <div class="modal-container" style="max-width:680px;">
+            <div class="modal-header">
+                <h2>打开本地游戏文件</h2>
+                <button class="modal-close-btn" onclick="closeLocalPicker()">&times;</button>
+            </div>
+            <div class="modal-body" style="text-align:center;">
+                <p class="subtitle">在浏览器中选择本地的 .xp3 文件或全包 .zip 游戏运行</p>
+            <div id="drop-zone">
+                <div class="icon">&#128193;</div>
+                <div class="label">Drag & drop .xp3 file here</div>
+                <div class="hint">or use the buttons below</div>
+            </div>
+            <div class="picker-buttons">
+                <button id="pick-dir-api-btn" class="primary" style="display:none">Open Game Directory</button>
+                <div id="picker-divider" class="picker-divider" style="display:none">or load a copy into memory</div>
+                <button id="pick-file-btn">Select .xp3 File</button>
+                <button id="pick-dir-btn">Upload Folder</button>
+                <button id="pick-zip-btn" style="display:none">Select .zip File</button>
+            </div>
+            <div id="picker-status"></div>
+            <div id="picker-progress"><div id="picker-progress-fill"></div></div>
+            <div id="engine-status" data-nosnippet aria-live="polite"></div>
+            <div class="feedback-link"><a href="https://github.com/fenghengzhi/krkr2/issues" target="_blank" rel="noopener">Feedback & Issues</a> &middot; <a href="#" id="force-update-btn" title="Clear cached app files and reload the latest version (save data is kept)">Force Update</a> &middot; <span id="build-version"></span></div>
+            <section class="about-content">
+                <h2>About Kirikiroid2 Web</h2>
+                <p>Kirikiroid2 Web is a browser port of <strong>Kirikiroid2</strong> — the Android port of the Kirikiri2 (吉里吉里2) visual novel engine, which powers hundreds of Japanese ADV / galgame titles. The Kirikiroid2 codebase is compiled to WebAssembly via Emscripten, so games run entirely client-side — your save data and game files never leave your device.</p>
+                <p>This port targets binary compatibility with the original Android <code>libkrkr2.so</code> runtime, reimplementing the same TJS2 scripting engine, XP3 archive loader, and rendering pipeline. The goal is not just functional equivalence but architectural fidelity to the upstream binary.</p>
+
+                <h3>Features</h3>
+                <ul>
+                    <li>Load <code>.xp3</code> game archives via drag &amp; drop, file picker, or folder upload</li>
+                    <li>Extract and run games packaged as <code>.zip</code> archives</li>
+                    <li>Direct directory access on Chromium browsers via the File System Access API</li>
+                    <li>Persistent save data in named save spaces, backed by IndexedDB</li>
+                    <li>Export and import save data as <code>.zip</code> for backup or device transfer</li>
+                    <li>WebGL hardware-accelerated rendering with mobile shader compatibility</li>
+                    <li>Full TJS2 scripting engine — runs original game scripts unmodified</li>
+                </ul>
+
+                <h3>How to use</h3>
+                <ol>
+                    <li>Obtain an <code>.xp3</code> archive or game folder for a Kirikiri2 game you own.</li>
+                    <li>Drag the file onto the drop zone above, or use one of the buttons.</li>
+                    <li>Choose or create a save space when prompted — your saves persist between sessions in the browser.</li>
+                </ol>
+                <p>You can also auto-load a game via URL parameters: <code>?xp3=&lt;url&gt;</code> loads a single archive, and <code>?game=&lt;url&gt;</code> loads a ZIP-packaged game directory.</p>
+
+                <h3>Browser requirements</h3>
+                <p>A modern browser with WebAssembly and WebGL support is required. The site is served with <code>Cross-Origin-Opener-Policy</code> and <code>Cross-Origin-Embedder-Policy</code> headers to enable <code>SharedArrayBuffer</code> and multi-threading. Tested on recent Chrome, Edge, Firefox, and Safari (desktop and mobile).</p>
+
+                <h3>Open source</h3>
+                <p>Kirikiroid2 Web is open source. The full source code, build instructions, and issue tracker are on GitHub: <a href="https://github.com/fenghengzhi/krkr2" target="_blank" rel="noopener">github.com/fenghengzhi/krkr2</a>.</p>
+            </section>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-action" onclick="closeLocalPicker()">关闭</button>
+            </div>
+        </div>
+    </div>
+    <div id="xp3-selector" data-nosnippet>
+        <div id="selector-box">
+            <h2>Select Game Archive</h2>
+            <p class="subtitle">Multiple .xp3 files found. Choose one to start:</p>
+            <div id="xp3-list"></div>
+        </div>
+    </div>
+
+    <input type="file" id="file-input" style="display:none;">
+    <input type="file" id="dir-input" webkitdirectory style="display:none;">
+    <input type="file" id="zip-input" accept=".zip,application/zip,application/x-zip-compressed" style="display:none;">
+    <!-- 存档空间导入。6666aee（画廊功能）误删了本元素但留下了两处 JS 引用，
+         其中 space-ui 的 change 绑定是顶层代码，null.addEventListener 会抛
+         TypeError 并中断整个脚本块 —— 恢复自 929fb95。 -->
+    <input type="file" id="space-import-input" accept=".zip" style="display:none;">
+
+    <!-- JSZip 仅用于存档空间导入/导出；游戏加载已改为 VLFS 懒加载（vlfs.js） -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
+    <script src="vlfs.js?v=opfs-zip-cache-v2"></script>
+
+    <!-- 构建注入的配置。源码树直接开页面时该文件不存在，classic script 的 404
+         只报错不中断解析，随后的 js/config.js 负责填开发默认值（与 sw.js 里
+         `if (CACHE_VERSION.charAt(0) === '@')` 相同的自兜底思路）。 -->
+    <script src="build-config.js"></script>
+    <script src="js/config.js"></script>
+
+    <!-- 引擎层：wasm 引导与平台适配。产品前端整体删掉后这几支仍能独立跑引擎。
+         顺序即依赖顺序：守卫 → 内存 → FS 工具 → 存档库 → VLFS 桥 → facade。 -->
+    <script src="js/engine/boot-guards.js"></script>
+    <script src="js/engine/memory.js"></script>
+    <script src="js/engine/fs-util.js"></script>
+    <script src="js/storage/idb.js"></script>
+    <script src="js/engine/vlfs-bridge.js"></script>
+    <script src="js/engine/engine.js"></script>
+
+    <!-- 数据源加载器：只把字节注册进 VLFS，进度经回调上报，不碰 DOM。 -->
+    <script src="js/loaders/dispatch.js"></script>
+    <script src="js/loaders/remote.js"></script>
+    <script src="js/loaders/local.js"></script>
+
+    <!-- 产品前端：只消费 window.KrKr2Engine，可整体替换。 -->
+    <script src="js/ui/shell-ui.js"></script>
+    <script src="js/ui/space-ui.js"></script>
+    <script src="js/ui/gallery.js"></script>
+    <script src="js/ui/pwa.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

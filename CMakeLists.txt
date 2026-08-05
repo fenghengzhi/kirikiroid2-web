@@ -87,19 +87,21 @@ if(ANDROID)
     target_link_libraries(${PROJECT_NAME} PUBLIC unofficial::breakpad::libbreakpad_client)
 elseif(WEB)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/main.cpp)
-    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
+    # 只产出 index.js / index.wasm：页面本体是手写的静态文件
+    # platforms/web/public/index.html，不再经 --shell-file 在链接期烘焙。
+    # 前端（html/css/js）改动因此只走文件复制，不触发 wasm 重链。
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".js")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/vlfs.js)
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js)
     # WebAssembly.Memory 初始大小。ASan 的影子内存（覆盖整个地址空间的 1/8）+
     # redzone 把静态数据段顶得很高，wasm 模块声明的最小内存随之暴涨（非 ASan ~64MB，
     # ASan 实测需 ~843MB）。该值必须 >= wasm 声明的 min，否则 JS 创建的 Memory 页数
     # 小于导入声明 → LinkError（memory import has N pages < declared initial of M）。
-    # 此变量同时驱动 ① 链接参数 -s INITIAL_MEMORY ② shell.html 预分配的
-    # WebAssembly.Memory（iOS Safari 兼容路径，见 platforms/web/shell.html 经
-    # configure_file @ONLY 注入 @KRKR2_WEB_INITIAL_MEMORY@），两者必须一致。
-    # ASan 取 1GB：> emscripten 在 512MB 下二次上调出的 843MB，使链接器不再上调，
-    # 从而 link flag == wasm min == shell 预分配三者相等。
+    # 本变量驱动链接参数 -s INITIAL_MEMORY；前端侧预分配的 WebAssembly.Memory
+    # （iOS Safari 兼容路径，见 platforms/web/public/js/engine/memory.js）改为读取
+    # 链接后生成的 build-config.js，其值直接取自 index.js 里烘焙的权威 min，
+    # 因此不再需要两处保持一致。
+    # ASan 取 1GB：> emscripten 在 512MB 下二次上调出的 843MB，使链接器不再上调。
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND KRKR2_WEB_DEBUG_ENABLE_ASAN)
         set(KRKR2_WEB_INITIAL_MEMORY 1073741824)  # 1 GiB
     else()
@@ -148,12 +150,11 @@ elseif(WEB)
         $<$<CONFIG:Debug>:-O1>
         -pthread
         -lopenal
-        --shell-file ${CMAKE_CURRENT_BINARY_DIR}/shell.html
     )
     # UI 资源/字体改经 VirtualLazyFS 按需读取（cocos CCFileUtils →
     # krkr2_vlfs_read_all 桥）：打成 store（不压缩）模式 assets.zip，
-    # shell.html 启动时 fetch 为 Blob 注册进 VLFS，条目即 Blob 切片，
-    # 不再像 --preload-file 那样全量驻留 MEMFS。
+    # 页面启动时 fetch 为 Blob 注册进 VLFS（见 public/js/engine/vlfs-bridge.js），
+    # 条目即 Blob 切片，不再像 --preload-file 那样全量驻留 MEMFS。
     file(GLOB_RECURSE KRKR2_UI_ASSET_FILES ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio/*)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
@@ -170,67 +171,75 @@ elseif(WEB)
     # Local ZIP opener is visible by default in Debug, and can be enabled
     # explicitly in Release with ?pickZip=1.
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        set(KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE "true")
+        set(KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE ON)
     else()
-        set(KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE "false")
+        set(KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE OFF)
     endif()
-    # PWA: only enabled for non-Debug builds
+    # Generate build version timestamp for service worker cache busting
+    string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
+    # PWA: only enabled for non-Debug builds。页面侧的 meta/manifest 两种构建都
+    # 静态存在（见 public/index.html），Debug 与 Release 的差别只剩"注册 SW"
+    # 还是"注销既有 SW 并清缓存"，由 build-config.js 的 pwa 标志在运行时选择。
     if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-        file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-head.html KRKR2_PWA_HEAD)
-        file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-sw.html KRKR2_PWA_SCRIPT)
-        # Generate build version timestamp for service worker cache busting
-        string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
+        set(KRKR2_WEB_PWA ON)
         configure_file(
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
             ${CMAKE_CURRENT_BINARY_DIR}/sw.js
             @ONLY
         )
-    else()
-        set(KRKR2_PWA_HEAD "")
-        # Unregister any previously installed service worker and clear caches
-        file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-unregister.html KRKR2_PWA_SCRIPT)
-    endif()
-    # Process shell.html template (injects PWA content for Release, empty for Debug)
-    configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
-        ${CMAKE_CURRENT_BINARY_DIR}/shell.html
-        @ONLY
-    )
-    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_custom_command(
             TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/manifest.webmanifest
                 ${CMAKE_CURRENT_BINARY_DIR}/sw.js
                 $<TARGET_FILE_DIR:${PROJECT_NAME}>
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa
-                $<TARGET_FILE_DIR:${PROJECT_NAME}>/pwa
-            COMMENT "Copy PWA manifest, service worker, and icons"
+            COMMENT "Copy service worker"
         )
+    else()
+        set(KRKR2_WEB_PWA OFF)
     endif()
+    # 静态前端（index.html / css / js / manifest / 图标 / robots 等）整目录复制。
+    # 独立于 ${PROJECT_NAME} 的自定义目标：只改前端时 wasm 不重链，但复制仍会
+    # 发生 —— 这正是本次解耦要的效果。CONFIGURE_DEPENDS 让新增文件无需手动
+    # 重跑 cmake --preset。
+    file(GLOB_RECURSE KRKR2_WEB_FRONTEND_FILES CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/public/*)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/krkr2_web_frontend.stamp
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/public
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/krkr2_web_frontend.stamp
+        DEPENDS ${KRKR2_WEB_FRONTEND_FILES}
+        COMMENT "Copying static frontend (index.html, css/, js/, pwa/) to output"
+        VERBATIM
+    )
+    add_custom_target(krkr2_web_frontend ALL
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/krkr2_web_frontend.stamp)
+    # 复制到 $<TARGET_FILE_DIR> 需要目标目录先存在
+    add_dependencies(krkr2_web_frontend ${PROJECT_NAME})
     add_custom_command(
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/baidu_verify_codeva-3Z4bQwqyXI.html
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/robots.txt
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sitemap.xml
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/vlfs.js
             ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMENT "Copy site verification, robots.txt, sitemap.xml, vlfs.js, assets.zip"
+        COMMENT "Copy assets.zip"
     )
-    # 链接后把 shell.html 预分配的 WebAssembly.Memory initial 同步到 emscripten
-    # 实际烘焙进 index.js 的 INITIAL_MEMORY 默认值。ASan 影子内存把 wasm 声明的 min
-    # 顶到高于链接参数 -s INITIAL_MEMORY（且随代码增长），配置期无法预测；不同步则
-    # shell 提供的 Memory 页数 < 声明 min → LinkError，引擎启动前即 Aborted。
+    # 链接后生成 build-config.js：把 emscripten 实际烘焙进 index.js 的
+    # INITIAL_MEMORY 默认值交给前端预分配 WebAssembly.Memory 使用。ASan 影子内存
+    # 把 wasm 声明的 min 顶到高于链接参数 -s INITIAL_MEMORY（且随代码增长），
+    # 配置期无法预测；不同步则页面提供的 Memory 页数 < 声明 min → LinkError，
+    # 引擎启动前即 Aborted。同时承载 buildVersion / pwa / localZipPicker，
+    # 取代原先注入 shell.html 的 4 个 configure_file 占位符。
     add_custom_command(
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
             -DJS=$<TARGET_FILE_DIR:${PROJECT_NAME}>/index.js
-            -DHTML=$<TARGET_FILE_DIR:${PROJECT_NAME}>/index.html
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sync_prealloc_memory.cmake
-        COMMENT "Sync shell prealloc memory to emscripten-baked wasm min"
+            -DOUT=$<TARGET_FILE_DIR:${PROJECT_NAME}>/build-config.js
+            -DBUILD_VERSION=${KRKR2_BUILD_VERSION}
+            -DPWA=${KRKR2_WEB_PWA}
+            -DLOCAL_ZIP_PICKER=${KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/gen_build_config.cmake
+        COMMENT "Generating build-config.js (prealloc memory, build version, PWA flag)"
         VERBATIM
     )
 elseif(LINUX)

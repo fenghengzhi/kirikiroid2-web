@@ -8,7 +8,9 @@ if (CACHE_VERSION.charAt(0) === '@') CACHE_VERSION = 'dev-20260323';
 var CACHE_NAME = 'krkr2-v' + CACHE_VERSION;
 
 /* Assets to precache during install.
- * These are relative to the SW scope (same directory as sw.js). */
+ * These are relative to the SW scope (same directory as sw.js).
+ * 前端自 shell.html 拆分为静态文件后，css/js 与 build-config.js 也必须在列，
+ * 否则离线时页面能打开但引擎引导脚本 404。新增 js 文件时同步更新这里。 */
 var PRECACHE_ASSETS = [
     './',
     './index.html',
@@ -18,7 +20,25 @@ var PRECACHE_ASSETS = [
     './vlfs.js',
     './manifest.webmanifest',
     './pwa/icon-192.png',
-    './pwa/icon-512.png'
+    './pwa/icon-512.png',
+    './build-config.js',
+    './css/app.css',
+    './js/config.js',
+    './js/app.js',
+    './js/engine/early-boot.js',
+    './js/engine/boot-guards.js',
+    './js/engine/memory.js',
+    './js/engine/fs-util.js',
+    './js/engine/vlfs-bridge.js',
+    './js/engine/engine.js',
+    './js/storage/idb.js',
+    './js/loaders/dispatch.js',
+    './js/loaders/remote.js',
+    './js/loaders/local.js',
+    './js/ui/shell-ui.js',
+    './js/ui/space-ui.js',
+    './js/ui/gallery.js',
+    './js/ui/pwa.js'
 ];
 
 /* External resources to cache on first fetch (e.g. CDN libraries). */
