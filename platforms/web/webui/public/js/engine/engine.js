@@ -40,6 +40,20 @@
         var Module = {
             wasmMemory: window.KrKr2Memory.prealloc || undefined,
 
+            // glue 定位它需要的附属文件时都会走这里（参数是裸文件名）。
+            //
+            // 只重定向 index.wasm：它是普通 fetch/instantiateStreaming，跨域无副作用。
+            // 其余一律回落 scriptDirectory（= glue 自身所在目录，同源）—— 尤其是
+            // pthread 构建下的 index.worker.js，那类脚本跨域会被同源策略挡下，
+            // 正是 js/config.js 里 assetBase 注释警告的那个坑。
+            locateFile: function (path, scriptDirectory) {
+                if (path === 'index.wasm') {
+                    var base = (window.KrKr2Config && window.KrKr2Config.engineBase);
+                    if (base) return base + path;
+                }
+                return scriptDirectory + path;
+            },
+
             preRun: [function () {
                 FS.mkdir('/savedata');
                 window.KrKr2FS.applyRendererPreference(bootOpts.renderer);

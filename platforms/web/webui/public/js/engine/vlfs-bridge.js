@@ -59,10 +59,12 @@
     // （cocos CCFileUtils 经 krkr2_vlfs_read_all 桥访问），不驻留内存。
     var assetsLoaded = (async function () {
         await vlfsReady;
-        // assetBase 而非裸相对路径：播放页在 /play/<id> 下，相对路径会解析成
-        // /play/assets.zip。同一开关也是将来把大资源挪到 R2 的切换点。
-        var assetBase = (window.KrKr2Config && window.KrKr2Config.assetBase) || '/';
-        var resp = await fetch(assetBase + 'assets.zip');
+        // engineBase 而非裸相对路径：播放页在 /play/<id> 下，相对路径会解析成
+        // /play/assets.zip。它与 index.wasm 共用同一个基址，未配置时回落 assetBase
+        // （即同源），配置后二者一起走 R2。见 js/config.js。
+        var engineBase = (window.KrKr2Config &&
+                          (window.KrKr2Config.engineBase || window.KrKr2Config.assetBase)) || '/';
+        var resp = await fetch(engineBase + 'assets.zip');
         if (!resp.ok) throw new Error('assets.zip HTTP ' + resp.status);
         var blob = await resp.blob();
         var r = await VLFS.registerZipBlob(blob, { stripPrefix: '' });

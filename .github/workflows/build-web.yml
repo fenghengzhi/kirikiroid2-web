@@ -158,3 +158,70 @@ jobs:
             out/web/release/build-config.js
             out/web/release/assets.zip
 
+      # ── 两个大文件传 R2 ────────────────────────────────────────────────
+      # index.wasm(21.9MiB) + assets.zip(7.8MiB) 不再随页面部署：前者已占
+      # Workers 静态资源 25MiB 单文件上限的 87.5%，迟早撞墙。改由 R2 提供后
+      # 部署产物从 30MB 降到约 680KB。页面侧用 KRKR2_ENGINE_BASE 指过来
+      # （见 platforms/web/webui/vite.config.js 与 public/js/config.js）。
+      #
+      # index.js 与 build-config.js 刻意不传：glue 跨域会踩 _scriptName 定位
+      # pthread worker 的坑，build-config.js 带着 initialMemory 权威值，
+      # 两者都必须与页面同源。
+      - name: Check R2 credentials
+        if: success()
+        run: |
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && \
+             [ -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "HAS_R2=true" >> $GITHUB_ENV
+          else
+            echo "未配置 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，跳过 R2 上传。"
+            echo "fork 与外部 PR 拿不到 secrets，这里跳过而不是失败。"
+          fi
+
+      - name: Setup Node (for wrangler)
+        if: ${{ env.HAS_R2 == 'true' }}
+        uses: actions/setup-node@v4
+        with:
+          # wrangler 4 低于 22 直接拒绝启动
+          node-version: '22'
+
+      - name: Upload engine to R2
+        if: ${{ env.HAS_R2 == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BUCKET: ${{ vars.R2_ENGINE_BUCKET || 'krkr2-engine' }}
+        run: |
+          set -euo pipefail
+          # 按 commit 分目录：这两个文件名不带内容哈希，同一路径覆盖更新会让
+          # 已缓存的客户端拿到新旧混搭的 glue/wasm。带版本段则换版即换 URL，
+          # 可以安全地 immutable 长缓存。
+          PREFIX="engine/${GITHUB_SHA:0:12}"
+
+          put() {
+            echo "→ $BUCKET/$PREFIX/$1"
+            # --remote 必须给：wrangler 4 的 r2 object 默认走本地模拟存储，
+            # 少了它这一步会"成功"但什么都没上传。
+            npx --yes wrangler@4 r2 object put "$BUCKET/$PREFIX/$1" \
+              --file "out/web/release/$1" \
+              --content-type "$2" \
+              --cache-control "public, max-age=31536000, immutable" \
+              --remote
+          }
+
+          put index.wasm application/wasm
+          put assets.zip application/zip
+
+          {
+            echo "### 引擎已上传 R2"
+            echo ""
+            echo '构建页面时把 `KRKR2_ENGINE_BASE` 设成该前缀对应的公开地址：'
+            echo ""
+            echo '```'
+            echo "KRKR2_ENGINE_BASE=https://<你的R2公开域名>/$PREFIX/ npm run build"
+            echo '```'
+            echo ""
+            echo "R2 侧需要发 \`Access-Control-Allow-Origin\` 与"
+            echo "\`Cross-Origin-Resource-Policy\`，否则 COEP 会挡下请求。"
+          } >> "$GITHUB_STEP_SUMMARY"
+

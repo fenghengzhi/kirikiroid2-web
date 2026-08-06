@@ -81,12 +81,25 @@ Node 版本需 22+（Wrangler 4 的要求）；Cloudflare 构建环境默认已�
 得先把引擎产物放进 `out/web/release`（或 `KRKR2_ENGINE_DIR` 指向的目录），
 详见根 README。
 
+**Cloudflare 的构建环境不编译 C++**，所以这里要解决"引擎从哪来"：
+
+```
+Build command:
+  curl -fsSL "$ENGINE_URL" | tar xz -C /tmp/engine &&
+  KRKR2_ENGINE_DIR=/tmp/engine KRKR2_ENGINE_BASE="$ENGINE_BASE" npm run build
+```
+
+`$ENGINE_BASE` 指向 `build-web.yml` 传上去的 R2 目录（见下面 GitHub Actions
+那节与"`assetBase` 与 `engineBase` 的分工"）。这样 CF 只构建 343 KB 的页面，
+22 MB 的 wasm 既不进仓库也不进部署包。`index.js` 与 `build-config.js` 必须
+同源，仍需由 `KRKR2_ENGINE_DIR` 在构建时提供 —— 它俩合计 336 KB。
+
 ### GitHub Actions
 
 | workflow | 触发 | 干什么 |
 |---|---|---|
 | `build-webui.yml` | 改动 `platforms/web/webui/**` | `npm ci` + `npm run build` + `wrangler deploy --dry-run` |
-| `build-web.yml` | 改动 C++/CMake（已排除本目录） | 编译 wasm 引擎 |
+| `build-web.yml` | 改动 C++/CMake（已排除本目录） | 编译 wasm 引擎，并把 `index.wasm`/`assets.zip` 传 R2 |
 
 两者互不触发：改一行 `.vue` 不会启动 emscripten（十几分钟），
 改 `cpp/` 也不会跑前端构建。`build-webui.yml` 不部署 —— 线上仍由上面的
@@ -142,13 +155,41 @@ public/       引擎层，原样输出不经打包
 `engine.js` 的 `booted` 标志让 `boot()` 幂等，emscripten runtime 进 `main()` 后
 无法在同页销毁重建。所以"退出游戏"必须整页卸载。顺带的好处是画廊页完全不加载引擎。
 
-**`assetBase` 是什么。**
-`index.wasm` 已 21.9 MiB，Workers 静态资源单文件上限 25 MiB。
-把这几个大文件挪到 R2 时，改 `build-config.js` 里的 `assetBase` 一个值即可。
-构建脚本会在文件超过 24 MiB 时报错提醒。
+**`assetBase` 与 `engineBase` 的分工。**
+`index.wasm` 已 21.9 MiB，占 Workers 静态资源 25 MiB 单文件上限的 87.5%。
+把大文件挪到 R2 是迟早的事，所以拆成两个旋钮而不是一个：
 
-> 切到跨域时还需一步：emscripten glue 用 `_scriptName` 定位 pthread worker 脚本，
-> 跨域会被同源策略挡下，得同时设 `Module.mainScriptUrlOrBlob` 指向同源 Blob URL。
+| 旋钮 | 管什么 | 能不能跨域 |
+|---|---|---|
+| `assetBase` | `index.js`（emscripten glue） | **不能**，必须同源 |
+| `engineBase` | `index.wasm`、`assets.zip` | 能，这正是它的用途 |
+
+分开是有技术原因的，不是洁癖：glue 顶部的 `_scriptName` 取自
+`document.currentScript.src`，pthread worker 脚本按它定位，跨域会被同源策略
+挡下（要绕过得设 `Module.mainScriptUrlOrBlob` 指向同源 Blob URL）。而那两个
+大文件跨域毫无副作用 —— `index.wasm` 走 `Module.locateFile` 重定向，
+`assets.zip` 只是一次普通 `fetch`。`engineBase` 不设时回落到 `assetBase`，
+也就是全部同源的现状行为。
+
+启用方式是构建期环境变量，`build-config.js` 里的值由它注入：
+
+```bash
+KRKR2_ENGINE_BASE=https://engine.example.com/v1/ npm run build
+```
+
+设了之后这两个文件**不进 `dist`**，部署产物从 30 MB 降到约 680 KB，
+25 MiB 单文件上限从此不适用。`build-web.yml` 会在引擎构建后自动把它们传到
+R2（按 commit 分目录），需要仓库配 `CLOUDFLARE_API_TOKEN` 与
+`CLOUDFLARE_ACCOUNT_ID`，桶名用仓库变量 `R2_ENGINE_BUCKET` 覆盖
+（默认 `krkr2-engine`）。没配这两个 secret 就跳过，不会让构建失败。
+
+> R2 侧必须发 `Access-Control-Allow-Origin`（`fetch` 需要）和
+> `Cross-Origin-Resource-Policy`（`COEP: require-corp` 需要），
+> 否则请求会被浏览器挡掉。
+
+> 按 commit 分目录不是洁癖：这两个文件名不带内容哈希，同一路径覆盖更新会让
+> 已缓存的客户端拿到新旧混搭的 glue/wasm。换版即换 URL 才能安全地
+> `immutable` 长缓存，SW 那边也是靠这个避免陈旧（见 `scripts/gen-sw.js`）。
 
 **为什么封面要经 `/api/cover/:id` 代理。**
 `COEP: require-corp`（SharedArrayBuffer 的前提）下，第三方图床不发

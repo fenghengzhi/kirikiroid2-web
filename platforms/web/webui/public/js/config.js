@@ -27,17 +27,34 @@
     // 本地 ZIP 选择按钮是否默认可见（Debug 可见，Release 需 ?pickZip=1）
     if (typeof c.localZipPicker !== 'boolean') c.localZipPicker = true;
 
-    // 大资源（index.js / index.wasm / assets.zip）的基地址，必须以 '/' 结尾。
+    // 同源资源的基地址，必须以 '/' 结尾。
     //
-    // 存在的理由有两个：
-    //   1. 播放页 URL 是 /play/<id>，裸相对路径会解析成 /play/assets.zip 而 404；
-    //   2. index.wasm 已 21.9 MiB，逼近 Workers 静态资源 25 MiB 单文件上限。
-    //      届时把这几个文件传到 R2 公开桶，改这一个值即可切换。
+    // 存在的理由：播放页 URL 是 /play/<id>，裸相对路径会解析成 /play/index.js 而 404。
     //
-    // 切到跨域时的待办：emscripten glue 用 _scriptName 定位 pthread worker 脚本，
-    // 跨域会被同源策略挡下，需同时设 Module.mainScriptUrlOrBlob 指向同源 Blob URL。
+    // index.js（emscripten glue）必须走这里、必须同源：glue 顶部的 _scriptName
+    // 取自 document.currentScript.src，pthread worker 脚本按它定位，跨域会被
+    // 同源策略挡下。真要把 glue 也挪走，得同时设 Module.mainScriptUrlOrBlob
+    // 指向同源 Blob URL —— 目前没这个必要，见下面的 engineBase。
     if (typeof c.assetBase !== 'string' || !c.assetBase) c.assetBase = '/';
     if (c.assetBase.charAt(c.assetBase.length - 1) !== '/') c.assetBase += '/';
+
+    // 大二进制（index.wasm 21.9 MiB / assets.zip 7.8 MiB）的基地址。
+    //
+    // 与 assetBase 分开是有技术原因的，不是洁癖：这两个文件跨域没有任何副作用
+    //   - index.wasm 经 Module.locateFile 重定向（见 js/engine/engine.js）
+    //   - assets.zip 是一次普通 fetch（见 js/engine/vlfs-bridge.js）
+    // 而 index.js 跨域就会踩上面 _scriptName 那个坑。所以只挪这两个，glue 留下。
+    //
+    // 动机：index.wasm 已占 Workers 静态资源 25 MiB 单文件上限的 87.5%。指向
+    // R2 公开桶后部署产物从 30 MB 降到约 680 KB，且该上限彻底不适用。
+    //
+    // 跨域时 R2 侧必须发两个头，否则请求会被挡掉：
+    //   Access-Control-Allow-Origin    fetch 需要
+    //   Cross-Origin-Resource-Policy   COEP: require-corp 需要（见 worker/headers.js）
+    //
+    // 不设则回落到 assetBase，即"全部同源"的现状行为。
+    if (typeof c.engineBase !== 'string' || !c.engineBase) c.engineBase = c.assetBase;
+    if (c.engineBase.charAt(c.engineBase.length - 1) !== '/') c.engineBase += '/';
 
     window.KrKr2Config = c;
 })();

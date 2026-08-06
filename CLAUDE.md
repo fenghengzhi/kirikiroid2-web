@@ -32,6 +32,8 @@
 - `tests.yml` / `differential.yml` 同样加了 `paths-ignore`：它们要 emsdk + vcpkg（differential 还要 Android 模拟器 + Frida），纯前端/文档改动不该拉起来
 - **默认分支是 `web` 不是 `main`**（origin 与 upstream 皆然，main 停在 706 个提交之前、且没有 `platforms/web/`）。加 workflow 时 `branches:` 别照抄 `code-format-check.yml` 的 `[ main ]` —— 那样 PR 进 web（唯一的实际合并路径）时整个检查不跑
 - artifact 只上传引擎六项（index.js / index.wasm[.map] / index.worker.js / build-config.js / assets.zip），页面产物是 `build-webui.yml` 的 `webui-dist`。想要能跑的整站：解开 `web-engine`，然后 `KRKR2_ENGINE_DIR=<解开的目录> npm run build`
+- `build-web.yml` 编译后还会把 `index.wasm`/`assets.zip` 传 R2（按 commit 分目录），配了 `CLOUDFLARE_API_TOKEN`+`CLOUDFLARE_ACCOUNT_ID` 才跑，没配就跳过而非失败。页面侧 `KRKR2_ENGINE_BASE=<该目录URL> npm run build` 接上，dist 从 30MB 降到 680KB
+- **`index.js` 与 `build-config.js` 永远不能跨域**：前者是 emscripten glue，`_scriptName` 取自 `document.currentScript.src`、pthread worker 按它定位，跨域被同源策略挡下；后者带 CMake 写入的 `initialMemory` 权威值，拿不到就用兜底 64MiB，ASan 构建直接 LinkError。所以只有 `index.wasm`/`assets.zip` 走 `engineBase`，`index.js` 留在 `assetBase`
 - `index.worker.js` 只在 pthread 构建里出现，当前配置不产它 —— artifact 与 Vite 插件都按"缺了不算错"处理
 
 ### 构建陷阱
@@ -60,7 +62,7 @@
     - `js/engine/engine.js` — **`window.KrKr2Engine` facade**：前端与 wasm 的唯一接口（`boot` / `loadSource` / `setSaveSpace` / `setHostDir`）。与 C++ 的契约字段 `Module._startupXp3Path`（被 `Platform.cpp` 经 EM_JS 读取）等在此文件头部有说明
     - `js/loaders/` — 数据源加载器（json-url / xp3-url / zip-url / xp3-file / zip-file / folder / fsa-dir），只注册字节进 VLFS，进度经回调上报
   - `scripts/gen-sw.js` — 构建后生成 `dist/sw.js`（precache 列表必须现算：Vite 产物带内容哈希，手写列表一上线就全 404）
-- `platforms/web/gen_build_config.cmake` — 链接后生成 `build-config.js`（从 index.js 读取烘焙的 INITIAL_MEMORY，另带 buildVersion/pwa/localZipPicker/assetBase），取代原先注入 shell.html 的 configure_file 占位符；页面侧默认值兜底见 `webui/public/js/config.js`
+- `platforms/web/gen_build_config.cmake` — 链接后生成 `build-config.js`（从 index.js 读取烘焙的 INITIAL_MEMORY，另带 buildVersion/pwa/localZipPicker），取代原先注入 shell.html 的 configure_file 占位符；页面侧默认值兜底见 `webui/public/js/config.js`。**它不写 `assetBase`/`engineBase`** —— 那是部署期信息，引擎构建时不可知，由 Vite 按 `KRKR2_ENGINE_BASE` 追加到 emit 出去的 build-config.js 末尾
 - `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer 单元测试
 
 ## 代码模式

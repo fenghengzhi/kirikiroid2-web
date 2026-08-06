@@ -28,6 +28,21 @@ const PRECACHE_EXCLUDE = [/^sw\.js$/, /^_headers$/, /\.map$/, /^\.vite\//];
 const ASSET_SIZE_LIMIT = 25 * 1024 * 1024;
 const ASSET_SIZE_WARN = 24 * 1024 * 1024;
 
+// 与 vite.config.js 同名的开关。设了它，index.wasm / assets.zip 就不在 dist 里，
+// 而是从这个地址取 —— SW 的"同源才 cache-first"分支便盖不到它们，重复访问
+// 每次都要重下 22MB。这里把该 origin 也纳入运行时缓存。
+//
+// 陈旧性：这两个文件名不带内容哈希，靠 CACHE_VERSION 整体换代来失效。
+// CACHE_VERSION 是 dist 全部内容的哈希，而 build-config.js（带 CMake 写入的
+// buildVersion 时间戳）在 dist 里且每次引擎构建都变 —— 所以"引擎换了新版"
+// 一定会带来新的 CACHE_VERSION，activate 时旧缓存被清掉。
+//
+// 但这条链依赖"引擎更新后页面也重新部署一次"。只传 R2 不重新部署的话，
+// 客户端 SW 版本不变，会继续用旧 wasm。要避免就让 engineBase 带上版本段
+// （如 .../engine/<buildVersion>/），换版即换 URL。
+const ENGINE_BASE = process.env.KRKR2_ENGINE_BASE || '';
+const ENGINE_ORIGIN = ENGINE_BASE ? new URL(ENGINE_BASE).origin : '';
+
 function walk(dir, out = []) {
     for (const name of readdirSync(dir)) {
         const full = join(dir, name);
@@ -85,6 +100,9 @@ const version = hash.digest('hex').slice(0, 12);
 const sw = `/* 自动生成 —— 请勿手改。源码见 scripts/gen-sw.js */
 var CACHE_VERSION = '${version}';
 var CACHE_NAME = 'krkr2-v' + CACHE_VERSION;
+
+/* 引擎大文件所在的 origin（空串 = 全部同源，没启用 KRKR2_ENGINE_BASE） */
+var ENGINE_ORIGIN = ${JSON.stringify(ENGINE_ORIGIN)};
 
 var PRECACHE_ASSETS = ${JSON.stringify(precache, null, 4)};
 
@@ -158,13 +176,22 @@ self.addEventListener('fetch', function (event) {
         return;
     }
 
-    /* 同源静态资源：cache-first（wasm/js/数据每次构建都换名，天然不可变） */
-    if (url.origin === self.location.origin) {
+    /* 同源静态资源，以及（启用 engineBase 时）引擎大文件所在的 origin：
+     * 一律 cache-first。同源产物每次构建都换名天然不可变；引擎那两个文件
+     * 名字固定，靠 CACHE_VERSION 换代失效（见 gen-sw.js 顶部说明）。 */
+    var sameOrigin = url.origin === self.location.origin;
+    var engineOrigin = ENGINE_ORIGIN && url.origin === ENGINE_ORIGIN;
+    if (sameOrigin || engineOrigin) {
         event.respondWith(
             caches.match(request).then(function (cached) {
                 if (cached) return cached;
                 return fetch(request).then(function (response) {
-                    if (response.ok && response.type === 'basic') {
+                    /* basic = 同源；cors = 跨域且对方给了 CORS 头。
+                     * opaque（无 CORS）不缓存：读不到状态码，存进去等于
+                     * 把一个可能是 403 的响应永久钉死。 */
+                    var cacheable = response.ok &&
+                        (response.type === 'basic' || response.type === 'cors');
+                    if (cacheable) {
                         var clone = response.clone();
                         caches.open(CACHE_NAME).then(function (c) { c.put(request, clone); });
                     }
