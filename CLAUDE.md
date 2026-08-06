@@ -25,9 +25,14 @@
 
 ### CI（与上面的解耦一一对应）
 - `build-web.yml`（引擎/wasm）与 `build-webui.yml`（前端/Vite）**互不触发**。前者的 `paths-ignore` 排除了 `platforms/web/webui/**`，后者只在该目录变动时跑
-- `build-web.yml` 的 `workflow_run` 上游是 `Code Format Check`，而 `workflow_run` **不支持 paths 过滤** —— 所以"什么改动会重链 wasm"实际由 `code-format-check.yml` 的 `paths` 决定，改过滤规则要同时改那里，只改 build-web.yml 不生效
+- `build-web.yml` 有两条互相独立的触发路径，改过滤规则要**两边都改**：
+  - 推 `web` / `dev/*`（日常路径）→ 走它自己的 `push` + `paths-ignore`
+  - 推 `main` → `Code Format Check` 跑完经 `workflow_run` 拉起它；而 `workflow_run` **不支持 paths 过滤**，所以这条路上的门在 `code-format-check.yml` 的 `paths`
+  - 结论：只改一处都会漏。`code-format-check.yml` 的 `push.branches` 是 `[ main ]`，它在 `web` 上根本不触发，别误以为它是唯一的门
 - `tests.yml` / `differential.yml` 同样加了 `paths-ignore`：它们要 emsdk + vcpkg（differential 还要 Android 模拟器 + Frida），纯前端/文档改动不该拉起来
+- **默认分支是 `web` 不是 `main`**（origin 与 upstream 皆然，main 停在 706 个提交之前、且没有 `platforms/web/`）。加 workflow 时 `branches:` 别照抄 `code-format-check.yml` 的 `[ main ]` —— 那样 PR 进 web（唯一的实际合并路径）时整个检查不跑
 - artifact 只上传引擎六项（index.js / index.wasm[.map] / index.worker.js / build-config.js / assets.zip），页面产物是 `build-webui.yml` 的 `webui-dist`。想要能跑的整站：解开 `web-engine`，然后 `KRKR2_ENGINE_DIR=<解开的目录> npm run build`
+- `index.worker.js` 只在 pthread 构建里出现，当前配置不产它 —— artifact 与 Vite 插件都按"缺了不算错"处理
 
 ### 构建陷阱
 - 必须导出 EMSDK_PYTHON — vcpkg ffmpeg 构建需要（系统 Python 缺少 `match` 语法）

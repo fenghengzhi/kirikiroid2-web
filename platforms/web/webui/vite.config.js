@@ -33,8 +33,9 @@ export default defineConfig({
     build: {
         outDir: 'dist',
         emptyOutDir: true,
-        // gen-sw.js 要靠它枚举带哈希的产物文件名
-        manifest: true,
+        // 不产 .vite/manifest.json：没人读它。gen-sw.js 是直接遍历 dist 目录
+        // 拿文件名的（readdirSync），不依赖 manifest；开着只会把一份构建产物
+        // 清单一起部署上去。
         rollupOptions: {
             input: {
                 gallery: resolve(__dirname, 'index.html'),
