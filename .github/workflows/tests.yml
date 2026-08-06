@@ -11,6 +11,7 @@ on:
       - 'analysis/**'
       - 'doc/**'
       - '**/*.md'
+      - 'coi-server.py'
 
 env:
   EMSDK_VERSION: "3.1.64"

@@ -23,6 +23,7 @@ on:
       - 'analysis/**'
       - 'doc/**'
       - '**/*.md'
+      - 'coi-server.py'
 
 env:
   EMSDK_VERSION: "4.0.23"

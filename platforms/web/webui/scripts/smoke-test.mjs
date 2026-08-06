@@ -81,9 +81,11 @@ async function visit(path, { wait = 1800, assert } = {}) {
     }
 
     // 预期内的噪音：
-    //   - 本地没有真游戏数据、外链游戏包/图床够不着
+    //   - 测试条目的下载地址/封面指向 example.invalid，取不到是设计如此
+    //     （所以这里只按网络错误类型过滤，不写具体域名 —— 库是空的，
+    //     写死某个图床域名对别人的部署没有意义）
     //   - /api/admin/me 的 401 是设计如此：前端靠它判断未登录
-    const ignorable = /favicon|googletagmanager|gtag|google-analytics|r2\.kisaki|szyh\.kisaki|ciallo|ERR_INTERNET|ERR_NAME|ERR_CONNECTION|ERR_ABORTED|Failed to load resource: net::/i;
+    const ignorable = /favicon|ERR_INTERNET|ERR_NAME|ERR_CONNECTION|ERR_ABORTED|Failed to load resource: net::/i;
     const expected401 = /\/api\/admin\/me/;
 
     const realErrors = errors.filter((e) => !ignorable.test(e) && !/401/.test(e));

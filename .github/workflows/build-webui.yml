@@ -16,8 +16,10 @@ on:
     paths:
       - 'platforms/web/webui/**'
       - '.github/workflows/build-webui.yml'
+  # web 是本仓库的默认分支（origin/upstream 都是），tests.yml 的 PR 也挂在它上面。
+  # 只写 main 的话，PR 进 web 时这个检查会整个不跑 —— 那才是主要的合并路径。
   pull_request:
-    branches: [ main ]
+    branches: [ main, web ]
     paths:
       - 'platforms/web/webui/**'
       - '.github/workflows/build-webui.yml'
