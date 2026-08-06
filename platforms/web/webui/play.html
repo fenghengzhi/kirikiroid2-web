@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <!-- user-scalable=no + viewport-fit=cover：游戏画面不该被双指缩放，
+         全屏时也要能铺到刘海区域 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="robots" content="noindex">
+    <title>游戏库</title>
+    <meta name="theme-color" content="#000000">
+
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="icon" href="/pwa/icon-192.png" type="image/png">
+    <link rel="apple-touch-icon" href="/pwa/icon-192.png">
+
+    <!-- 必须在首次绘制和任何 canvas.getContext 之前执行，故同步置于 head。 -->
+    <script src="/js/engine/early-boot.js"></script>
+</head>
+<body>
+    <div id="app" v-cloak></div>
+
+    <!-- ── 引擎层：classic script，顺序即依赖顺序 ──────────────────────
+         全部用绝对路径：本页 URL 是 /play/<id>，相对路径会解析到 /play/ 下而 404。
+         这几支脚本与产品前端解耦（见 js/engine/engine.js 的设计说明），
+         Vue 侧只通过 window.KrKr2Engine 消费。 -->
+    <script src="/js/vendor/jszip.min.js"></script>
+    <script src="/vlfs.js?v=opfs-zip-cache-v2"></script>
+
+    <!-- 构建注入的配置；源码树直接开页面时 build-config.js 404，
+         classic script 的 404 只报错不中断解析，随后的 config.js 填开发默认值。 -->
+    <script src="/build-config.js"></script>
+    <script src="/js/config.js"></script>
+
+    <!-- 守卫 → 内存 → FS 工具 → 存档库 → VLFS 桥 → facade -->
+    <script src="/js/engine/boot-guards.js"></script>
+    <script src="/js/engine/memory.js"></script>
+    <script src="/js/engine/fs-util.js"></script>
+    <script src="/js/storage/idb.js"></script>
+    <script src="/js/engine/vlfs-bridge.js"></script>
+    <script src="/js/engine/engine.js"></script>
+
+    <!-- 数据源加载器：只把字节注册进 VLFS，不碰 DOM -->
+    <script src="/js/loaders/dispatch.js"></script>
+    <script src="/js/loaders/remote.js"></script>
+    <script src="/js/loaders/local.js"></script>
+
+    <!-- 产品前端 -->
+    <script type="module" src="/src/player/main.js"></script>
+    <script type="module" src="/src/shared/pwa.js"></script>
+</body>
+</html>

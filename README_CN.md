@@ -45,12 +45,26 @@ cmake --build out/web/release
 
 ```
 out/web/release/
-  index.html
   index.js
   index.wasm
-  index.data
   index.worker.js
+  build-config.js
+  assets.zip
 ```
+
+这里**只有引擎，没有页面**。Web 前端是 `platforms/web/webui/` 下独立的
+Vue 3 + Vite 工程，单独构建：
+
+```bash
+cd platforms/web/webui
+npm install
+npm run build          # -> platforms/web/webui/dist
+```
+
+Vite 会从 `out/web/release` 取上面那几个引擎文件（可用 `KRKR2_ENGINE_DIR`
+覆盖路径），连同页面、PWA 资源和生成的 `sw.js` 一起输出到 `dist`。
+两套构建互相独立，**改前端不会重链 wasm**，也完全不需要装 emsdk。
+前端与其 Cloudflare Worker 后端的说明见 `platforms/web/webui/README.md`。
 
 ---
 
@@ -58,17 +72,18 @@ out/web/release/
 
 Web 版本需要[跨域隔离](https://web.dev/cross-origin-isolation-guide/)响应头（`COOP` / `COEP`）以支持 `SharedArrayBuffer`。普通 HTTP 服务器无法正常运行。
 
-使用项目自带的 `coi-server.py`：
+用项目自带的 `coi-server.py` 托管 Vite 产物（`platforms/web/webui/dist`）：
 
 ```bash
-python3 coi-server.py out/web/release [http端口] [https端口] [选项]
+python3 coi-server.py platforms/web/webui/dist [http端口] [https端口] [选项]
 ```
 
 服务器同时启动：
 - **HTTP** 端口 8080（默认）— 用于 `localhost` 本地调试
 - **HTTPS** 端口 8443（默认）— 用于局域网内其他设备访问
 
-然后在浏览器中打开 `http://localhost:8080/index.html`。
+然后在浏览器中打开 `http://localhost:8080/`（游戏库首页）。
+播放页是 `/play.html`；下面的 `--xp3` / `--zip` 会直接打印可用的完整 URL。
 
 ### 直接指定游戏文件
 
@@ -77,7 +92,7 @@ python3 coi-server.py out/web/release [http端口] [https端口] [选项]
 通过 `--xp3` 参数让服务器托管本地 `.xp3` 文件：
 
 ```bash
-python3 coi-server.py out/web/release --xp3 /path/to/game/data.xp3
+python3 coi-server.py platforms/web/webui/dist --xp3 /path/to/game/data.xp3
 ```
 
 服务器会将该文件映射到 `/data.xp3` 路径，并输出包含 `?xp3=` 参数的完整 URL。打开该 URL 后，网页会自动下载并启动游戏，无需手动选择文件。
@@ -87,13 +102,13 @@ python3 coi-server.py out/web/release --xp3 /path/to/game/data.xp3
 通过 `--zip` 参数托管包含游戏文件的 `.zip` 压缩包。网页会在浏览器中解压并加载游戏：
 
 ```bash
-python3 coi-server.py out/web/release --zip /path/to/game.zip
+python3 coi-server.py platforms/web/webui/dist --zip /path/to/game.zip
 ```
 
 如果压缩包中包含多个 `.xp3` 文件，会弹出选择对话框。使用 `--entry` 自动选择其中一个：
 
 ```bash
-python3 coi-server.py out/web/release --zip /path/to/game.zip --entry data.xp3
+python3 coi-server.py platforms/web/webui/dist --zip /path/to/game.zip --entry data.xp3
 ```
 
 #### URL 参数

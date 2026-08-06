@@ -1,0 +1,132 @@
+@import './tokens.css';
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg-0);
+    color: var(--fg-0);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* 表格/计数里的数字等宽对齐 */
+    font-feature-settings: 'tnum' 1;
+}
+
+body { min-height: 100vh; }
+
+/* Vue 挂载前隐藏模板，避免 {{ }} 闪现 */
+[v-cloak] { display: none !important; }
+
+a { color: inherit; text-decoration: none; }
+
+button, input, textarea, select {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+}
+
+button { cursor: pointer; border: none; background: none; padding: 0; }
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: var(--bg-3);
+    border-radius: 5px;
+    border: 2px solid var(--bg-0);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-2); }
+
+/* --- 通用控件 ---------------------------------------------------- */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+    color: var(--fg-0);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background var(--dur) var(--ease),
+                border-color var(--dur) var(--ease);
+}
+
+.btn:hover { background: var(--bg-3); border-color: var(--line-strong); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary { background: var(--fg-0); color: var(--bg-0); border-color: transparent; }
+.btn-primary:hover { background: var(--accent); border-color: transparent; }
+
+.btn-ghost { background: transparent; }
+.btn-ghost:hover { background: var(--bg-2); }
+
+.btn-danger { color: var(--danger); border-color: var(--danger-dim); }
+.btn-danger:hover { background: var(--danger-dim); border-color: var(--danger); }
+
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+
+.field label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-1);
+}
+
+.input {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+    font-size: 14px;
+    transition: border-color var(--dur) var(--ease);
+}
+
+.input::placeholder { color: var(--fg-2); }
+.input:focus { outline: none; border-color: var(--line-strong); }
+
+textarea.input { resize: vertical; min-height: 76px; line-height: 1.6; }
+
+.hint { font-size: 11px; color: var(--fg-2); line-height: 1.5; }
+
+.tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--bg-3);
+    border: 1px solid var(--line);
+    font-size: 11px;
+    color: var(--fg-1);
+    white-space: nowrap;
+}
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--line-strong);
+    border-top-color: var(--fg-0);
+    border-radius: 50%;
+    animation: spin 700ms linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 伪全屏：iOS Safari 不支持元素全屏，只能锁住滚动并铺满视口。
+   浏览器地址栏无法隐藏，这是平台限制，不是实现缺陷。 */
+body.faux-fullscreen {
+    overflow: hidden;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+}

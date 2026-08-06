@@ -143,17 +143,21 @@ elif zip_real_path:
 else:
     url_param = ''
 
+# 播放页是 play.html（MPA 的三个入口之一，见 platforms/web/webui）。
+# index.html 是游戏库列表，不加载引擎，带 ?xp3= 打开它什么都不会发生。
+entry_page = '/play.html' if url_param else '/index.html'
+
 # ThreadingHTTPServer 必需：WebKit/Safari 会 preconnect（先开 TCP 不发请求），
 # 单线程 HTTPServer 会被空连接阻塞，所有后续资源请求排队导致页面永远加载不完
 http_server = http.server.ThreadingHTTPServer(('0.0.0.0', args.http_port), COIHandler)
-print(f"  HTTP  -> http://localhost:{args.http_port}/index.html{url_param}  (localhost debug)")
+print(f"  HTTP  -> http://localhost:{args.http_port}{entry_page}{url_param}  (localhost debug)")
 
 if os.path.exists(certfile) and os.path.exists(keyfile):
     https_server = http.server.ThreadingHTTPServer(('0.0.0.0', args.https_port), COIHandler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile, keyfile)
     https_server.socket = ctx.wrap_socket(https_server.socket, server_side=True)
-    print(f"  HTTPS -> https://<your-ip>:{args.https_port}/index.html{url_param}  (LAN access)")
+    print(f"  HTTPS -> https://<your-ip>:{args.https_port}{entry_page}{url_param}  (LAN access)")
     threading.Thread(target=https_server.serve_forever, daemon=True).start()
 else:
     print(f"  HTTPS not enabled (no server.crt / server.key found)")

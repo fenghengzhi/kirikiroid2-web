@@ -15,9 +15,19 @@
 - 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
 - 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`
 - 依赖：emsdk 已 source、VCPKG_ROOT 已设置、ninja、cmake 3.31.1+、bison 3.8.2+
-- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.worker.js, vlfs.js, build-config.js, css/, js/, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）
-- **前端与 wasm 已解耦**：emscripten 只产 index.js/index.wasm（无 `--shell-file`）；index.html/css/js 是 `platforms/web/public/` 下的手写静态文件，构建时整目录复制。**改前端不触发 wasm 重链**，也可直接 `python3 coi-server.py platforms/web/public` 脱离 wasm 预览
+- 输出：`out/web/{debug,release}/` → index.js, index.wasm, index.worker.js, build-config.js, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）。**这里只有引擎，没有页面**
+- **前端与 wasm 完全解耦**，是两套独立构建：
+  - CMake/emscripten → 引擎（无 `--shell-file`，不烘焙 HTML）
+  - `platforms/web/webui`（Vue 3 + Vite）→ 页面，`npm run build` 产出 `webui/dist`，其中的引擎文件由 Vite 插件从 `out/web/release` 取（可用 `KRKR2_ENGINE_DIR` 覆盖）
+- **改前端不需要装 emsdk、也不触发 wasm 重链**：`cd platforms/web/webui && npm run dev`。反之改 cpp/ 后重跑 `npm run build` 即可拿到新 wasm
+- 引擎调试（单个 xp3，不经游戏库/D1）：先 `npm run build`，再 `python3 coi-server.py platforms/web/webui/dist --xp3 /path/to/data.xp3`，打开它打印的 `/play.html?xp3=...`
 - 环境变量：见 `.claude.local.md`（机器特定的 EMSDK/VCPKG_ROOT 路径）
+
+### CI（与上面的解耦一一对应）
+- `build-web.yml`（引擎/wasm）与 `build-webui.yml`（前端/Vite）**互不触发**。前者的 `paths-ignore` 排除了 `platforms/web/webui/**`，后者只在该目录变动时跑
+- `build-web.yml` 的 `workflow_run` 上游是 `Code Format Check`，而 `workflow_run` **不支持 paths 过滤** —— 所以"什么改动会重链 wasm"实际由 `code-format-check.yml` 的 `paths` 决定，改过滤规则要同时改那里，只改 build-web.yml 不生效
+- `tests.yml` / `differential.yml` 同样加了 `paths-ignore`：它们要 emsdk + vcpkg（differential 还要 Android 模拟器 + Frida），纯前端/文档改动不该拉起来
+- artifact 只上传引擎六项（index.js / index.wasm[.map] / index.worker.js / build-config.js / assets.zip），页面产物是 `build-webui.yml` 的 `webui-dist`。想要能跑的整站：解开 `web-engine`，然后 `KRKR2_ENGINE_DIR=<解开的目录> npm run build`
 
 ### 构建陷阱
 - 必须导出 EMSDK_PYTHON — vcpkg ffmpeg 构建需要（系统 Python 缺少 `match` 语法）
@@ -35,14 +45,17 @@
 - `cpp/core/plugin/PluginImpl.cpp` — TVPLoadPlugin（由 Plugins.link 调用）、TVPLoadInternalPlugins（启动时）
 - `cpp/core/base/StorageIntf.cpp` — 自动路径表、TVPAddAutoPath、TVPGetPlacedPath
 - `cpp/core/environ/web/Platform.cpp` — Web 平台启动逻辑
-- `cpp/core/environ/web/VirtualLazyFS.{h,cpp}` + `platforms/web/public/vlfs.js` — VirtualLazyFS：游戏/UI 文件懒加载（JSPI 挂起读 + pthread 代理 + OPFS spill + 写 overlay），仅 Chromium 137+
-- `platforms/web/public/` — 静态前端（构建时整目录复制到产物目录，不经链接期烘焙）
-  - `index.html` + `css/app.css` — 页面骨架与样式
-  - `js/engine/` — 引擎引导层：`boot-guards`（单例锁/JSPI 检测/WebGL 精度补丁）、`memory`（wasm Memory 预分配）、`fs-util`、`vlfs-bridge`、`engine.js`
-  - `js/engine/engine.js` — **`window.KrKr2Engine` facade**：前端与 wasm 的唯一接口（`boot` / `loadSource` / `setSaveSpace` / `setHostDir`）。与 C++ 的契约字段 `Module._startupXp3Path`（被 `Platform.cpp` 经 EM_JS 读取）等在此文件头部有说明
-  - `js/loaders/` — 数据源加载器（xp3-url / zip-url / xp3-file / zip-file / folder / fsa-dir），只注册字节进 VLFS，进度经回调上报
-  - `js/ui/` + `js/app.js` — 产品前端（画廊/后台/存档空间/文件选择器）与装配层，整体删除后引擎仍可启动
-- `platforms/web/gen_build_config.cmake` — 链接后生成 `build-config.js`（从 index.js 读取烘焙的 INITIAL_MEMORY，另带 buildVersion/pwa/localZipPicker），取代原先注入 shell.html 的 configure_file 占位符；页面侧默认值兜底见 `public/js/config.js`
+- `cpp/core/environ/web/VirtualLazyFS.{h,cpp}` + `platforms/web/webui/public/vlfs.js` — VirtualLazyFS：游戏/UI 文件懒加载（JSPI 挂起读 + pthread 代理 + OPFS spill + 写 overlay），仅 Chromium 137+
+- `platforms/web/webui/` — Web 前端，Vue 3 + Vite + Cloudflare Worker，独立于 CMake 构建（详见 `webui/README.md`）
+  - `index.html` / `play.html` / `admin.html` — 三个 MPA 入口。**不是审美选择**：引擎是硬单例（Web Lock + `booted` 标志），wasm runtime 进 `main()` 后无法同页销毁重建，"退出游戏"必须整页卸载
+  - `src/gallery|player|admin|shared|styles/` — Vue 侧。播放页支持 `?xp3=`/`?game=`/`?entry=`（引擎调试入口，绕过 D1 游戏库）
+  - `worker/` — Cloudflare Worker：路由 + 安全头（COOP/COEP）、PBKDF2 登录、D1 游戏库读写、封面代理
+  - `public/` — **引擎层，原样输出不经打包**。这一层与产品前端解耦，整体替换 Vue 部分也不影响它：
+    - `js/engine/` — 引擎引导层：`boot-guards`（单例锁/JSPI 检测/WebGL 精度补丁）、`memory`（wasm Memory 预分配）、`fs-util`、`vlfs-bridge`、`engine.js`
+    - `js/engine/engine.js` — **`window.KrKr2Engine` facade**：前端与 wasm 的唯一接口（`boot` / `loadSource` / `setSaveSpace` / `setHostDir`）。与 C++ 的契约字段 `Module._startupXp3Path`（被 `Platform.cpp` 经 EM_JS 读取）等在此文件头部有说明
+    - `js/loaders/` — 数据源加载器（json-url / xp3-url / zip-url / xp3-file / zip-file / folder / fsa-dir），只注册字节进 VLFS，进度经回调上报
+  - `scripts/gen-sw.js` — 构建后生成 `dist/sw.js`（precache 列表必须现算：Vite 产物带内容哈希，手写列表一上线就全 404）
+- `platforms/web/gen_build_config.cmake` — 链接后生成 `build-config.js`（从 index.js 读取烘焙的 INITIAL_MEMORY，另带 buildVersion/pwa/localZipPicker/assetBase），取代原先注入 shell.html 的 configure_file 占位符；页面侧默认值兜底见 `webui/public/js/config.js`
 - `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer 单元测试
 
 ## 代码模式

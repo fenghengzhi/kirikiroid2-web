@@ -87,9 +87,9 @@ if(ANDROID)
     target_link_libraries(${PROJECT_NAME} PUBLIC unofficial::breakpad::libbreakpad_client)
 elseif(WEB)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/main.cpp)
-    # 只产出 index.js / index.wasm：页面本体是手写的静态文件
-    # platforms/web/public/index.html，不再经 --shell-file 在链接期烘焙。
-    # 前端（html/css/js）改动因此只走文件复制，不触发 wasm 重链。
+    # 只产出 index.js / index.wasm：页面本体是 platforms/web/webui 下的
+    # Vue 3 应用，由 Vite 独立构建，不经 --shell-file 在链接期烘焙。
+    # 前端改动因此完全不触发 wasm 重链。
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".js")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js)
@@ -98,7 +98,7 @@ elseif(WEB)
     # ASan 实测需 ~843MB）。该值必须 >= wasm 声明的 min，否则 JS 创建的 Memory 页数
     # 小于导入声明 → LinkError（memory import has N pages < declared initial of M）。
     # 本变量驱动链接参数 -s INITIAL_MEMORY；前端侧预分配的 WebAssembly.Memory
-    # （iOS Safari 兼容路径，见 platforms/web/public/js/engine/memory.js）改为读取
+    # （iOS Safari 兼容路径，见 platforms/web/webui/public/js/engine/memory.js）改为读取
     # 链接后生成的 build-config.js，其值直接取自 index.js 里烘焙的权威 min，
     # 因此不再需要两处保持一致。
     # ASan 取 1GB：> emscripten 在 512MB 下二次上调出的 843MB，使链接器不再上调。
@@ -153,7 +153,7 @@ elseif(WEB)
     )
     # UI 资源/字体改经 VirtualLazyFS 按需读取（cocos CCFileUtils →
     # krkr2_vlfs_read_all 桥）：打成 store（不压缩）模式 assets.zip，
-    # 页面启动时 fetch 为 Blob 注册进 VLFS（见 public/js/engine/vlfs-bridge.js），
+    # 页面启动时 fetch 为 Blob 注册进 VLFS（见 webui/public/js/engine/vlfs-bridge.js），
     # 条目即 Blob 切片，不再像 --preload-file 那样全量驻留 MEMFS。
     file(GLOB_RECURSE KRKR2_UI_ASSET_FILES ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio/*)
     add_custom_command(
@@ -177,46 +177,23 @@ elseif(WEB)
     endif()
     # Generate build version timestamp for service worker cache busting
     string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
-    # PWA: only enabled for non-Debug builds。页面侧的 meta/manifest 两种构建都
-    # 静态存在（见 public/index.html），Debug 与 Release 的差别只剩"注册 SW"
-    # 还是"注销既有 SW 并清缓存"，由 build-config.js 的 pwa 标志在运行时选择。
+    # PWA: only enabled for non-Debug builds。Debug 与 Release 的差别只有"注册 SW"
+    # 还是"注销既有 SW 并清缓存"，由 build-config.js 的 pwa 标志在运行时选择
+    # （见 platforms/web/webui/src/shared/pwa.js）。
+    # sw.js 本身不在这里生成 —— 它要枚举 Vite 带内容哈希的产物文件名，
+    # 只能构建后由 platforms/web/webui/scripts/gen-sw.js 生成。
     if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(KRKR2_WEB_PWA ON)
-        configure_file(
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
-            ${CMAKE_CURRENT_BINARY_DIR}/sw.js
-            @ONLY
-        )
-        add_custom_command(
-            TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${CMAKE_CURRENT_BINARY_DIR}/sw.js
-                $<TARGET_FILE_DIR:${PROJECT_NAME}>
-            COMMENT "Copy service worker"
-        )
     else()
         set(KRKR2_WEB_PWA OFF)
     endif()
-    # 静态前端（index.html / css / js / manifest / 图标 / robots 等）整目录复制。
-    # 独立于 ${PROJECT_NAME} 的自定义目标：只改前端时 wasm 不重链，但复制仍会
-    # 发生 —— 这正是本次解耦要的效果。CONFIGURE_DEPENDS 让新增文件无需手动
-    # 重跑 cmake --preset。
-    file(GLOB_RECURSE KRKR2_WEB_FRONTEND_FILES CONFIGURE_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/public/*)
-    add_custom_command(
-        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/krkr2_web_frontend.stamp
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/public
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/krkr2_web_frontend.stamp
-        DEPENDS ${KRKR2_WEB_FRONTEND_FILES}
-        COMMENT "Copying static frontend (index.html, css/, js/, pwa/) to output"
-        VERBATIM
-    )
-    add_custom_target(krkr2_web_frontend ALL
-        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/krkr2_web_frontend.stamp)
-    # 复制到 $<TARGET_FILE_DIR> 需要目标目录先存在
-    add_dependencies(krkr2_web_frontend ${PROJECT_NAME})
+    # 本目标只产引擎：index.js / index.wasm / index.worker.js / assets.zip /
+    # build-config.js。页面（HTML/CSS/JS/PWA 资源）由 platforms/web/webui 的
+    # Vite 构建负责，它反过来从这里的输出目录取上述文件
+    # （见 webui/vite.config.js 的 KRKR2_ENGINE_DIR）。
+    #
+    # 这样分工的意义：改前端完全不碰 emscripten，一次 wasm 链接十几分钟的成本
+    # 只在 cpp/ 真的改了时才付。
     add_custom_command(
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

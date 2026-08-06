@@ -1,4 +1,4 @@
-# 生成 platforms/web/public 之外的构建注入配置 build-config.js。
+# 生成构建期注入的配置 build-config.js（前端静态文件之外的那一份）。
 #
 # 取代原 sync_prealloc_memory.cmake：它把权威的 INITIAL_MEMORY 正则改写回
 # emscripten 生成的 index.html，因而前端与链接产物耦合在同一个文件里。现在
@@ -6,7 +6,7 @@
 # 一个生成文件中，页面用 js/config.js 兜底默认值，源码树直开也能跑。
 #
 # 背景（INITIAL_MEMORY）：
-# platforms/web/public/js/engine/memory.js 为兼容 iOS Safari（JSC 按 maximum
+# platforms/web/webui/public/js/engine/memory.js 为兼容 iOS Safari（JSC 按 maximum
 # 实预留地址空间）预创建 WebAssembly.Memory 交给 glue（initMemory 第一分支
 # Module.wasmMemory）。该 Memory 的 initial 必须 >= wasm 模块声明的 min，否则
 # 导入校验失败：
@@ -51,7 +51,7 @@ endif()
 
 file(WRITE "${OUT}"
 "// 由 CMake 在链接后生成（platforms/web/gen_build_config.cmake）。请勿手改。\n\
-// 默认值与字段说明见 platforms/web/public/js/config.js。\n\
+// 默认值与字段说明见 platforms/web/webui/public/js/config.js。\n\
 window.KRKR2_BUILD_CONFIG = {\n\
     initialMemory: ${_initial_memory},\n\
     buildVersion: '${BUILD_VERSION}',\n\
