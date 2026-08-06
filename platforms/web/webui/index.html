@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="在浏览器里直接玩 Kirikiri2（吉里吉里2）引擎的视觉小说，无需安装。支持存档、全屏，手机和电脑都能跑。">
+    <meta name="keywords" content="视觉小说, galgame, 吉里吉里, Kirikiri2, xp3, 浏览器, 在线">
+    <meta property="og:title" content="游戏库">
+    <meta property="og:description" content="在浏览器里直接玩视觉小说，无需安装。">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="游戏库">
+    <meta name="twitter:card" content="summary">
+    <title>游戏库</title>
+    <meta name="theme-color" content="#0a0a0b">
+
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="游戏库">
+    <link rel="icon" href="/pwa/icon-192.png" type="image/png">
+    <link rel="apple-touch-icon" href="/pwa/icon-192.png">
+
+    <!-- 引擎不在本页加载（画廊页不需要 wasm）。低优先级预热，
+         让用户点进游戏时 22MB 的 wasm 已经在 HTTP 缓存里。 -->
+    <link rel="prefetch" href="/index.wasm" as="fetch" crossorigin>
+    <link rel="prefetch" href="/index.js" as="script">
+</head>
+<body>
+    <noscript>
+        <div style="padding:40px 20px;text-align:center;color:#fafafa;background:#0a0a0b;min-height:100vh;max-width:720px;margin:0 auto;line-height:1.7;font-family:system-ui,sans-serif;">
+            <h1 style="margin-bottom:16px;">游戏库</h1>
+            <p style="margin-bottom:12px;">本站需要 JavaScript 和 WebAssembly 才能运行。请在浏览器中启用 JavaScript 后重新加载页面。</p>
+        </div>
+    </noscript>
+
+    <div id="app" v-cloak></div>
+
+    <footer class="site-footer">
+        <details>
+            <summary>关于本站</summary>
+            <div class="about">
+                <p>在浏览器里直接运行 Kirikiri2（吉里吉里2）引擎的视觉小说，不需要安装任何东西。引擎经 WebAssembly 编译，游戏完全在你的设备上运行——存档和游戏文件都不会上传。</p>
+
+                <h3>用法</h3>
+                <ul>
+                    <li>从游戏库点开任意一作，直接开始</li>
+                    <li>也可以「打开本地文件」，读取自己的 <code>.xp3</code> 档案、<code>.zip</code> 整包或游戏文件夹</li>
+                    <li>存档按游戏自动分开保存，可导出 <code>.zip</code> 备份或换设备时导入</li>
+                </ul>
+
+                <h3>游戏中</h3>
+                <ul>
+                    <li>画面上没有任何常驻元素。电脑上把鼠标移到屏幕最顶端唤出控制栏</li>
+                    <li>手机上从顶边下滑唤出控制栏；开局那几秒顶部中间会有个小箭头，淡出后原位置仍然可以点</li>
+                    <li>控制栏里可以退出游戏、管理存档、切换全屏；<kbd>F</kbd> 键也能切全屏</li>
+                </ul>
+
+                <h3>浏览器要求</h3>
+                <p>需要支持 WebAssembly 与 WebGL 的现代浏览器。推荐用最新版 Chrome / Edge；Safari 需要 27（iOS 27）及以上。手机和平板都能跑。</p>
+            </div>
+        </details>
+
+        <p class="footer-links">
+            <a href="#" id="force-update-btn" title="清除缓存的应用文件并加载最新版本（存档保留）">强制更新</a>
+            <span aria-hidden="true">·</span>
+            <span id="build-version"></span>
+        </p>
+    </footer>
+
+    <!-- 构建配置。classic script，先于下面的 module 执行，
+         为 pwa.js 提供 KrKr2Config（buildVersion / pwa 开关 / assetBase）。 -->
+    <script src="/build-config.js"></script>
+    <script src="/js/config.js"></script>
+
+    <script type="module" src="/src/gallery/main.js"></script>
+    <script type="module" src="/src/shared/pwa.js"></script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+name: Build WebUI
+
+# 前端（platforms/web/webui，Vue 3 + Vite + Cloudflare Worker）的独立构建。
+#
+# 与 Build Web 的分工：那边只产引擎（wasm），一次链接十几分钟；这边只产页面，
+# 一分钟内跑完，且完全不需要 emsdk。改一行 .vue 不该重链 wasm，反之亦然。
+#
+# 这里不部署 —— 线上由 Cloudflare Workers Builds 连仓库自动构建部署
+# （面板里的 build/deploy command，见 platforms/web/webui/README.md）。
+# 本 workflow 的价值是在推到主干前就发现构建/配置错误。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, web, 'dev/*' ]
+    paths:
+      - 'platforms/web/webui/**'
+      - '.github/workflows/build-webui.yml'
+  # web 是本仓库的默认分支（origin/upstream 都是），tests.yml 的 PR 也挂在它上面。
+  # 只写 main 的话，PR 进 web 时这个检查会整个不跑 —— 那才是主要的合并路径。
+  pull_request:
+    branches: [ main, web ]
+    paths:
+      - 'platforms/web/webui/**'
+      - '.github/workflows/build-webui.yml'
+
+defaults:
+  run:
+    working-directory: platforms/web/webui
+
+jobs:
+  build-webui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          # wrangler 硬性要求 >= 22（低版本直接拒绝启动），
+          # package.json 的 engines 也写的 22
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platforms/web/webui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        # 引擎文件（index.js/index.wasm/…）在这台机器上不存在。
+        # vite.config.js 的 krkr2-engine-artifacts 插件在缺引擎时降级：
+        # 只产页面并打印警告，不报错。这正是这个 job 要验的东西 ——
+        # 页面构建不依赖 wasm。整站产物请用 Build Web 的 web-engine artifact
+        # 配合 KRKR2_ENGINE_DIR 在本地合成。
+        run: npm run build
+
+      - name: Validate Worker config
+        # wrangler 的 dry-run 不联网、不需要 API token，但会真正打包 worker/
+        # 并校验 wrangler.jsonc 的绑定。能挡住"改了 worker 路由但语法错"
+        # 这类只有部署时才炸的问题。
+        run: npx wrangler deploy --dry-run --outdir=/tmp/worker-dry-run
+
+      - name: Upload dist
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          # 只有页面，没有引擎（见上）。要能跑的整站：下 web-engine artifact，
+          # 解到某目录后 KRKR2_ENGINE_DIR=<该目录> npm run build。
+          path: platforms/web/webui/dist
+          retention-days: 7

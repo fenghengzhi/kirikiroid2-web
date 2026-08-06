@@ -45,19 +45,28 @@ cmake --build out/web/release
 
 ```
 out/web/release/
-  index.html
   index.js
   index.wasm
-  index.data
   index.worker.js
-  manifest.webmanifest
-  sw.js
-  pwa/
-    icon-192.png
-    icon-512.png
+  build-config.js
+  assets.zip
 ```
 
-The build also copies **PWA** assets (`manifest.webmanifest`, `sw.js`, `pwa/*.png`) next to `index.html`. After serving over `localhost` or HTTPS with COOP/COEP (e.g. `coi-server.py`), Chromium-based browsers can offer **Install app**; the service worker uses network-only fetch so engine files are not stale-cached.
+This is the **engine only** — there is no HTML page here. The web frontend is a
+separate Vue 3 + Vite project under `platforms/web/webui/`, built independently:
+
+```bash
+cd platforms/web/webui
+npm install
+npm run build          # -> platforms/web/webui/dist
+```
+
+Vite pulls the engine files above out of `out/web/release` (override with
+`KRKR2_ENGINE_DIR`) and emits them into `dist` alongside the page, the PWA
+assets and a generated `sw.js`. Because the two builds are independent,
+**changing the frontend never relinks the wasm** — and it does not require emsdk
+at all. See `platforms/web/webui/README.md` for the frontend and its Cloudflare
+Worker backend.
 
 ---
 
@@ -65,17 +74,19 @@ The build also copies **PWA** assets (`manifest.webmanifest`, `sw.js`, `pwa/*.pn
 
 The Web build requires [Cross-Origin Isolation](https://web.dev/cross-origin-isolation-guide/) headers (`COOP` / `COEP`) for `SharedArrayBuffer`. A regular HTTP server will not work.
 
-Use the included `coi-server.py`:
+Serve the Vite output (`platforms/web/webui/dist`) with the included
+`coi-server.py`:
 
 ```bash
-python3 coi-server.py out/web/release [http_port] [https_port] [options]
+python3 coi-server.py platforms/web/webui/dist [http_port] [https_port] [options]
 ```
 
 The server starts:
 - **HTTP** on port 8080 (default) — for `localhost` debugging
 - **HTTPS** on port 8443 (default) — for LAN access from other devices
 
-Then open `http://localhost:8080/index.html` in your browser.
+Then open `http://localhost:8080/` in your browser (the game library). The player
+page is `/play.html`; `--xp3` / `--zip` below print the exact URL to use.
 
 ### Serving a Game File Directly
 
@@ -84,7 +95,7 @@ Then open `http://localhost:8080/index.html` in your browser.
 Use `--xp3` to have the server host a local `.xp3` file:
 
 ```bash
-python3 coi-server.py out/web/release --xp3 /path/to/game/data.xp3
+python3 coi-server.py platforms/web/webui/dist --xp3 /path/to/game/data.xp3
 ```
 
 The file is served at `/data.xp3`, and the printed URL includes the `?xp3=` query parameter. Opening that URL will automatically download and start the game without manual file selection.
@@ -94,13 +105,13 @@ The file is served at `/data.xp3`, and the printed URL includes the `?xp3=` quer
 Use `--zip` to serve a `.zip` archive containing the game files. The web page will extract it in-browser and load the game:
 
 ```bash
-python3 coi-server.py out/web/release --zip /path/to/game.zip
+python3 coi-server.py platforms/web/webui/dist --zip /path/to/game.zip
 ```
 
 If the archive contains multiple `.xp3` files, a selection dialog will appear. Use `--entry` to auto-select one:
 
 ```bash
-python3 coi-server.py out/web/release --zip /path/to/game.zip --entry data.xp3
+python3 coi-server.py platforms/web/webui/dist --zip /path/to/game.zip --entry data.xp3
 ```
 
 #### URL parameters

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.wrangler/
+
+# 本地开发的 secret（ADMIN_PASSWORD_HASH / SESSION_SECRET），绝不入库
+.dev.vars
+
+.DS_Store
+*.log

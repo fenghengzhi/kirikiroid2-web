@@ -1,0 +1,90 @@
+/* 画廊页页脚。
+ *
+ * 页脚在 Vue 根之外（SEO 长文需要在 HTML 里静态存在，不依赖 JS 渲染），
+ * 所以样式写在全局而非 SFC 的 scoped block 里。 */
+
+@import './tokens.css';
+
+.site-footer {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 var(--space-5) var(--space-6);
+    color: var(--fg-2);
+}
+
+.site-footer details {
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-4);
+}
+
+.site-footer summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--fg-1);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    user-select: none;
+}
+
+.site-footer summary::-webkit-details-marker { display: none; }
+
+.site-footer summary::before {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 5px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform var(--dur) var(--ease);
+}
+
+.site-footer details[open] summary::before { transform: rotate(90deg); }
+.site-footer summary:hover { color: var(--fg-0); }
+
+.site-footer .about {
+    padding: var(--space-4) 0 var(--space-2);
+    font-size: 13px;
+    line-height: 1.75;
+    color: var(--fg-1);
+    max-width: 760px;
+}
+
+.site-footer .about h3 {
+    margin: var(--space-5) 0 var(--space-2);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-0);
+}
+
+.site-footer .about p { margin: 0 0 var(--space-3); }
+.site-footer .about ul { margin: 0 0 var(--space-3); padding-left: 20px; }
+.site-footer .about li { margin-bottom: var(--space-1); }
+.site-footer .about a { color: var(--fg-0); text-decoration: underline; }
+
+.site-footer .about code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    font-size: 12px;
+}
+
+.footer-links {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin: var(--space-5) 0 0;
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+}
+
+.footer-links a { color: var(--fg-1); }
+.footer-links a:hover { color: var(--fg-0); text-decoration: underline; }
+
+@media (max-width: 640px) {
+    .site-footer { padding: 0 var(--space-4) var(--space-5); }
+}
