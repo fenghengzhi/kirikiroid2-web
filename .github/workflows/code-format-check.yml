@@ -3,6 +3,9 @@ name: Code Format Check
 on:  
   workflow_dispatch:
 
+  # 这个 workflow 同时是 Build Web 的上游触发器（build-web.yml 用
+  # workflow_run 挂在它后面），所以 paths 实际决定"什么改动会重链 wasm"。
+  # 排除项因此不只是"这里没有 C++ 文件"，更是"改它不该花十几分钟编译引擎"。
   push:
     branches: [ main ]
     paths:
@@ -15,6 +18,10 @@ on:
       - 'vcpkg.json'
       - 'vcpkg-configuration.json'
       - '.github/workflows/**'
+      # 前端是独立的 Vite 工程，不含 C++、也不进 wasm 链接，
+      # 由 build-webui.yml 单独构建（否则改一行 .vue 就触发整轮 emscripten）
+      - '!platforms/web/webui/**'
+      - '!.github/workflows/build-webui.yml'
   pull_request:
     branches: [ main ]
     paths:
@@ -27,6 +34,8 @@ on:
       - 'vcpkg.json'
       - 'vcpkg-configuration.json'
       - '.github/workflows/**'
+      - '!platforms/web/webui/**'
+      - '!.github/workflows/build-webui.yml'
 
 jobs:
   format-check:

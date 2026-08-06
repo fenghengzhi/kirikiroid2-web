@@ -15,6 +15,14 @@ on:
     branches:
       - web
       - 'dev/*'
+    # 这套差分要跑 wasmtime + Android(Frida) oracle，是仓库里最贵的 workflow。
+    # 前端和文档不可能影响 C++ 行为差分，别让它们触发。
+    paths-ignore:
+      - 'platforms/web/webui/**'
+      - '.github/workflows/build-webui.yml'
+      - 'analysis/**'
+      - 'doc/**'
+      - '**/*.md'
 
 env:
   EMSDK_VERSION: "4.0.23"

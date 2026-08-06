@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [web]
+    # 单元测试 + 差分全是 C++ 的事，前端/文档改动不该拉起 emsdk + vcpkg
+    paths-ignore:
+      - 'platforms/web/webui/**'
+      - '.github/workflows/build-webui.yml'
+      - 'analysis/**'
+      - 'doc/**'
+      - '**/*.md'
 
 env:
   EMSDK_VERSION: "3.1.64"

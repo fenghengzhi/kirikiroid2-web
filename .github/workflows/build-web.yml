@@ -1,7 +1,11 @@
 name: Build Web
 
+# 只构建引擎（wasm）。页面由 build-webui.yml 单独构建 —— 一次 emscripten
+# 链接十几分钟，不该被一行 .vue 或一段文档触发。
 on:
   workflow_dispatch:
+  # 上游 Code Format Check 的 paths 已排除 platforms/web/webui，
+  # 所以纯前端改动不会走到这里（workflow_run 本身不支持 paths 过滤）。
   workflow_run:
     workflows: ["Code Format Check"]
     types: ["completed"]
@@ -9,6 +13,12 @@ on:
     branches:
       - web
       - 'dev/*'
+    paths-ignore:
+      - 'platforms/web/webui/**'
+      - '.github/workflows/build-webui.yml'
+      - 'analysis/**'
+      - 'doc/**'
+      - '**/*.md'
 
 env:
   EMSDK_VERSION: "4.0.23"
@@ -132,22 +142,17 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: web-build
+          name: web-engine
+          # 引擎产物，仅此六项（见 CMakeLists.txt 的 WEB 分支）。
+          # HTML/CSS/JS/PWA/sw.js 一概不在这里 —— 那些是 platforms/web/webui
+          # 的 Vite 产物，由 build-webui.yml 上传为 webui-dist。
+          # 想要能跑的整站：把本 artifact 解到某目录，然后
+          # KRKR2_ENGINE_DIR=<该目录> npm run build。
           path: |
-            out/web/release/index.html
             out/web/release/index.js
             out/web/release/index.wasm
             ${{ env.KRKR2_WEB_SOURCE_MAP == 'true' && 'out/web/release/index.wasm.map' || '' }}
             out/web/release/index.worker.js
             out/web/release/build-config.js
-            out/web/release/vlfs.js
             out/web/release/assets.zip
-            out/web/release/manifest.webmanifest
-            out/web/release/sw.js
-            out/web/release/css/
-            out/web/release/js/
-            out/web/release/pwa/
-            out/web/release/baidu_verify_codeva-3Z4bQwqyXI.html
-            out/web/release/robots.txt
-            out/web/release/sitemap.xml
 
