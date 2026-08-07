@@ -35,7 +35,7 @@ if (!hasEngine) {
         `        页面可正常构建和浏览，但启动游戏会失败。\n` +
         `        需要完整产物时先 cmake --build out/web/release，\n` +
         `        或用 KRKR2_ENGINE_DIR 指向已有的构建输出，\n` +
-        `        或用 KRKR2_ENGINE_BASE=/engine/<版本>/ 走 R2。\n`
+        `        或用 KRKR2_ENGINE_BASE=/engine/ 走 R2。\n`
     );
 } else if (ENGINE_BASE) {
     console.log(`[webui] engineBase = ${ENGINE_BASE}` +

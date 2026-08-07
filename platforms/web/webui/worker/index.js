@@ -50,7 +50,7 @@ export default {
                 return withSecurityHeaders(response);
             }
 
-            // --- 引擎大文件：/engine/<版本>/<文件> 从 R2 读 ---------------
+            // --- 引擎产物：/engine/* 从 R2 读 --------------------------
             // 放在静态资源之前：这两个文件刻意不进 dist（见 vite.config.js
             // 的 KRKR2_ENGINE_BASE），静态层没有它们。
             if (pathname.startsWith('/engine/')) {

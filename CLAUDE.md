@@ -32,9 +32,9 @@
 - `tests.yml` / `differential.yml` 同样加了 `paths-ignore`：它们要 emsdk + vcpkg（differential 还要 Android 模拟器 + Frida），纯前端/文档改动不该拉起来
 - **默认分支是 `web` 不是 `main`**（origin 与 upstream 皆然，main 停在 706 个提交之前、且没有 `platforms/web/`）。加 workflow 时 `branches:` 别照抄 `code-format-check.yml` 的 `[ main ]` —— 那样 PR 进 web（唯一的实际合并路径）时整个检查不跑
 - artifact 只上传引擎六项（index.js / index.wasm[.map] / index.worker.js / build-config.js / assets.zip），页面产物是 `build-webui.yml` 的 `webui-dist`。想要能跑的整站：解开 `web-engine`，然后 `KRKR2_ENGINE_DIR=<解开的目录> npm run build`
-- `build-web.yml` 编译后还会把**全部引擎产物**传 R2（按 commit sha 前 12 位分目录），配了 `CLOUDFLARE_API_TOKEN`+`CLOUDFLARE_ACCOUNT_ID` 才跑，没配就跳过而非失败。页面侧 `KRKR2_ENGINE_BASE=/engine/<版本>/ npm run build` 接上：引擎产物一个都不进 dist，dist 从 30MB 降到约 440KB，且**构建时不需要任何引擎文件在场**（Cloudflare 的构建环境编译不了 C++，这是它能独立产出可用页面的唯一办法）
+- `build-web.yml` 编译后还会把**全部引擎产物**传 R2（扁平 key，每次覆盖，桶里只有一份），配了 `CLOUDFLARE_API_TOKEN`+`CLOUDFLARE_ACCOUNT_ID` 才跑，没配就跳过而非失败。页面侧 `KRKR2_ENGINE_BASE=/engine/ npm run build` 接上 —— **这个命令是固定的，不随引擎版本变**：引擎产物一个都不进 dist，dist 从 30MB 降到约 440KB，且**构建时不需要任何引擎文件在场**（Cloudflare 的构建环境编译不了 C++，这是它能独立产出可用页面的唯一办法）
 - **引擎产物走同源 `/engine/*`（Worker 从 R2 binding 读，见 `webui/worker/engine.js`），不让浏览器直连 R2 公开域名**：页面开着 `COEP: require-corp`（SharedArrayBuffer 的前提），跨源资源必须自己发 CORP+CORS 才加载得了，直连就要配自定义域名+两个头；同源则一个都不用配。同源还使 `index.js` 也能搬走 —— glue 的 `_scriptName` 定位 pthread worker 只怕**真跨域**，同源路由不受影响。字节流经 Worker 不是问题：引擎是整取，不是 `remote.js` 那种多 GB 包的 Range 懒加载。25MiB 上限也照样绕过：R2 binding 读出的响应不算静态资源
-- `engineBase` 不在两处约定：`build-config.js` 经 `/engine/<版本>/` 请求时，Worker 从**自己的 URL 路径**推出 `engineBase` 追加进去，所以页面拿到的版本一定与它实际请求的那个一致
+- **存储只有一份，缓存仍按版本分代**：R2 里是扁平 key（`index.wasm` 等），每次构建覆盖；而 `engineBase` 是 `/engine/<buildVersion>/`，那个版本段由 `worker/engine.js` 从 `build-config.js` **内容里**的 `buildVersion`（CMake 时间戳）读出来现拼的，不对应任何存储结构。于是大文件照旧 `immutable` 长缓存且换版即换 URL，不会出现"旧 glue 配新 wasm"；只有 `/engine/build-config.js` 这个版本指针走 `no-cache` + SW 的 stale-while-revalidate。**引擎换版不需要重新部署页面**，下次访问自动跟上
 - 页面里**任何指向引擎产物的地址都必须取自 `engineBase`，不能写死**。已经踩过两次：画廊页的预热 `<link rel=prefetch>` 写死 `/index.wasm`、`Player.vue` 的 `engineScript` 取的是 `assetBase` —— 后者会让整个引擎在 R2 模式下起不来。smoke-test 有断言钉住预热地址
 - `index.worker.js` 只在 pthread 构建里出现，当前配置不产它 —— artifact 与 Vite 插件都按"缺了不算错"处理
 

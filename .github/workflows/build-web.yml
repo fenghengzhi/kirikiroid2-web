@@ -193,22 +193,20 @@ jobs:
           BUCKET: ${{ vars.R2_ENGINE_BUCKET || 'krkr2-engine' }}
         run: |
           set -euo pipefail
-          # 按 commit 分目录：这两个文件名不带内容哈希，同一路径覆盖更新会让
-          # 已缓存的客户端拿到新旧混搭的 glue/wasm。带版本段则换版即换 URL，
-          # 可以安全地 immutable 长缓存。
+          # 扁平 key，每次构建覆盖 —— 桶里始终只有一份，不占额外空间。
+          # 历史版本靠上面的 web-engine artifact 留档（GitHub 侧，默认 90 天）。
           #
-          # key 不含 "engine/" 前缀 —— URL 里的 /engine/ 是 Worker 的路由命名空间，
-          # worker/engine.js 把 /engine/<rest> 映射到桶里的 <rest>。
-          VERSION="${GITHUB_SHA:0:12}"
-
+          # 覆盖同一路径不会造成"旧 glue 配新 wasm"：页面拿到的 engineBase 是
+          # /engine/<buildVersion>/，那个版本段由 worker/engine.js 从
+          # build-config.js 的内容里读出来现拼的，换版即换 URL。存储只有一份，
+          # 缓存却仍按版本分代。详见 worker/engine.js 的注释。
           put() {
-            echo "→ $BUCKET/$VERSION/$1"
+            echo "→ $BUCKET/$1"
             # --remote 必须给：wrangler 4 的 r2 object 默认走本地模拟存储，
             # 少了它这一步会"成功"但什么都没上传。
-            npx --yes wrangler@4 r2 object put "$BUCKET/$VERSION/$1" \
+            npx --yes wrangler@4 r2 object put "$BUCKET/$1" \
               --file "out/web/release/$1" \
               --content-type "$2" \
-              --cache-control "public, max-age=31536000, immutable" \
               --remote
           }
 
@@ -227,13 +225,14 @@ jobs:
           {
             echo "### 引擎已上传 R2"
             echo ""
-            echo '构建页面时设这个环境变量（同源路径，不是 R2 公开域名）：'
+            echo '页面侧构建命令是**固定的**，不随引擎版本变化：'
             echo ""
             echo '```'
-            echo "KRKR2_ENGINE_BASE=/engine/$VERSION/ npm run build"
+            echo "KRKR2_ENGINE_BASE=/engine/ npm run build"
             echo '```'
             echo ""
-            echo "Worker 会从 R2 绑定读出来并按同源返回（见 worker/engine.js），"
-            echo "因此 R2 侧不需要公开域名，也不需要配 CORS / CORP。"
+            echo "版本分代由 Worker 依据 build-config.js 里的 buildVersion 现拼，"
+            echo "R2 里只保留一份（本次已覆盖）。历史版本见本次运行的"
+            echo "\`web-engine\` artifact。"
           } >> "$GITHUB_STEP_SUMMARY"
 

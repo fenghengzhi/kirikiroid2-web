@@ -28,16 +28,18 @@ const PRECACHE_EXCLUDE = [/^sw\.js$/, /^_headers$/, /\.map$/, /^\.vite\//];
 const ASSET_SIZE_LIMIT = 25 * 1024 * 1024;
 const ASSET_SIZE_WARN = 24 * 1024 * 1024;
 
-// 与 vite.config.js 同名的开关。设了它，index.wasm / assets.zip 就不在 dist 里。
+// 与 vite.config.js 同名的开关。设了它，引擎产物就都不在 dist 里。
 //
-// 推荐值是同源相对路径 '/engine/<版本>/'（Worker 从 R2 读，见 worker/engine.js）。
+// 推荐值是同源相对路径 '/engine/'（Worker 从 R2 读，见 worker/engine.js）。
 // 这种情况下 SW 原有的"同源 cache-first"分支已经覆盖到它们，这里无事可做。
 //
 // 若指成绝对 URL（真跨域，例如独立 CDN），同源分支就盖不住了 —— 重复访问每次
 // 重下 22MB，而且不报任何错，只是慢。故把那个 origin 也纳入运行时缓存。
 //
-// 陈旧性：这两个文件名不带内容哈希，靠路径里的版本段区分。build-web.yml 按
-// commit sha 分目录，换版即换 URL，因此可以安全地 immutable 长缓存。
+// 陈旧性：R2 里是扁平 key 每次覆盖，但 URL 带版本段（Worker 从
+// build-config.js 内容里的 buildVersion 现拼，不对应存储路径），换版即换 URL，
+// 因此大文件可以安全地 immutable 长缓存。唯一需要保鲜的是那个版本指针本身，
+// 见下面的 isVersionPointer。
 const ENGINE_BASE = process.env.KRKR2_ENGINE_BASE || '';
 const ENGINE_ORIGIN = /^https?:\/\//i.test(ENGINE_BASE)
     ? new URL(ENGINE_BASE).origin
@@ -116,6 +118,20 @@ function isNeverCached(url) {
            url.pathname.indexOf('/admin/') === 0;
 }
 
+/* 引擎的版本指针（Worker 从它内容里读出 buildVersion 拼成 engineBase，
+ * 见 worker/engine.js）。它同源，会被下面的 cache-first 分支吃掉 ——
+ * 一旦缓存，引擎就永远停在旧版本。
+ *
+ * 但也不能干脆不缓存：播放页靠它启动，不缓存则整页离线不可用。
+ * 所以走 stale-while-revalidate —— 先给缓存（离线可用、启动不等网络），
+ * 同时后台拉一份更新缓存。代价是引擎换版要下次访问才生效，可以接受。
+ *
+ * 带版本段的那些（/engine/<buildVersion>/xxx）反而可以放心 cache-first：
+ * 换版即换 URL。 */
+function isVersionPointer(url) {
+    return url.pathname === '/engine/build-config.js';
+}
+
 self.addEventListener('install', function (event) {
     event.waitUntil(
         caches.open(CACHE_NAME).then(function (cache) {
@@ -153,6 +169,25 @@ self.addEventListener('fetch', function (event) {
     var url = new URL(request.url);
 
     if (isNeverCached(url)) return;   /* 交给网络，不拦截 */
+
+    /* 版本指针：stale-while-revalidate */
+    if (isVersionPointer(url)) {
+        event.respondWith(
+            caches.match(request).then(function (cached) {
+                var fetching = fetch(request).then(function (response) {
+                    if (response.ok) {
+                        var clone = response.clone();
+                        caches.open(CACHE_NAME).then(function (c) { c.put(request, clone); });
+                    }
+                    return response;
+                }).catch(function () { return cached; });
+                /* 有缓存就立刻返回，同时让上面那次 fetch 在后台跑完 */
+                if (cached) { event.waitUntil(fetching); return cached; }
+                return fetching;
+            })
+        );
+        return;
+    }
 
     /* 导航：network-first，离线回退到对应入口页。
      * 按路径选回退目标 —— /play/<id> 要回 /play.html 而不是首页。 */

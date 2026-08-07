@@ -28,7 +28,7 @@ const ENGINE_FILES = {
     'assets.zip': 'application/zip'
 };
 
-// 路径带版本段（build-web.yml 用 commit sha 前 12 位），内容因此不可变。
+// URL 带版本段（由下面 buildVersion 那段现拼），换版即换 URL，内容因此不可变。
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
 /**
@@ -55,7 +55,12 @@ function parseRange(header) {
 }
 
 /**
- * GET /engine/<版本>/<文件名>
+ * GET /engine/build-config.js       —— 入口，短缓存，回包里带 engineBase
+ * GET /engine/<版本>/<文件名>       —— 其余产物，immutable 长缓存
+ *
+ * R2 里只有一份（扁平 key：index.wasm / index.js / ...），每次构建覆盖。
+ * URL 里的 <版本> 段不对应任何存储结构，只是拿来给缓存分代的——
+ * 见下面 buildVersion 那段说明。
  *
  * @param {Request} request
  * @param {object}  env      需要 env.ENGINE（R2 桶绑定）
@@ -69,13 +74,15 @@ export async function serveEngine(request, env, ctx, pathname) {
             '并在 wrangler.jsonc 的 r2_buckets 里填上 bucket_name');
     }
 
-    const key = pathname.slice('/engine/'.length);
-    const name = key.slice(key.lastIndexOf('/') + 1);
-    // 白名单已经排除了路径穿越（'..' 不在表里），这里只是把意图写明
+    // 版本段（若有）只影响 URL，不影响取哪个对象：R2 里始终是扁平的一份。
+    const rest = pathname.slice('/engine/'.length);
+    const name = rest.slice(rest.lastIndexOf('/') + 1);
+    // 白名单同时挡掉路径穿越（'..' 不在表里）
     if (!Object.prototype.hasOwnProperty.call(ENGINE_FILES, name)) {
         return error(404, 'Not found');
     }
     const contentType = ENGINE_FILES[name];
+    const key = name;
 
     // 边缘缓存只对整取生效：Range 响应是 206 + 各不相同的 Content-Range，
     // 按同一个 key 缓存会互相污染。206 直接回源，R2 读本来就在同机房。
@@ -94,28 +101,40 @@ export async function serveEngine(request, env, ctx, pathname) {
 
     if (!object) return error(404, 'Not found');
 
-    // build-config.js 是 CMake 生成的，只带 initialMemory / buildVersion 那几项，
-    // 不含 engineBase —— 引擎编译时根本不知道自己将来会被挂在哪个版本路径下。
+    // build-config.js 是整套东西的入口，也是唯一不能长缓存的一个。
     //
-    // 而这个信息此刻就在 URL 里。与其让页面构建和引擎上传两边约定，不如在这里
-    // 从自己的路径推出来追加：无论页面是谁构建的、什么时候构建的，拿到的
-    // engineBase 一定与它实际请求的这个版本一致，不可能对不上。
+    // R2 里只存一份、每次构建覆盖，所以"哪一版"这个信息不在路径里 —— 它在
+    // 文件内容里：CMake 生成的 build-config.js 带着 buildVersion 时间戳
+    // （见 platforms/web/gen_build_config.cmake）。这里把它读出来，拼成
+    // engineBase = /engine/<buildVersion>/ 交给页面。
+    //
+    // 于是：存储上只有一份，URL 上却仍然按版本分代 —— 大文件照旧 immutable
+    // 长缓存且换版即换 URL，不会出现"旧 glue 配新 wasm"。代价只有本文件每次
+    // 都要回源校验一次（几百字节），换掉了给 22MB 做条件请求的开销。
+    //
+    // 拿不到 buildVersion（理论上不会，除非 CMake 那边改了格式）就退回 ETag，
+    // 它同样满足"内容变则值变"，只是不好读。
     if (name === 'build-config.js') {
-        const base = pathname.slice(0, pathname.lastIndexOf('/') + 1);
-        const body = await object.text() +
-            `\n// 以下由 worker/engine.js 按请求路径追加\n` +
+        const text = await object.text();
+        const m = /buildVersion:\s*'([^']+)'/.exec(text);
+        const version = m ? m[1] : object.httpEtag.replace(/[^\w.-]/g, '');
+        const body = text +
+            `\n// 以下由 worker/engine.js 按 buildVersion 追加\n` +
             `window.KRKR2_BUILD_CONFIG = window.KRKR2_BUILD_CONFIG || {};\n` +
-            `window.KRKR2_BUILD_CONFIG.engineBase = ${JSON.stringify(base)};\n`;
-        const res = new Response(body, {
+            `window.KRKR2_BUILD_CONFIG.engineBase = ` +
+            `${JSON.stringify(`/engine/${version}/`)};\n`;
+        // no-cache 而非 no-store：这是版本指针，必须每次revalidate，但仍要
+        // 允许被存下来 —— service worker 靠这份缓存让播放页离线可用
+        // （no-store 会让它连存都不能存，整页离线即挂）。SW 侧对它走
+        // stale-while-revalidate，见 scripts/gen-sw.js 的 isVersionPointer。
+        return new Response(body, {
             status: 200,
             headers: {
                 'Content-Type': contentType,
-                'Cache-Control': IMMUTABLE,
+                'Cache-Control': 'no-cache',
                 'ETag': object.httpEtag
             }
         });
-        ctx.waitUntil(cache.put(request, res.clone()));
-        return res;
     }
 
     const headers = new Headers({

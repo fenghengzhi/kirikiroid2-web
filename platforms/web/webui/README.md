@@ -86,12 +86,12 @@ Node 版本需 22+（Wrangler 4 的要求）；Cloudflare 构建环境默认已�
 
 ```
 Build command:
-  KRKR2_ENGINE_BASE=/engine/<版本>/ npm run build
+  KRKR2_ENGINE_BASE=/engine/ npm run build
 ```
 
-`<版本>` 是 `build-web.yml` 上传时用的 commit sha 前 12 位（任务跑完会打在
-job summary 里）。设了它，**引擎产物一个都不进 `dist`**，构建时也完全不需要
-它们在场 —— 部署产物只有约 440 KB 的页面，运行时由 Worker 从 R2 读出来。
+**这个命令是固定的**，不随引擎版本变化，配一次就不用再动。设了它，
+**引擎产物一个都不进 `dist`**，构建时也完全不需要它们在场 —— 部署产物只有
+约 440 KB 的页面，运行时由 Worker 从 R2 读出来。
 
 不设的话就是传统模式：引擎随页面一起部署（约 30 MB），此时必须让
 `KRKR2_ENGINE_DIR` 指向一份真实的 CMake 输出，否则页面能开但启动游戏会失败。
@@ -170,7 +170,7 @@ public/       引擎层，原样输出不经打包
 启用方式是构建期环境变量：
 
 ```bash
-KRKR2_ENGINE_BASE=/engine/<版本>/ npm run build
+KRKR2_ENGINE_BASE=/engine/ npm run build
 ```
 
 设了之后引擎产物**一个都不进 `dist`**，部署产物从 30 MB 降到约 440 KB，
@@ -194,16 +194,29 @@ zip 一次 `fetch` 转 Blob），不是 `js/loaders/remote.js` 那种对多 GB �
 Range 懒加载——下面"游戏包不经 Worker"那条在这里不适用。且 25 MiB 上限照样
 绕过：从 R2 binding 读出的响应不算静态资源（R2 单对象上限 5 TB）。
 
-> `engineBase` 的值不需要在两处约定：`build-config.js` 经 `/engine/<版本>/`
-> 请求时，Worker 从**自己的 URL 路径**推出 `engineBase` 追加进去。所以页面
-> 无论何时、由谁构建，拿到的版本一定与它实际请求的那个一致。
+**存储只有一份，缓存却仍按版本分代。**
+R2 里是扁平 key（`index.wasm`、`index.js`……），每次构建覆盖 —— 桶里始终只有
+一份，不占额外空间，历史版本靠 GitHub 的 `web-engine` artifact 留档。
 
-`build-web.yml` 会在引擎构建后自动上传，按 commit sha 前 12 位分目录。
-需要仓库配 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`，桶名用仓库变量
-`R2_ENGINE_BUCKET` 覆盖（默认 `krkr2-engine`）。没配就跳过，不会让构建失败。
+但覆盖同一路径通常会带来一个麻烦：这些文件名不含内容哈希，客户端可能拿着
+缓存的旧 `index.js` 配上新下载的 `index.wasm`，新旧混搭，症状极难查。这里
+不会，因为**版本段不来自存储路径，而是现算的**：
 
-> 分目录不是洁癖：这些文件名不带内容哈希，同一路径覆盖更新会让已缓存的
-> 客户端拿到新旧混搭的 glue/wasm。换版即换 URL 才能安全地 `immutable` 长缓存。
+1. 页面固定请求 `/engine/build-config.js`（`no-cache`，每次 revalidate）
+2. Worker 读出它内容里的 `buildVersion`（CMake 写入的时间戳），
+   拼成 `engineBase = /engine/<buildVersion>/` 追加进回包
+3. 页面据此去取 `/engine/<buildVersion>/index.wasm` 等 —— 这些走 `immutable`
+   长缓存，换版即换 URL，天然隔离
+
+于是引擎换版**不需要重新部署页面**，下次访问自动跟上；代价只有那个几百字节的
+版本指针每次要回源校验一次，换掉了给 22 MB 做条件请求的开销。
+
+> SW 侧对版本指针走 stale-while-revalidate（先给缓存再后台更新），
+> 否则播放页离线不可用 —— 它靠这个文件启动。见 `scripts/gen-sw.js`。
+
+`build-web.yml` 会在引擎构建后自动上传。需要仓库配 `CLOUDFLARE_API_TOKEN` 与
+`CLOUDFLARE_ACCOUNT_ID`，桶名用仓库变量 `R2_ENGINE_BUCKET` 覆盖
+（默认 `krkr2-engine`）。没配就跳过，不会让构建失败。
 
 **为什么封面要经 `/api/cover/:id` 代理。**
 `COEP: require-corp`（SharedArrayBuffer 的前提）下，第三方图床不发
