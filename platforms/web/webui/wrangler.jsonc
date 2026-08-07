@@ -30,6 +30,22 @@
       "binding": "RATE_LIMIT",
       "id": "516531dd4ff84e7ab81cb3e190160602"
     }
+  ],
+
+  // 引擎大文件（index.wasm / assets.zip）。由 build-web.yml 在编译后传上来，
+  // Worker 经 /engine/* 同源读出（见 worker/engine.js）。
+  //
+  // 走同源而不是让浏览器直连 R2 公开域名，是为了免掉跨源隔离那一整套：
+  // 页面开着 COEP: require-corp，跨源资源必须自己发 CORP + CORS 才加载得了。
+  // 同源就一个头都不用配。
+  //
+  // 没建桶也不影响其余功能：/engine/* 会返回 503 并说明要跑什么命令，
+  // 画廊、后台、本地文件播放都照常。
+  "r2_buckets": [
+    {
+      "binding": "ENGINE",
+      "bucket_name": "krkr2-engine"
+    }
   ]
 
   // Secrets（不写在此文件，用 wrangler secret put 设置）：

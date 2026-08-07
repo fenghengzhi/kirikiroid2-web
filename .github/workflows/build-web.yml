@@ -196,13 +196,16 @@ jobs:
           # 按 commit 分目录：这两个文件名不带内容哈希，同一路径覆盖更新会让
           # 已缓存的客户端拿到新旧混搭的 glue/wasm。带版本段则换版即换 URL，
           # 可以安全地 immutable 长缓存。
-          PREFIX="engine/${GITHUB_SHA:0:12}"
+          #
+          # key 不含 "engine/" 前缀 —— URL 里的 /engine/ 是 Worker 的路由命名空间，
+          # worker/engine.js 把 /engine/<rest> 映射到桶里的 <rest>。
+          VERSION="${GITHUB_SHA:0:12}"
 
           put() {
-            echo "→ $BUCKET/$PREFIX/$1"
+            echo "→ $BUCKET/$VERSION/$1"
             # --remote 必须给：wrangler 4 的 r2 object 默认走本地模拟存储，
             # 少了它这一步会"成功"但什么都没上传。
-            npx --yes wrangler@4 r2 object put "$BUCKET/$PREFIX/$1" \
+            npx --yes wrangler@4 r2 object put "$BUCKET/$VERSION/$1" \
               --file "out/web/release/$1" \
               --content-type "$2" \
               --cache-control "public, max-age=31536000, immutable" \
@@ -215,13 +218,13 @@ jobs:
           {
             echo "### 引擎已上传 R2"
             echo ""
-            echo '构建页面时把 `KRKR2_ENGINE_BASE` 设成该前缀对应的公开地址：'
+            echo '构建页面时设这个环境变量（同源路径，不是 R2 公开域名）：'
             echo ""
             echo '```'
-            echo "KRKR2_ENGINE_BASE=https://<你的R2公开域名>/$PREFIX/ npm run build"
+            echo "KRKR2_ENGINE_BASE=/engine/$VERSION/ npm run build"
             echo '```'
             echo ""
-            echo "R2 侧需要发 \`Access-Control-Allow-Origin\` 与"
-            echo "\`Cross-Origin-Resource-Policy\`，否则 COEP 会挡下请求。"
+            echo "Worker 会从 R2 绑定读出来并按同源返回（见 worker/engine.js），"
+            echo "因此 R2 侧不需要公开域名，也不需要配 CORS / CORP。"
           } >> "$GITHUB_STEP_SUMMARY"
 

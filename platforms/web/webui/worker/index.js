@@ -4,6 +4,7 @@
 // 用户看到的仍是干净的 /、/play/<id>、/admin，由这里改写到对应的资源。
 
 import { handleApi } from './api.js';
+import { serveEngine } from './engine.js';
 import { withSecurityHeaders, error } from './headers.js';
 
 /** 取静态资源，并把请求路径改写到指定的 HTML 入口。 */
@@ -47,6 +48,14 @@ export default {
                 }
                 const response = await handleApi(request, env, ctx, pathname);
                 return withSecurityHeaders(response);
+            }
+
+            // --- 引擎大文件：/engine/<版本>/<文件> 从 R2 读 ---------------
+            // 放在静态资源之前：这两个文件刻意不进 dist（见 vite.config.js
+            // 的 KRKR2_ENGINE_BASE），静态层没有它们。
+            if (pathname.startsWith('/engine/')) {
+                const asset = await serveEngine(request, env, ctx, pathname);
+                return withSecurityHeaders(asset);
             }
 
             // --- 播放页：/play/<id> 统一由 play.html 承载 ----------------

@@ -115,7 +115,17 @@ await visit('/', {
             els.every((e) => e.getAttribute('href')?.startsWith('/play/'))).catch(() => false)),
         '封面走 /api/cover 代理': (await page.$$eval('.card img', (els) =>
             els.length === 0 || els.every((e) => e.getAttribute('src')?.startsWith('/api/cover/'))).catch(() => false)),
-        '搜索框存在': !!(await page.$('.search input'))
+        '搜索框存在': !!(await page.$('.search input')),
+        // 引擎地址必须取自 engineBase，不能写死。启用 KRKR2_ENGINE_BASE 后
+        // wasm 在 /engine/<版本>/ 下，写死 /index.wasm 会 404 —— 预热失灵
+        // 且每次进画廊都刷控制台错误。这里钉住"prefetch 与 engineBase 一致"。
+        'wasm 预热地址跟随 engineBase': await page.evaluate(() => {
+            const base = (window.KrKr2Config && window.KrKr2Config.engineBase) || '/';
+            const links = [...document.querySelectorAll('link[rel="prefetch"]')]
+                .map((l) => l.getAttribute('href'));
+            const wasm = links.filter((h) => h && h.endsWith('index.wasm'));
+            return wasm.length > 0 && wasm.every((h) => h === base + 'index.wasm');
+        })
     })
 });
 

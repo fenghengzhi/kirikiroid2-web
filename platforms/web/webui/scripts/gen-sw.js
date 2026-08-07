@@ -28,20 +28,20 @@ const PRECACHE_EXCLUDE = [/^sw\.js$/, /^_headers$/, /\.map$/, /^\.vite\//];
 const ASSET_SIZE_LIMIT = 25 * 1024 * 1024;
 const ASSET_SIZE_WARN = 24 * 1024 * 1024;
 
-// 与 vite.config.js 同名的开关。设了它，index.wasm / assets.zip 就不在 dist 里，
-// 而是从这个地址取 —— SW 的"同源才 cache-first"分支便盖不到它们，重复访问
-// 每次都要重下 22MB。这里把该 origin 也纳入运行时缓存。
+// 与 vite.config.js 同名的开关。设了它，index.wasm / assets.zip 就不在 dist 里。
 //
-// 陈旧性：这两个文件名不带内容哈希，靠 CACHE_VERSION 整体换代来失效。
-// CACHE_VERSION 是 dist 全部内容的哈希，而 build-config.js（带 CMake 写入的
-// buildVersion 时间戳）在 dist 里且每次引擎构建都变 —— 所以"引擎换了新版"
-// 一定会带来新的 CACHE_VERSION，activate 时旧缓存被清掉。
+// 推荐值是同源相对路径 '/engine/<版本>/'（Worker 从 R2 读，见 worker/engine.js）。
+// 这种情况下 SW 原有的"同源 cache-first"分支已经覆盖到它们，这里无事可做。
 //
-// 但这条链依赖"引擎更新后页面也重新部署一次"。只传 R2 不重新部署的话，
-// 客户端 SW 版本不变，会继续用旧 wasm。要避免就让 engineBase 带上版本段
-// （如 .../engine/<buildVersion>/），换版即换 URL。
+// 若指成绝对 URL（真跨域，例如独立 CDN），同源分支就盖不住了 —— 重复访问每次
+// 重下 22MB，而且不报任何错，只是慢。故把那个 origin 也纳入运行时缓存。
+//
+// 陈旧性：这两个文件名不带内容哈希，靠路径里的版本段区分。build-web.yml 按
+// commit sha 分目录，换版即换 URL，因此可以安全地 immutable 长缓存。
 const ENGINE_BASE = process.env.KRKR2_ENGINE_BASE || '';
-const ENGINE_ORIGIN = ENGINE_BASE ? new URL(ENGINE_BASE).origin : '';
+const ENGINE_ORIGIN = /^https?:\/\//i.test(ENGINE_BASE)
+    ? new URL(ENGINE_BASE).origin
+    : '';   // 相对路径 = 同源，无需额外分支
 
 function walk(dir, out = []) {
     for (const name of readdirSync(dir)) {

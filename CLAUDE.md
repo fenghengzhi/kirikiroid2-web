@@ -32,8 +32,10 @@
 - `tests.yml` / `differential.yml` 同样加了 `paths-ignore`：它们要 emsdk + vcpkg（differential 还要 Android 模拟器 + Frida），纯前端/文档改动不该拉起来
 - **默认分支是 `web` 不是 `main`**（origin 与 upstream 皆然，main 停在 706 个提交之前、且没有 `platforms/web/`）。加 workflow 时 `branches:` 别照抄 `code-format-check.yml` 的 `[ main ]` —— 那样 PR 进 web（唯一的实际合并路径）时整个检查不跑
 - artifact 只上传引擎六项（index.js / index.wasm[.map] / index.worker.js / build-config.js / assets.zip），页面产物是 `build-webui.yml` 的 `webui-dist`。想要能跑的整站：解开 `web-engine`，然后 `KRKR2_ENGINE_DIR=<解开的目录> npm run build`
-- `build-web.yml` 编译后还会把 `index.wasm`/`assets.zip` 传 R2（按 commit 分目录），配了 `CLOUDFLARE_API_TOKEN`+`CLOUDFLARE_ACCOUNT_ID` 才跑，没配就跳过而非失败。页面侧 `KRKR2_ENGINE_BASE=<该目录URL> npm run build` 接上，dist 从 30MB 降到 680KB
+- `build-web.yml` 编译后还会把 `index.wasm`/`assets.zip` 传 R2（按 commit sha 前 12 位分目录），配了 `CLOUDFLARE_API_TOKEN`+`CLOUDFLARE_ACCOUNT_ID` 才跑，没配就跳过而非失败。页面侧 `KRKR2_ENGINE_BASE=/engine/<版本>/ npm run build` 接上，dist 从 30MB 降到 680KB
+- **引擎大文件走同源 `/engine/*`（Worker 从 R2 binding 读，见 `webui/worker/engine.js`），不让浏览器直连 R2 公开域名**：页面开着 `COEP: require-corp`（SharedArrayBuffer 的前提），跨源资源必须自己发 CORP+CORS 才加载得了，直连就要配自定义域名+两个头；同源则一个都不用配。字节流经 Worker 不是问题 —— 引擎是整取，不是 `remote.js` 那种多 GB 包的 Range 懒加载。25MiB 上限也照样绕过：R2 binding 读出的响应不算静态资源
 - **`index.js` 与 `build-config.js` 永远不能跨域**：前者是 emscripten glue，`_scriptName` 取自 `document.currentScript.src`、pthread worker 按它定位，跨域被同源策略挡下；后者带 CMake 写入的 `initialMemory` 权威值，拿不到就用兜底 64MiB，ASan 构建直接 LinkError。所以只有 `index.wasm`/`assets.zip` 走 `engineBase`，`index.js` 留在 `assetBase`
+- 页面里**任何指向引擎产物的地址都必须取自 `engineBase`，不能写死**。画廊页那条 wasm 预热 `<link rel=prefetch>` 就因为写死 `/index.wasm` 而在启用 engineBase 后 404（预热失灵且刷控制台错误）；现已改成 `config.js` 之后动态注入，smoke-test 有断言钉住
 - `index.worker.js` 只在 pthread 构建里出现，当前配置不产它 —— artifact 与 Vite 插件都按"缺了不算错"处理
 
 ### 构建陷阱
@@ -56,7 +58,7 @@
 - `platforms/web/webui/` — Web 前端，Vue 3 + Vite + Cloudflare Worker，独立于 CMake 构建（详见 `webui/README.md`）
   - `index.html` / `play.html` / `admin.html` — 三个 MPA 入口。**不是审美选择**：引擎是硬单例（Web Lock + `booted` 标志），wasm runtime 进 `main()` 后无法同页销毁重建，"退出游戏"必须整页卸载
   - `src/gallery|player|admin|shared|styles/` — Vue 侧。播放页支持 `?xp3=`/`?game=`/`?entry=`（引擎调试入口，绕过 D1 游戏库）
-  - `worker/` — Cloudflare Worker：路由 + 安全头（COOP/COEP）、PBKDF2 登录、D1 游戏库读写、封面代理
+  - `worker/` — Cloudflare Worker：路由 + 安全头（COOP/COEP）、PBKDF2 登录、D1 游戏库读写、封面代理、`/engine/*` 从 R2 读引擎大文件
   - `public/` — **引擎层，原样输出不经打包**。这一层与产品前端解耦，整体替换 Vue 部分也不影响它：
     - `js/engine/` — 引擎引导层：`boot-guards`（单例锁/JSPI 检测/WebGL 精度补丁）、`memory`（wasm Memory 预分配）、`fs-util`、`vlfs-bridge`、`engine.js`
     - `js/engine/engine.js` — **`window.KrKr2Engine` facade**：前端与 wasm 的唯一接口（`boot` / `loadSource` / `setSaveSpace` / `setHostDir`）。与 C++ 的契约字段 `Module._startupXp3Path`（被 `Platform.cpp` 经 EM_JS 读取）等在此文件头部有说明
