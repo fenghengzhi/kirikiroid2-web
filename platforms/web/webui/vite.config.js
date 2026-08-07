@@ -13,33 +13,33 @@ const ENGINE_DIR = process.env.KRKR2_ENGINE_DIR ||
 const ENGINE_FILES = ['index.js', 'index.wasm', 'assets.zip',
                       'build-config.js', 'index.worker.js'];
 
-// KRKR2_ENGINE_BASE：把两个大文件交给 R2（或任何公开桶/CDN），只发页面。
+// KRKR2_ENGINE_BASE：引擎产物全部交给 R2，页面构建只产页面。
 //
-// 设了之后 index.wasm(21.9MiB) 与 assets.zip(7.8MiB) 不再进 dist，部署产物
-// 从 30MB 降到约 680KB —— Workers 静态资源 25MiB 单文件上限从此不适用
-// （index.wasm 目前已占 87.5%）。运行时由 js/config.js 的 engineBase 接手：
-// wasm 走 Module.locateFile，assets.zip 走 vlfs-bridge 的 fetch。
+// 设了之后 ENGINE_FILES 一个都不进 dist，部署产物从 30MB 降到约 350KB。
+// 运行时全部经 Worker 的 /engine/* 路由读出（见 worker/engine.js）——
+// 那是**同源**，所以 emscripten glue 的 _scriptName 定位 pthread worker
+// 不受影响，index.js 也可以一起搬走。
 //
-// index.js 与 build-config.js 永远留在同源，不受此开关影响：前者跨域会踩
-// _scriptName 定位 pthread worker 的坑，后者带着 initialMemory 权威值
-// （拿不到就会用兜底的 64MiB，ASan 构建下直接 LinkError）。
+// 这是关键：正因为 /engine/* 同源，Cloudflare 的构建环境（编译不了 C++）
+// 完全不需要任何引擎产物在场，只要知道版本号这一个字符串即可。
+// build-config.js 的 <script> 地址由下面的 transformIndexHtml 改写。
 const ENGINE_BASE = process.env.KRKR2_ENGINE_BASE || '';
-const REMOTE_FILES = ENGINE_BASE ? ['index.wasm', 'assets.zip'] : [];
+const REMOTE_FILES = ENGINE_BASE ? ENGINE_FILES : [];
 
-// 判据是 index.js 而非 index.wasm：走 R2 时本地可以只有 glue 没有 wasm，
-// 那依然是一次完整可用的页面构建。
-const hasEngine = existsSync(resolve(ENGINE_DIR, 'index.js'));
+// 只在"不走 R2"时才需要本地引擎产物
+const hasEngine = ENGINE_BASE || existsSync(resolve(ENGINE_DIR, 'index.js'));
 
 if (!hasEngine) {
     console.warn(
         `\n[webui] 未找到引擎产物（${ENGINE_DIR}/index.js）。\n` +
         `        页面可正常构建和浏览，但启动游戏会失败。\n` +
         `        需要完整产物时先 cmake --build out/web/release，\n` +
-        `        或用 KRKR2_ENGINE_DIR 指向已有的构建输出。\n`
+        `        或用 KRKR2_ENGINE_DIR 指向已有的构建输出，\n` +
+        `        或用 KRKR2_ENGINE_BASE=/engine/<版本>/ 走 R2。\n`
     );
 } else if (ENGINE_BASE) {
     console.log(`[webui] engineBase = ${ENGINE_BASE}` +
-                `（index.wasm / assets.zip 不进 dist，运行时从该地址取）`);
+                `（引擎产物全部不进 dist，运行时经 Worker 的 /engine/* 读出）`);
 }
 
 // MPA：三个入口各自独立成页。这不是审美选择 —— 引擎是硬单例
@@ -72,6 +72,16 @@ export default defineConfig({
         {
             name: 'krkr2-engine-artifacts',
             // index.worker.js 只在 pthread 构建里出现，缺了不算错
+
+            // build-config.js 是 <script src> 静态引用的，而它自己才带着
+            // engineBase —— 鸡生蛋问题。所以地址只能在构建期改写进 HTML。
+            // /js/* 那些是 public/ 里的手写源码，照常同源，不动。
+            transformIndexHtml(html) {
+                if (!ENGINE_BASE) return html;
+                return html.replace(/(<script\s+src=")\/build-config\.js(")/g,
+                                    `$1${ENGINE_BASE}build-config.js$2`);
+            },
+
             configureServer(server) {
                 if (!hasEngine) return;
                 server.middlewares.use((req, res, next) => {
@@ -83,41 +93,19 @@ export default defineConfig({
                 });
             },
             async generateBundle() {
-                if (!hasEngine) return;
-                const { readFile } = await import('node:fs/promises');
-                let wroteBuildConfig = false;
+                // 走 R2 时一个引擎文件都不进 dist —— 这就是部署产物从 30MB
+                // 降到约 350KB 的地方，也是 Cloudflare 构建环境（编译不了 C++）
+                // 能独立产出可用页面的原因。
+                if (!hasEngine || ENGINE_BASE) return;
 
+                const { readFile } = await import('node:fs/promises');
                 for (const name of ENGINE_FILES) {
-                    // 走 R2 的不进 dist —— 这就是部署产物从 30MB 降到 680KB 的地方
-                    if (REMOTE_FILES.includes(name)) continue;
                     const p = resolve(ENGINE_DIR, name);
                     if (!existsSync(p)) continue;
-
-                    let source = await readFile(p);
-                    // build-config.js 由 CMake 生成、顶上写着"请勿手改"，而
-                    // engineBase 是部署期信息，引擎构建时根本不知道。所以在这里
-                    // 追加，而不是去改 gen_build_config.cmake。
-                    if (name === 'build-config.js' && ENGINE_BASE) {
-                        source = Buffer.concat([source, Buffer.from(
-                            '\n// 以下由 vite.config.js 按 KRKR2_ENGINE_BASE 追加\n' +
-                            'window.KRKR2_BUILD_CONFIG.engineBase = ' +
-                            `${JSON.stringify(ENGINE_BASE)};\n`
-                        )]);
-                        wroteBuildConfig = true;
-                    }
-                    this.emitFile({ type: 'asset', fileName: name, source });
-                }
-
-                // ENGINE_DIR 里没有 build-config.js 时的兜底：engineBase 不能丢，
-                // 丢了 wasm 就会去同源找，而它已经不在那儿了。
-                if (ENGINE_BASE && !wroteBuildConfig) {
                     this.emitFile({
                         type: 'asset',
-                        fileName: 'build-config.js',
-                        source: '// 由 vite.config.js 生成（ENGINE_DIR 无 build-config.js）\n' +
-                                'window.KRKR2_BUILD_CONFIG = window.KRKR2_BUILD_CONFIG || {};\n' +
-                                'window.KRKR2_BUILD_CONFIG.engineBase = ' +
-                                `${JSON.stringify(ENGINE_BASE)};\n`
+                        fileName: name,
+                        source: await readFile(p)
                     });
                 }
             }

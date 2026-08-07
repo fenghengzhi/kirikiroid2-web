@@ -19,8 +19,11 @@
 import { error } from './headers.js';
 
 // 白名单：这个路由不能退化成"任意读桶"的开放代理。
-// 只有这两个文件名可达，其余一律 404，不泄漏桶里有什么。
+// 只有这几个文件名可达，其余一律 404，不泄漏桶里有什么。
 const ENGINE_FILES = {
+    'index.js': 'text/javascript; charset=utf-8',
+    'index.worker.js': 'text/javascript; charset=utf-8',
+    'build-config.js': 'text/javascript; charset=utf-8',
     'index.wasm': 'application/wasm',
     'assets.zip': 'application/zip'
 };
@@ -90,6 +93,30 @@ export async function serveEngine(request, env, ctx, pathname) {
         : await env.ENGINE.get(key);
 
     if (!object) return error(404, 'Not found');
+
+    // build-config.js 是 CMake 生成的，只带 initialMemory / buildVersion 那几项，
+    // 不含 engineBase —— 引擎编译时根本不知道自己将来会被挂在哪个版本路径下。
+    //
+    // 而这个信息此刻就在 URL 里。与其让页面构建和引擎上传两边约定，不如在这里
+    // 从自己的路径推出来追加：无论页面是谁构建的、什么时候构建的，拿到的
+    // engineBase 一定与它实际请求的这个版本一致，不可能对不上。
+    if (name === 'build-config.js') {
+        const base = pathname.slice(0, pathname.lastIndexOf('/') + 1);
+        const body = await object.text() +
+            `\n// 以下由 worker/engine.js 按请求路径追加\n` +
+            `window.KRKR2_BUILD_CONFIG = window.KRKR2_BUILD_CONFIG || {};\n` +
+            `window.KRKR2_BUILD_CONFIG.engineBase = ${JSON.stringify(base)};\n`;
+        const res = new Response(body, {
+            status: 200,
+            headers: {
+                'Content-Type': contentType,
+                'Cache-Control': IMMUTABLE,
+                'ETag': object.httpEtag
+            }
+        });
+        ctx.waitUntil(cache.put(request, res.clone()));
+        return res;
+    }
 
     const headers = new Headers({
         'Content-Type': contentType,

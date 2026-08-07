@@ -24,11 +24,10 @@
     <!-- 引擎不在本页加载（画廊页不需要 wasm）。低优先级预热，
          让用户点进游戏时 22MB 的 wasm 已经在 HTTP 缓存里。
 
-         index.wasm 的地址不能写死：启用 KRKR2_ENGINE_BASE 后它不在同源根下，
+         地址一律不能写死：启用 KRKR2_ENGINE_BASE 后引擎产物不在同源根下，
          而是 /engine/<版本>/ （见 public/js/config.js 的 engineBase）。
          写死会 404 —— 预热失败本身不影响功能，但控制台每次进画廊都报错，
-         而且真正想要的预热一次都没发生。所以下面等 config.js 之后再注入。 -->
-    <link rel="prefetch" href="/index.js" as="script">
+         而且真正想要的预热一次都没发生。所以放到 config.js 之后动态注入。 -->
 </head>
 <body>
     <noscript>
@@ -77,17 +76,22 @@
     <script src="/build-config.js"></script>
     <script src="/js/config.js"></script>
 
-    <!-- wasm 预热：地址取自 engineBase，故必须在 config.js 之后。
+    <!-- 引擎预热：地址取自 engineBase，故必须在 config.js 之后。
          见 <head> 里那条注释。 -->
     <script>
         (function () {
-            var base = (window.KrKr2Config && window.KrKr2Config.engineBase) || '/';
-            var l = document.createElement('link');
-            l.rel = 'prefetch';
-            l.href = base + 'index.wasm';
-            l.as = 'fetch';
-            l.crossOrigin = 'anonymous';
-            document.head.appendChild(l);
+            var c = window.KrKr2Config || {};
+            var base = c.engineBase || c.assetBase || '/';
+            [['index.wasm', 'fetch'], ['index.js', 'script']].forEach(function (it) {
+                var l = document.createElement('link');
+                l.rel = 'prefetch';
+                l.href = base + it[0];
+                l.as = it[1];
+                // 同源时 crossorigin 反而会让预热的响应与后续真实请求
+                // 不共用缓存条目，白下一次。仅跨源才加。
+                if (/^https?:\/\//i.test(base)) l.crossOrigin = 'anonymous';
+                document.head.appendChild(l);
+            });
         })();
     </script>
 

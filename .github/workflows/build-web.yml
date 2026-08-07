@@ -214,6 +214,15 @@ jobs:
 
           put index.wasm application/wasm
           put assets.zip application/zip
+          # glue 与构建配置也上传：/engine/* 是同源路由（Worker 读 R2 后按
+          # 同源返回），glue 放这里一样能正确定位 pthread worker 脚本。
+          # 全都在 R2，Cloudflare 的构建环境就完全不需要引擎产物在场了 ——
+          # 它编译不了 C++，这是唯一能让它独立产出可用页面的办法。
+          put index.js "text/javascript; charset=utf-8"
+          put build-config.js "text/javascript; charset=utf-8"
+          if [ -f out/web/release/index.worker.js ]; then
+            put index.worker.js "text/javascript; charset=utf-8"
+          fi
 
           {
             echo "### 引擎已上传 R2"

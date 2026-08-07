@@ -52,7 +52,8 @@ const displayTitle = computed(() => {
 });
 const busy = computed(() => phase.value !== 'running' && !errorInfo.value && !fatal.value);
 
-const assetBase = () => (window.KrKr2Config?.assetBase) || '/';
+const engineBase = () => (window.KrKr2Config?.engineBase) ||
+                         (window.KrKr2Config?.assetBase) || '/';
 
 function exitToGallery() {
     // 整页跳转，不是路由切换：引擎是硬单例，必须靠 Document 销毁
@@ -141,10 +142,14 @@ onMounted(async () => {
 
     // 引擎脚本必须用绝对地址：当前页在 /play/<id>，
     // 相对的 'index.js' 会解析成 /play/index.js 而 404。
+    //
+    // 取 engineBase 而非 assetBase：走 R2 时 glue 也在 /engine/<版本>/ 下。
+    // 那条路由是同源的（Worker 读 R2 后按同源返回），所以 glue 顶部的
+    // _scriptName 照样能正确定位 pthread worker 脚本。
     boot({
         canvas: canvas.value,
         renderer,
-        engineScript: assetBase() + 'index.js'
+        engineScript: engineBase() + 'index.js'
     });
 
     if (isLocalMode) return;   // 等 LocalPicker 给数据源
