@@ -41,6 +41,8 @@ option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(KRKR2_WEB_DEBUG_ENABLE_ASAN "enable AddressSanitizer in Web Debug builds" ON)
 option(KRKR2_WEB_ENABLE_SOURCE_MAP "emit a WebAssembly source map for Web builds" OFF)
+option(KRKR2_WEB_LOGO_CHAIN_TRACE
+    "retain spdlog for the Web logo-chain diagnostic build" OFF)
 option(KRKR2_ENABLE_WASMTIME_HEADLESS "build the generic Wasmtime headless debug runner" OFF)
 if(NOT DEFINED KRKR2_USE_STUB_SPDLOG)
     set(_KRKR2_USE_STUB_SPDLOG_DEFAULT OFF)
@@ -51,7 +53,13 @@ if(NOT DEFINED KRKR2_USE_STUB_SPDLOG)
         "use the no-op spdlog stub package")
 endif()
 
-if(KRKR2_USE_STUB_SPDLOG)
+set(_KRKR2_EFFECTIVE_USE_STUB_SPDLOG ${KRKR2_USE_STUB_SPDLOG})
+if(KRKR2_WEB_LOGO_CHAIN_TRACE)
+    set(_KRKR2_EFFECTIVE_USE_STUB_SPDLOG OFF)
+    message(STATUS "Web logo-chain diagnostics enabled: retaining spdlog")
+endif()
+
+if(_KRKR2_EFFECTIVE_USE_STUB_SPDLOG)
     set(spdlog_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/spdlog_stub" CACHE PATH
         "stub spdlog package path" FORCE)
     message(STATUS "Using no-op spdlog stub")

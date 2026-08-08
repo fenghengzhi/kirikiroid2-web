@@ -34,6 +34,7 @@ jobs:
       EMSDK: ${{ github.workspace }}/.emsdk
       BUILD_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
       KRKR2_WEB_SOURCE_MAP: ${{ (github.event_name == 'workflow_run' && startsWith(github.event.workflow_run.head_branch, 'dev/')) || (github.event_name != 'workflow_run' && startsWith(github.ref_name, 'dev/')) }}
+      KRKR2_WEB_LOGO_CHAIN_TRACE: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'dev/yuzu-logo-chain-trace') || (github.event_name != 'workflow_run' && github.ref_name == 'dev/yuzu-logo-chain-trace')) && 'ON' || 'OFF' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,9 +115,10 @@ jobs:
       - name: Configure CMake
         run: |
           set -o pipefail
-          echo "Build branch: $BUILD_BRANCH; source map: $KRKR2_WEB_SOURCE_MAP"
+          echo "Build branch: $BUILD_BRANCH; source map: $KRKR2_WEB_SOURCE_MAP; logo trace: $KRKR2_WEB_LOGO_CHAIN_TRACE"
           cmake --preset "Web Release Config" \
             -DKRKR2_WEB_ENABLE_SOURCE_MAP="$KRKR2_WEB_SOURCE_MAP" \
+            -DKRKR2_WEB_LOGO_CHAIN_TRACE="$KRKR2_WEB_LOGO_CHAIN_TRACE" \
             2>&1 | tee /tmp/cmake-configure.log
 
       - name: Pre-build Emscripten ports
@@ -127,6 +129,14 @@ jobs:
         run: |
           set -o pipefail
           cmake --build out/web/release 2>&1 | tee /tmp/cmake-build.log
+
+      # The trace queries are EM_ASM callbacks executed inside the pthread
+      # worker. They cannot read the page's window or query string there, so
+      # this diagnostic artifact makes every validated callback unconditional.
+      - name: Enable logo-chain diagnostics in generated glue
+        if: env.KRKR2_WEB_LOGO_CHAIN_TRACE == 'ON'
+        run: |
+          node platforms/web/patch_logo_chain_trace.mjs out/web/release/index.js
 
       - name: Upload logs on failure
         if: failure()
@@ -168,7 +178,9 @@ jobs:
       # pthread worker 的坑，build-config.js 带着 initialMemory 权威值，
       # 两者都必须与页面同源。
       - name: Check R2 credentials
-        if: success()
+        # Diagnostic glue retains verbose logging and must never replace the
+        # production engine stored under the flat R2 keys.
+        if: success() && env.KRKR2_WEB_LOGO_CHAIN_TRACE != 'ON'
         run: |
           if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && \
              [ -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
@@ -235,4 +247,3 @@ jobs:
             echo "R2 里只保留一份（本次已覆盖）。历史版本见本次运行的"
             echo "\`web-engine\` artifact。"
           } >> "$GITHUB_STEP_SUMMARY"
-
