@@ -24,6 +24,7 @@ on:
 
 env:
   EMSDK_VERSION: "4.0.23"
+  EM_CACHE: ${{ github.workspace }}/.emsdk/.emscripten_cache
 
 jobs:
   build-web:
@@ -75,6 +76,13 @@ jobs:
           echo "${{ env.EMSDK }}/upstream/emscripten" >> $GITHUB_PATH
           echo "$(dirname $(find ${{ env.EMSDK }}/node -name node -type f | head -1))" >> $GITHUB_PATH
 
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        id: vcpkg-cache
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -111,6 +119,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.18
         with:
           key: ${{ github.job }}
+          max-size: "2G"
 
       - name: Configure CMake
         run: |
@@ -196,6 +205,8 @@ jobs:
         with:
           # wrangler 4 低于 22 直接拒绝启动
           node-version: '22'
+          cache: npm
+          cache-dependency-path: platforms/web/webui/package-lock.json
 
       - name: Upload engine to R2
         if: ${{ env.HAS_R2 == 'true' }}

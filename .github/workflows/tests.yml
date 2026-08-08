@@ -15,6 +15,7 @@ on:
 
 env:
   EMSDK_VERSION: "3.1.64"
+  EM_CACHE: ${{ github.workspace }}/.emsdk/.emscripten_cache
 
 jobs:
   tests:
@@ -88,6 +89,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.18
         with:
           key: tests
+          max-size: "2G"
 
       # ── Unit tests (native Linux build) ──
       - name: Configure native build

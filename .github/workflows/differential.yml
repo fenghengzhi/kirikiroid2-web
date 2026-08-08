@@ -27,6 +27,7 @@ on:
 
 env:
   EMSDK_VERSION: "4.0.23"
+  EM_CACHE: ${{ github.workspace }}/.emsdk/.emscripten_cache
   FRIDA_VERSION: "16.4.10"
   APKTOOL_VERSION: "3.0.1"
   ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
@@ -151,6 +152,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.18
         with:
           key: ${{ github.job }}
+          max-size: "2G"
 
       - name: Build WASM + run LLDB guest-debug differential tests
         run: |
