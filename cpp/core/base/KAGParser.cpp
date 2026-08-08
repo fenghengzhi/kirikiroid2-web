@@ -1787,6 +1787,7 @@ parse_start:
     static ttstr __storage_name(TJSMapGlobalStringMap(TJS_W("storage")));
     static ttstr __target_name(TJSMapGlobalStringMap(TJS_W("target")));
     static ttstr __exp_name(TJSMapGlobalStringMap(TJS_W("exp")));
+    static ttstr __escape_name(TJSMapGlobalStringMap(TJS_W("escape")));
 
     while(true) {
         DicClear->FuncCall(0, nullptr, nullptr, nullptr, 0, nullptr, DicObj);
@@ -2218,11 +2219,21 @@ parse_start:
                             TVPExecuteExpression(exp, Owner, &val);
                             exp = val;
 
+                            // libkrkr2.so sub_561F3C @ 0x561F3C: emb defaults
+                            // to escaping '[' and accepts an explicit escape
+                            // attribute to leave generated tags executable.
+                            bool escape = true;
+                            DicObj->PropGet(0, __escape_name.c_str(),
+                                            __escape_name.GetHint(), &val,
+                                            DicObj);
+                            if(val.Type() != tvtVoid)
+                                escape = val.operator bool();
+
                             // count '['
                             const tjs_char *p = exp.c_str();
                             tjs_int r_count = 0;
                             while(*p) {
-                                if(*p == TJS_W('['))
+                                if(escape && *p == TJS_W('['))
                                     r_count++;
                                 p++;
                                 r_count++;
@@ -2246,7 +2257,7 @@ parse_start:
                             // escape '['
                             p = exp.c_str();
                             while(*p) {
-                                if(*p == TJS_W('[')) {
+                                if(escape && *p == TJS_W('[')) {
                                     *d = TJS_W('[');
                                     d++;
                                     *d = TJS_W('[');
