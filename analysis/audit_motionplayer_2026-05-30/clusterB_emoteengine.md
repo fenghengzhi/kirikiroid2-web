@@ -174,10 +174,15 @@ sub_67d4d0 are container/dispatch plumbing, classified non-logic (see neighbors 
   (ResourceManager_loadResource consumer); IDB rename updated and saved.
 - sub_67F370 = EmoteObject_applyChara_67F370 — `sub_6B2AE8(player,0,&var)` thin wrapper
   (chara/motion apply). Plumbing. (renamed in IDB)
-- ttstr_doubleMap_upsert @0x686944 — VERIFIED shared HM upsert (hash mix 1025/6/9/32769/11 over
-  c_str+68 cached hash; node new(0x20){next,ttstr key+AddRef,value,hash}; returns node+16). Local
-  detail::ttstr_hash (internal/ttstr_hash.h:35-40) reproduces the 1025/6/32769/11 mix ✓. The
-  node-chain insertion order it builds is what P0-B4's bind-loop depends on.
+- ttstr_doubleMap_upsert @0x686944 — VERIFIED shared HM upsert (node
+  new(0x20){next,ttstr key+AddRef,value,hash}; returns node+16). **2026-07-26 correction
+  (supersedes the old complete-alignment implication):** local `detail::ttstr_hash` did reproduce the
+  1025/6/9/32769/11 arithmetic mix, but the old functor collapsed null `Ptr` into the empty payload and
+  skipped backing-rep `Hint@+68`. Fresh decompiles at `0x6F52AC`, `0x686944`, `0x6F2674`, `0x689760`,
+  `0x6885CC`, and `0x6E2060/0x6E2150/0x6E2484/0x6E2574` prove the complete contract now implemented:
+  null→0, reuse nonzero Hint, compute and write Hint otherwise, and map a zero result for non-null input
+  to `0xFFFFFFFF`. The node-chain insertion order is unchanged and remains what P0-B4's bind-loop
+  depends on.
 
 ================================================================================
 ## Cluster verdict: 🔧 NEEDS ARCHITECTURAL REWORK (progress dataflow) + ⚠️ partial elsewhere

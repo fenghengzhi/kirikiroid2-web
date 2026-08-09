@@ -16,20 +16,14 @@
 using PSB::PSBFile;
 using PSB::PSBRawNode;
 
-namespace PSB::detail {
-    static void throwUnknownType() {
-        TVPThrowExceptionMessage(
-            TJS_W("psb: internal error: unknown internal type detected.\n"));
-    }
-} // namespace PSB::detail
-
 namespace PSB {
     PSBValueDispatch::PSBValueDispatch(
-        PSB::PSBRawOwner *const *ownerSlot, const std::uint8_t *node) :
+        const PSBFile &file, const std::uint8_t *node) :
         // sub_597AD4 @ 0x597AD4 first dereferences X1 as an owner slot, then
         // copies that owner and performs AddRef; node arrives separately in
-        // X2.  Its three callers have no by-value holder temporary lifetime.
-        value_(*ownerSlot, node) {}
+        // X2. iOS @0x1000EC248 independently preserves standalone-holder and
+        // raw-node-first-subobject callers with the same factorization.
+        value_(file, node) {}
 
     void PSBValueDispatch::decodeName_guess(
         std::string &name, std::uint32_t nameIndex) const {
@@ -41,8 +35,9 @@ namespace PSB {
 
     const char *
     PSBValueDispatch::getString_guess(const std::uint8_t *node) const {
-        // sub_596BC4 @ 0x596BC4 is a distinct dispatch member even though no
-        // code xref survives in libkrkr2.so. It reads owner from value_.
+        // sub_596BC4 @ 0x596BC4 is the distinct dispatch member whose complete
+        // body is inlined into CreateVariant @0x596834..0x596AB0.  Keep the
+        // source member call even though no BL/xref survives the optimizer.
         const PSBRawHeader *header = value_.GetOwner()->GetHeader();
         const detail::PsbArray_guess offsets(header->strings);
         std::uint32_t index = 0;
@@ -134,10 +129,11 @@ namespace PSB {
             return TJS_E_INVALIDOBJECT;
         }
 
-        // sub_597854 @ 0x597894 reads the raw node tag and owns this
-        // switch; GetTypeCategory @ 0x599554 is not in its call chain.
-        switch(value_.GetNode()[0]) {
-            case 0x20:
+        // sub_597854 @ 0x597894 contains the complete inlined classifier
+        // clone.  The same-source iOS build retains its call to the shared
+        // classifier before selecting Array/Dictionary.
+        switch(detail::GetTypeCategory_guess(value_.GetNode()[0])) {
+            case 6:
                 if(TJS_strcmp(membername, TJS_W("count")) == 0) {
                     // sub_597854 @ 0x5979F8 writes through result without
                     // a null guard, preserving the dispatch ABI boundary.
@@ -173,7 +169,7 @@ namespace PSB {
                     return TJS_S_OK;
                 }
                 break;
-            case 0x21: {
+            case 7: {
                 // sub_597854 @ 0x59795C constructs exactly one narrow holder;
                 // the same Buf feeds both packed dictionary lookups and the
                 // holder is destroyed on both the hit and miss paths.
@@ -185,63 +181,20 @@ namespace PSB {
                     std::uint32_t valueOffset;
                     if(detail::FindDictionaryValueOffset_guess(
                            value_.GetNode() + 1, nameIndex, valueOffset)) {
-                        assign(result,
-                               value_.GetNode() + 1 + valueOffset);
+                        CreateVariant_guess(
+                            result, value_.GetNode() + 1 + valueOffset);
                         return TJS_S_OK;
                     }
                 }
                 break;
             }
-            case 0x01:
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c:
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x1d:
-            case 0x1e:
-            case 0x1f:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x27:
-            case 0x28:
-            case 0x29:
-            case 0x2c:
-            case 0x2d:
-            case 0x2e:
-            case 0x2f:
-            case 0x30:
-            case 0x31:
-            case 0x33:
-            case 0x34:
-            case 0x35:
-            case 0x37:
-            case 0x38:
-            case 0x39:
-            case 0x3b:
-            case 0x3c:
-            case 0x3d:
-            case 0x3f:
-            case 0x41:
-                break;
+            case 0:
+            case 1:
+            case 2:
+            case 3:
+            case 4:
+            case 5:
             default:
-                detail::throwUnknownType();
                 break;
         }
 
@@ -259,62 +212,11 @@ namespace PSB {
         if(!valid_ || value_.GetOwner() == nullptr) {
             return TJS_E_INVALIDOBJECT;
         }
-        // sub_5976C4 @ 0x5976DC performs its own raw-tag switch.
-        switch(value_.GetNode()[0]) {
-            case 0x20:
-                break;
-            case 0x01:
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c:
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x1d:
-            case 0x1e:
-            case 0x1f:
-            case 0x21:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x27:
-            case 0x28:
-            case 0x29:
-            case 0x2c:
-            case 0x2d:
-            case 0x2e:
-            case 0x2f:
-            case 0x30:
-            case 0x31:
-            case 0x33:
-            case 0x34:
-            case 0x35:
-            case 0x37:
-            case 0x38:
-            case 0x39:
-            case 0x3b:
-            case 0x3c:
-            case 0x3d:
-            case 0x3f:
-            case 0x41:
-                return TJS_E_MEMBERNOTFOUND;
-            default:
-                detail::throwUnknownType();
-                return TJS_E_MEMBERNOTFOUND;
+        // sub_5976C4 @ 0x5976DC contains the same classifier clone.  Its
+        // same-source iOS counterpart retains the shared call and compares
+        // the returned category with Array (6).
+        if(detail::GetTypeCategory_guess(value_.GetNode()[0]) != 6) {
+            return TJS_E_MEMBERNOTFOUND;
         }
         const std::uint8_t *packed = value_.GetNode() + 1;
         // sub_5976C4 @ 0x59770C..0x597778 expands the first count decoder.
@@ -367,7 +269,8 @@ namespace PSB {
         // then adds the relative address to packed with SXTW.
         const std::uint32_t relativeOffset =
             offsets.nBytes + offsets[static_cast<std::uint32_t>(index)];
-        assign(result, packed + static_cast<std::int32_t>(relativeOffset));
+        CreateVariant_guess(
+            result, packed + static_cast<std::int32_t>(relativeOffset));
         return TJS_S_OK;
     }
 
@@ -390,62 +293,12 @@ namespace PSB {
         if(membername != nullptr) {
             return TJS_E_NOTIMPL;
         }
-        // sub_5975E0 @ 0x59760C likewise switches on the raw tag here.
-        switch(value_.GetNode()[0]) {
-            case 0x20:
-                break;
-            case 0x01:
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c:
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x1d:
-            case 0x1e:
-            case 0x1f:
-            case 0x21:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x27:
-            case 0x28:
-            case 0x29:
-            case 0x2c:
-            case 0x2d:
-            case 0x2e:
-            case 0x2f:
-            case 0x30:
-            case 0x31:
-            case 0x33:
-            case 0x34:
-            case 0x35:
-            case 0x37:
-            case 0x38:
-            case 0x39:
-            case 0x3b:
-            case 0x3c:
-            case 0x3d:
-            case 0x3f:
-            case 0x41:
-                return TJS_E_NOTIMPL;
-            default:
-                detail::throwUnknownType();
-                return TJS_E_NOTIMPL;
+        // PSBValueDispatch_GetCount @ 0x59760C contains the category-6
+        // specialized Android O3 inline classifier residual. Same-lineage
+        // iOS arm64 @0x1000EC8E0 retains the shared call.
+        // A classifier helper-return of -1 still maps to TJS_E_NOTIMPL.
+        if(detail::GetTypeCategory_guess(value_.GetNode()[0]) != 6) {
+            return TJS_E_NOTIMPL;
         }
         // sub_5975E0 @ 0x59763C..0x5976A4 expands this decoder at the
         // GetCount call site and maps an unknown count tag to zero.
@@ -491,70 +344,24 @@ namespace PSB {
             return TJS_E_NOTIMPL;
         }
 
+        // sub_596E24 @ 0x596E3C..0x596EB4 contains the complete
+        // category-specialized classifier residual. Same-lineage iOS arm64
+        // @0x1000EC350 retains the shared classifier call.
         const tjs_char *expected = nullptr;
-        switch(value_.GetType()) {
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x2c:
+        switch(detail::GetTypeCategory_guess(value_.GetType())) {
+            case 4:
                 expected = TJS_W("String");
                 break;
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x2d:
+            case 5:
                 expected = TJS_W("Octet");
                 break;
-            case 0x20:
+            case 6:
                 expected = TJS_W("Array");
                 break;
-            case 0x21:
+            case 7:
                 expected = TJS_W("Dictionary");
                 break;
-            case 0x01:
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c:
-            case 0x1d:
-            case 0x1e:
-            case 0x1f:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x27:
-            case 0x28:
-            case 0x29:
-            case 0x2e:
-            case 0x2f:
-            case 0x30:
-            case 0x31:
-            case 0x33:
-            case 0x34:
-            case 0x35:
-            case 0x37:
-            case 0x38:
-            case 0x39:
-            case 0x3b:
-            case 0x3c:
-            case 0x3d:
-            case 0x3f:
-            case 0x41:
-                return TJS_S_FALSE;
             default:
-                detail::throwUnknownType();
-                // sub_596E24 @ 0x596EAC returns TJS_S_FALSE if the
-                // exception helper unexpectedly returns.
                 return TJS_S_FALSE;
         }
         return TJS_strcmp(classname, expected) == 0 ? TJS_S_TRUE
@@ -567,80 +374,13 @@ namespace PSB {
         if(!valid_ || value_.GetOwner() == nullptr) {
             return TJS_E_INVALIDOBJECT;
         }
-        // PSBValueDispatch_EnumMembers @ 0x596F98 classifies the raw tag in
-        // this function.  The unknown-tag block @ 0x59748C..0x59749C writes
-        // -1 after the throw helper if that helper unexpectedly returns.
-        int category = 0;
-        switch(value_.GetNode()[0]) {
-            case 0x01:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x3f:
-                break;
-            case 0x02:
-            case 0x03:
-            case 0x27:
-            case 0x2f:
-            case 0x33:
-            case 0x37:
-            case 0x3b:
-                category = 1;
-                break;
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c:
-            case 0x28:
-            case 0x29:
-            case 0x30:
-            case 0x31:
-            case 0x34:
-            case 0x35:
-            case 0x38:
-            case 0x39:
-            case 0x3c:
-            case 0x3d:
-                category = 2;
-                break;
-            case 0x1d:
-            case 0x1e:
-            case 0x1f:
-            case 0x2e:
-            case 0x41:
-                category = 3;
-                break;
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x2c:
-                category = 4;
-                break;
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x2d:
-                category = 5;
-                break;
-            case 0x20:
-                category = 6;
-                break;
-            case 0x21:
-                category = 7;
-                break;
-            default:
-                detail::throwUnknownType();
-                category = -1;
-                break;
-        }
+        // PSBValueDispatch_EnumMembers @ 0x596F98 contains the complete
+        // Android O3 inline classifier clone. Same-lineage iOS arm64
+        // @0x1000EC4AC retains the shared call. The
+        // classifier's -1 continuation preserves @0x59749C if its throw
+        // helper unexpectedly returns.
+        int category =
+            detail::GetTypeCategory_guess(value_.GetNode()[0]);
 
         tTJSVariant name;
         tTJSVariant memberFlags;
@@ -667,7 +407,7 @@ namespace PSB {
             for(tjs_int index = 0; index < count; ++index) {
                 name = ttstr(index);
                 if(!noValue) {
-                    assign(
+                    CreateVariant_guess(
                         &memberValue,
                         packed + offsets.nBytes +
                             offsets[static_cast<std::uint32_t>(index)]);
@@ -688,10 +428,12 @@ namespace PSB {
                 if(!noValue) {
                     // PSBValueDispatch_EnumMembers @ 0x597388..0x59739C
                     // adds the table-end displacement and entry offset in W8,
-                    // then zero-extends that wrapped value from node + 1.
+                    // then reloads self->node after the preceding callback
+                    // before adding the zero-extended wrapped offset and +1.
                     const std::uint32_t relativeOffset = keys.nBytes +
                         offsets.nBytes + offsets[index];
-                    assign(&memberValue, packed + relativeOffset);
+                    CreateVariant_guess(
+                        &memberValue, value_.GetNode() + relativeOffset + 1);
                 }
                 callback->FuncCall(0, nullptr, nullptr, &callbackResult,
                                    noValue ? 2 : 3, params, this);
@@ -812,218 +554,121 @@ namespace PSB {
 
     tjs_error PSBValueDispatch::Reserved3() { return TJS_E_NOTIMPL; }
 
-    tTJSVariant *PSBValueDispatch::assign(tTJSVariant *result,
-                                          const std::uint8_t *node) {
+    tTJSVariant *PSBValueDispatch::CreateVariant_guess(
+        tTJSVariant *result, const std::uint8_t *node) {
         // sub_59673C @ 0x59673C decodes scalars on demand and creates a
         // fresh owner-sharing dispatch only for list/dictionary nodes.
         // It is a dispatch member: owner reads come from this->value_
         // rather than an owner argument.  It also assumes a non-null
-        // output and dereferences it on every tag.
+        // output and dereferences it on every normal value-producing tag;
+        // an unknown-type throw helper that unexpectedly returns reaches the
+        // common pointer return without dereferencing it.
         // Every normal branch returns that same output address through
         // X0 at 0x596B88.  Pointer versus reference source spelling is ABI-
         // indistinguishable; retaining the existing pointer parameter avoids
         // inventing a different caller shape.
-        switch(node[0]) {
-            case 0x01:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x3f:
+        // sub_59673C's flattened raw-tag jump table is the Android -O3
+        // residual of the same classifier used by sub_599554.  Restore the
+        // source-level category call and keep every category-local default.
+        switch(detail::GetTypeCategory_guess(node[0])) {
+            case 0:
                 result->Clear();
                 break;
-            case 0x02:
-                *result = true;
+            case 1: {
+                bool boolean = false;
+                switch(node[0]) {
+                    case 0x02:
+                        boolean = true;
+                        break;
+                    case 0x03:
+                        break;
+                    default:
+                        TVPThrowExceptionMessage(
+                            TJS_W("psb: can't convert value to bool."));
+                        break;
+                }
+                *result = boolean;
                 break;
-            case 0x03:
-                *result = false;
-                break;
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c: {
-                // sub_59673C @ 0x5967B4..0x596A10 owns this nested integer
-                // decoder; it does not call the raw-node decoder at 0x5992E8.
+            }
+            case 2: {
+                // 0x5967B4..0x596A10 contains the complete inline copies of
+                // the shared narrow/wide integer decoders.  The float/double
+                // arms are source-level dead under category 2 but survive in
+                // the Android body and therefore remain explicit here.
                 tjs_int64 integer = 0;
                 switch(node[0]) {
                     case 0x04:
-                        break;
                     case 0x05:
-                        integer = static_cast<std::int8_t>(node[1]);
-                        break;
                     case 0x06:
-                        integer =
-                            detail::ReadUnaligned_guess<std::int16_t>(node + 1);
-                        break;
-                    case 0x07: {
-                        const std::uint32_t raw =
-                            detail::ReadUnaligned_guess<std::uint16_t>(
-                                node + 1) |
-                            (static_cast<std::uint32_t>(node[3]) << 16);
-                        integer = static_cast<std::int32_t>(raw << 8) >> 8;
-                        break;
-                    }
+                    case 0x07:
                     case 0x08:
-                        integer =
-                            detail::ReadUnaligned_guess<std::int32_t>(node + 1);
+                        integer = detail::DecodeInteger32_guess(node);
                         break;
-                    case 0x09: {
-                        std::uint64_t raw =
-                            detail::ReadUnaligned_guess<std::uint32_t>(
-                                node + 1) |
-                            (static_cast<std::uint64_t>(node[5]) << 32);
-                        if((node[5] & 0x80u) != 0) {
-                            raw |= 0xffffff0000000000ull;
-                        }
-                        integer = static_cast<tjs_int64>(raw);
-                        break;
-                    }
-                    case 0x0a: {
-                        std::uint64_t raw =
-                            detail::ReadUnaligned_guess<std::uint32_t>(
-                                node + 1) |
-                            (static_cast<std::uint64_t>(
-                                 detail::ReadUnaligned_guess<std::uint16_t>(
-                                     node + 5))
-                             << 32);
-                        if((node[6] & 0x80u) != 0) {
-                            raw |= 0xffff000000000000ull;
-                        }
-                        integer = static_cast<tjs_int64>(raw);
-                        break;
-                    }
+                    case 0x09:
+                    case 0x0a:
                     case 0x0b:
-                        // The Android decoder deliberately leaves its
-                        // seven-byte integer zero-extended.
-                        integer = static_cast<tjs_int64>(
-                            detail::ReadUnaligned_guess<std::uint32_t>(
-                                node + 1) |
-                            (static_cast<std::uint64_t>(
-                                 detail::ReadUnaligned_guess<std::uint16_t>(
-                                     node + 5))
-                             << 32) |
-                            (static_cast<std::uint64_t>(node[7]) << 48));
-                        break;
                     case 0x0c:
-                        integer =
-                            detail::ReadUnaligned_guess<tjs_int64>(node + 1);
+                        integer = detail::DecodeInteger64_guess(node);
+                        break;
+                    case 0x1d:
+                        break;
+                    case 0x1e:
+                        integer = static_cast<tjs_int64>(
+                            detail::ReadUnaligned_guess<float>(node + 1));
+                        break;
+                    case 0x1f:
+                        integer = static_cast<tjs_int64>(
+                            detail::ReadUnaligned_guess<double>(node + 1));
                         break;
                     default:
+                        TVPThrowExceptionMessage(
+                            TJS_W("psb: can't convert value to long int."));
                         break;
                 }
                 *result = integer;
                 break;
             }
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x2c: {
-                const PSBRawHeader *header = value_.GetOwner()->GetHeader();
-                const detail::PsbArray_guess offsets(header->strings);
-                std::uint32_t index = 0;
-                switch(node[0]) {
-                    case 0x15:
-                        index = node[1];
-                        break;
-                    case 0x16:
-                        index = detail::ReadUnaligned_guess<std::uint16_t>(
-                            node + 1);
-                        break;
-                    case 0x17:
-                        index = detail::ReadUnaligned_guess<std::uint32_t>(
-                                    node + 1) &
-                            0xffffffu;
-                        break;
-                    case 0x18:
-                        index = detail::ReadUnaligned_guess<std::uint32_t>(
-                            node + 1);
-                        break;
-                    default:
-                        break;
-                }
+            case 3:
+                // 0x596A1C..0x596A38 is the category-constrained inline
+                // residual of the same raw double decoder used by 0x5992E8.
+                *result = detail::DecodeNumberAsDouble_guess(node);
+                break;
+            case 4: {
                 // sub_59673C @ 0x596AB0 calls the narrow-string Variant
                 // assignment directly, releasing the old result before the
-                // new string allocation.  A ttstr temporary reverses that
-                // exceptional lifetime and adds an AddRef/Release pair.
-                *result = reinterpret_cast<const char *>(
-                    header->stringsData + offsets[index]);
+                // new string allocation.  getString_guess @0x596BC4 is the
+                // source-level member whose body the optimizer inlined here;
+                // no ttstr temporary is introduced.
+                *result = getString_guess(node);
                 break;
             }
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x2d: {
-                // sub_59673C leaves size uninitialized when chunkData is
-                // null; tTJSVariant's null-octet constructor does not consume
-                // it.  Preserve that source-level boundary.
-                const PSBRawHeader *header = value_.GetOwner()->GetHeader();
-                const std::uint8_t *data;
+            case 5: {
+                // sub_59673C leaves size uninitialized when chunkData is null.
+                // getResource_guess @0x596C70 is the source-level member whose
+                // complete body the Android optimizer inlined at
+                // 0x59686C..0x596B5C.
                 std::uint32_t size;
-                if(header->chunkData != nullptr) {
-                    const detail::PsbArray_guess offsets(
-                        header->chunkOffsets);
-                    const detail::PsbArray_guess lengths(
-                        header->chunkLengths);
-                    std::uint32_t index = 0;
-                    switch(node[0]) {
-                        case 0x19:
-                            index = node[1];
-                            break;
-                        case 0x1a:
-                            index =
-                                detail::ReadUnaligned_guess<std::uint16_t>(
-                                    node + 1);
-                            break;
-                        case 0x1b:
-                            index =
-                                detail::ReadUnaligned_guess<std::uint32_t>(
-                                    node + 1) &
-                                0xffffffu;
-                            break;
-                        case 0x1c:
-                            index =
-                                detail::ReadUnaligned_guess<std::uint32_t>(
-                                    node + 1);
-                            break;
-                        default:
-                            break;
-                    }
-                    size = lengths[index];
-                    data = header->chunkData + offsets[index];
-                } else {
-                    data = nullptr;
-                }
-                // PSBValueDispatch_assign_guess @ 0x596B50..0x596B74 calls
+                const std::uint8_t *data = getResource_guess(node, size);
+                // PSBValueDispatch_CreateVariant_guess @ 0x596B50..0x596B74 calls
                 // TJSAllocVariantOctet_guess @ 0xA0E0F4; for non-null,
                 // non-empty data it starts at ref=1.  Then
                 // tTJSVariant_CopyRef_guess @ 0xA0FB64 retains it before
                 // releasing the old result.  Destruction of the temporary
                 // through 0xA0F778/0xA0F790 drops that extra reference,
                 // leaving the copied result as the sole non-null Octet owner.
-                *result = tTJSVariant(data, size);
+                // Android @0x596870..0x596978 never reads either packed table
+                // or size on the null path.  Passing plain `size` here is C++
+                // UB even though the inlined constructor ignores it when data
+                // is null; current Clang -O3 exploited that UB and erased the
+                // gate.  The zero is an unavoidable compiler-boundary operand,
+                // not evidence that the original source initialized `size`.
+                *result = tTJSVariant(data, data != nullptr ? size : 0);
                 break;
             }
-            case 0x1d:
-                *result = static_cast<tjs_real>(0.0);
-                break;
-            case 0x1e:
-                *result = static_cast<tjs_real>(
-                    detail::ReadUnaligned_guess<float>(node + 1));
-                break;
-            case 0x1f:
-                *result = detail::ReadUnaligned_guess<double>(node + 1);
-                break;
-            case 0x20:
-            case 0x21: {
-                auto *dispatch = new PSBValueDispatch(
-                    value_.GetOwnerSlotAddress_guess(), node);
+            case 6:
+            case 7: {
+                auto *dispatch =
+                    new PSBValueDispatch(value_.GetFile_guess(), node);
                 // 0x5968F8..0x596958 starts at ref=1, installs the same
                 // dispatch in Object and ObjThis (ref=3), CopyRefs both slots
                 // into result (ref=5), destroys the temporary (ref=3), then
@@ -1033,43 +678,10 @@ namespace PSB {
                 dispatch->Release();
                 break;
             }
-            case 0x27:
-            case 0x2f:
-            case 0x33:
-            case 0x37:
-            case 0x3b:
-                TVPThrowExceptionMessage(
-                    TJS_W("psb: can't convert value to bool."));
-                // sub_59673C @ 0x5968C8..0x5968D4 preserves the
-                // helper-return continuation as Boolean false.
-                *result = false;
-                break;
-            case 0x28:
-            case 0x29:
-            case 0x30:
-            case 0x31:
-            case 0x34:
-            case 0x35:
-            case 0x38:
-            case 0x39:
-            case 0x3c:
-            case 0x3d:
-                TVPThrowExceptionMessage(
-                    TJS_W("psb: can't convert value to long int."));
-                // sub_59673C @ 0x59698C..0x596A18 preserves the
-                // helper-return continuation as Integer zero.
-                *result = static_cast<tjs_int64>(0);
-                break;
-            case 0x2e:
-            case 0x41:
-                TVPThrowExceptionMessage(
-                    TJS_W("psb: can't convert value to double."));
-                // sub_59673C @ 0x59696C..0x596A38 preserves the
-                // helper-return continuation as Real zero.
-                *result = static_cast<tjs_real>(0.0);
-                break;
             default:
-                detail::throwUnknownType();
+                // The classifier already emitted the internal-type diagnostic.
+                // If that helper unexpectedly returns -1, Android reaches the
+                // common return without touching the existing result.
                 break;
         }
         return result;
@@ -1085,8 +697,7 @@ namespace PSB {
         }
         // Returning the fresh reference lets ncbind's dispatch convertor
         // create the variant and release that initial reference.
-        return new PSBValueDispatch(GetOwnerSlotAddress_guess(),
-                                    owner->GetHeader()->entries);
+        return new PSBValueDispatch(*this, owner->GetHeader()->entries);
     }
 } // namespace PSB
 

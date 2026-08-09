@@ -48,6 +48,15 @@
 > `0x6A8D8C/0x6A959C/0x6A8CF8` 与 `EmoteObject_init@0x67DBAC` 证伪并删除；
 > 二进制用调用者栈上的 load 返回值，不在 RM 中缓存“最后模块”。
 >
+> **后续纠正 2026-07-26（supersedes 本节旧“hash byte-for-byte”结论）**：
+> `0x6F52AC`、`0x686944`、`0x6F2674`、`0x689760`、`0x6885CC` 以及
+> `0x6E2060/0x6E2150/0x6E2484/0x6E2574` 的 fresh decompile 交叉证明：此前确认的
+> 1025/6/9/32769/11 UTF-16 算术 mix 正确，但旧 `ttstr_hash` functor 直接取
+> `s.c_str()`，把 null `Ptr` 折叠为空串，且没有读写 backing rep 的 `Hint@+68`。
+> 现已补齐源码语义：null `Ptr` 返回 0；非 null 且 `Hint!=0` 直接复用；否则计算并写回
+> `Hint`；非 null 输入的计算结果若为 0 则改为 `0xFFFFFFFF`。因此 P3-A 的容器选型结论
+> 始终成立，但 functor 语义直到 2026-07-26 才真正闭合。
+>
 > 原计划内容存档（已不适用，留作证据轨迹）：
 
 ### 证据
@@ -58,12 +67,12 @@
 | bucket 数组分配 | 0x6a891c(RM ctor) | `this+88 = new(8 * _M_next_bkt(0xA))`，`this+96`=bucketCount（libstdc++ unordered_map 初始化）|
 | 填充路径 | ResourceManager_loadResource → sub_6EB9E4(findOrInsert) | 按**完整 PATH ttstr** 插入，`value+16`=解析后 PSB 模块 dict |
 | 本地现状 | — | `_state->loadedModules` = `std::unordered_map<std::string, tTJSVariant>`（小写 path key）；`findLoaded`/`findSource` 读它 |
-| 已有设施 | — | `internal/ttstr_hash.h` 已 byte-for-byte 复刻该 FNV；4 个 Player HashMap 已用 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>` 选型 |
+| 已有设施 | — | **历史记录（已 superseded）**：当时仅 1025/6/9/32769/11 算术 mix 对齐，旧 `ttstr_hash` 尚缺 null `Ptr`→0 与 `Hint@+68` 复用/写回；2026-07-26 已按上述 fresh 证据修复。4 个 Player HashMap 的 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>` 选型一直成立 |
 
 ### 目标形态
 把 `loadedModules` 从 `unordered_map<std::string,...>` 改为与 binary HashMap A 同选型的容器：
 - key = **ttstr**（完整 path），复用 `ttstr_hash`/`ttstr_equal`（与 4 个 Player HM 一致）
-- hash 缓存语义对齐 `ttstr+68`（若 ttstr 复刻体有该 slot；否则记为元素内部数据契约边界）
+- hash functor 语义 = null `Ptr`→0；非 null 先复用 backing rep 的非零 `Hint@+68`，否则计算、将非 null 的零结果规范为 `0xFFFFFFFF` 并写回 `Hint`（2026-07-26 已实装，不再是待定平台边界）
 - value = PSB 模块 dict（`value+16` 对应物）
 
 ### 步骤

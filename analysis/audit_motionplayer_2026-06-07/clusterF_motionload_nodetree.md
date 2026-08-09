@@ -65,7 +65,12 @@
 | type==4 particle Array | sub_704CB8(TJSCreateArrayObject)->node+2296 @0x6b45e4 | TJSCreateArrayObject->particleArrayVar | ✅ 对齐（TJS Array dispatch）|
 | stencilCompositeMaskList | type12+bit2，Player+24 find(RAW)->node+2600 vector + node+1961=1 @0x6B5388 | _nodeLabelMap find(RAW)+stencilCompositeMaskReferenced bool | ⚠️ key 对齐，存储 bool vs ptr-vector |
 | Player+24 容器选型 | std::map<ttstr,int> RB-tree，cmp sub_9B1ED0 | std::map<ttstr,int,ttstr_utf16_less> | ✅ 选型+比较器对齐 |
-| HM1-4 hash | KiriKiri UTF-16 hash | ttstr_hash_utf16（byte-for-byte）| ✅ 对齐 |
+| HM1-4 hash | KiriKiri UTF-16 hash：null `Ptr`→0；非零 Hint 复用；否则计算并写 Hint；非 null 计算结果 0→`0xFFFFFFFF` | 1025/6/9/32769/11 算术 mix 原本正确；旧 functor 的 null/Hint 缺口已于 2026-07-26 修复 | ✅ 当前对齐（旧 “byte-for-byte” 结论已 superseded） |
+
+**2026-07-26 hash 纠正证据**：fresh decompile `0x6F52AC`、`0x686944`、`0x6F2674`、
+`0x689760`、`0x6885CC`、`0x6E2060/0x6E2150/0x6E2484/0x6E2574` 交叉证明上述完整
+functor 语义。旧实现直接调用 `s.c_str()`，会把 null `Ptr` 折叠为空串且完全跳过 backing rep
+的 `Hint@+68`；因此本报告原先的 “byte-for-byte” 判定不成立，仅算术 mix 判定仍成立。
 
 ---
 

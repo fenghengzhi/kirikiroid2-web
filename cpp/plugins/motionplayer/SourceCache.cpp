@@ -84,16 +84,6 @@ namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
 
-    bool getObjectProperty(const tTJSVariant &object,
-                           const tjs_char *name,
-                           tTJSVariant &out) {
-        if(object.Type() != tvtObject || !object.AsObjectNoAddRef()) {
-            return false;
-        }
-        return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGet(
-            0, name, nullptr, &out, object.AsObjectNoAddRef()));
-    }
-
     bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
                                 std::uint32_t c2, std::uint32_t c3) {
         return c0 == 0xFF808080u && c1 == 0xFF808080u && c2 == 0xFF808080u &&
@@ -263,8 +253,14 @@ namespace {
     void decodeObjSourceRL8Like_0x6DA454(
         std::uint8_t *destination, const std::uint8_t *source,
         std::uint32_t sourceSize) {
-        const std::uint8_t *const sourceEnd = source + sourceSize;
-        while(source < sourceEnd) {
+        // sub_6DA454 @0x6DA778 sign-extends the shared 32-bit size and
+        // @0x6DA780 forms sourceEnd before the signed <1 gate.
+        const tjs_int signedSourceSize = signedW32(sourceSize);
+        const std::uint8_t *const sourceEnd = source + signedSourceSize;
+        if(signedSourceSize < 1) {
+            return;
+        }
+        do {
             const std::uint8_t marker = *source++;
             if((marker & 0x80u) != 0) {
                 const size_t count = (marker & 0x7fu) + 3u;
@@ -276,15 +272,20 @@ namespace {
                 destination += count;
                 source += count;
             }
-        }
+        } while(source < sourceEnd);
     }
 
     void decodeObjSourceRL32Like_0x6DA454(
         std::uint8_t *destination, const std::uint8_t *source,
         std::uint32_t sourceSize) {
-        const std::uint8_t *const sourceEnd = source + sourceSize;
+        // The no-palette branch reaches the same signed gate at 0x6DA90C.
+        const tjs_int signedSourceSize = signedW32(sourceSize);
+        const std::uint8_t *const sourceEnd = source + signedSourceSize;
+        if(signedSourceSize < 1) {
+            return;
+        }
         auto *output = reinterpret_cast<tjs_uint32 *>(destination);
-        while(source < sourceEnd) {
+        do {
             const std::uint8_t marker = *source++;
             if((marker & 0x80u) != 0) {
                 tjs_uint32 pixel;
@@ -300,7 +301,7 @@ namespace {
                 output += count;
                 source += byteCount;
             }
-        }
+        } while(source < sourceEnd);
     }
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject) {
@@ -316,75 +317,21 @@ namespace {
         return layer;
     }
 
-    bool getLayerClassVariant(tTJSVariant &layerClassVar) {
+    tTJSVariant createLayerVariantLike_0x6A78F4_0x6A7BA8(
+        const tTJSVariant &owner, const tTJSVariant &parent) {
         iTJSDispatch2 *global = TVPGetScriptDispatch();
-        if(!global) {
-            return false;
-        }
-        const bool ok = TJS_SUCCEEDED(global->PropGet(
-            0, TJS_W("Layer"), nullptr, &layerClassVar, global)) &&
-            layerClassVar.Type() == tvtObject &&
-            layerClassVar.AsObjectNoAddRef();
-        global->Release();
-        return ok;
-    }
-
-    iTJSDispatch2 *createLayerObject(const tTJSVariant &owner,
-                                     const tTJSVariant &parent) {
-        if(owner.Type() != tvtObject || !owner.AsObjectNoAddRef()) {
-            return nullptr;
-        }
-
-        tTJSVariant layerClassVar;
-        if(!getLayerClassVariant(layerClassVar)) {
-            return nullptr;
-        }
-
         iTJSDispatch2 *created = nullptr;
-        tTJSVariant ownerArg(owner);
-        tTJSVariant parentArg(parent);
-        tTJSVariant *args[] = { &ownerArg, &parentArg };
-        if(TJS_FAILED(layerClassVar.AsObjectNoAddRef()->CreateNew(
-               0, nullptr, nullptr, &created, 2, args,
-               layerClassVar.AsObjectNoAddRef()))) {
-            return nullptr;
-        }
-        return created;
-    }
-
-    iTJSDispatch2 *ensureLayerObject(tTJSVariant &slot,
-                                     const tTJSVariant &owner,
-                                     iTJSDispatch2 *parentLayerObject,
-                                     bool visible) {
-        iTJSDispatch2 *layerObject =
-            slot.Type() == tvtObject ? slot.AsObjectNoAddRef() : nullptr;
-        if(!layerObject) {
-            const tTJSVariant parent = parentLayerObject
-                ? tTJSVariant(parentLayerObject, parentLayerObject)
-                : tTJSVariant();
-            layerObject = createLayerObject(owner, parent);
-            if(!layerObject) {
-                return nullptr;
-            }
-            slot = tTJSVariant(layerObject, layerObject);
-            layerObject->Release();
-            layerObject = slot.AsObjectNoAddRef();
-        }
-
-        auto *layer = resolveNativeLayer(layerObject);
-        if(!layer) {
-            return nullptr;
-        }
-        if(parentLayerObject) {
-            if(auto *parentLayer = resolveNativeLayer(parentLayerObject);
-               parentLayer && layer->GetParent() != parentLayer) {
-                layer->SetParent(parentLayer);
-            }
-        }
-        layer->SetType(ltAlpha);
-        layer->SetVisible(visible);
-        layer->SetAbsoluteOrderMode(false);
-        return layerObject;
+        tTJSVariant *args[] = {
+            const_cast<tTJSVariant *>(&owner),
+            const_cast<tTJSVariant *>(&parent)
+        };
+        (void)global->CreateNew(
+            0, TJS_W("Layer"), &motion::detail::layerClassMemberHint_guess,
+            &created, 2, args, global);
+        tTJSVariant result(created, created);
+        created->Release();
+        global->Release();
+        return result;
     }
 
     iTVPTexture2D *textureFromLayerVariant(const tTJSVariant &value) {
@@ -450,7 +397,9 @@ namespace motion {
                 _source.GetDictionaryValueStrict("compress").GetString(),
                 "RL") == 0;
         }
-        std::uint32_t pixelSize{};
+        // sub_6DA454 @ 0x6DA5A4/0x6DA608/0x6DA724 passes the same
+        // uninitialized uint32 stack slot to every resource lookup.
+        std::uint32_t resourceSize;
         const std::uint8_t *pixelData = nullptr;
         std::uint8_t *decoded = nullptr;
         const std::uint8_t *sourcePixels = nullptr;
@@ -460,15 +409,17 @@ namespace motion {
             const bool compressedHasPalette =
                 _source.ContainsDictionaryKey("pal");
             pixelData = _source.GetDictionaryValueStrict("pixel")
-                            .GetResource(pixelSize);
+                            .GetResource(resourceSize);
             const tjs_uint decodedBytes =
                 (compressedHasPalette ? 1u : 4u) * pixelCount;
             decoded = static_cast<std::uint8_t *>(
                 TJSAlignedAlloc(decodedBytes, 4));
             if(compressedHasPalette) {
-                decodeObjSourceRL8Like_0x6DA454(decoded, pixelData, pixelSize);
+                decodeObjSourceRL8Like_0x6DA454(
+                    decoded, pixelData, resourceSize);
             } else {
-                decodeObjSourceRL32Like_0x6DA454(decoded, pixelData, pixelSize);
+                decodeObjSourceRL32Like_0x6DA454(
+                    decoded, pixelData, resourceSize);
                 TVPReverseRGB(
                     reinterpret_cast<tjs_uint32 *>(decoded),
                     reinterpret_cast<const tjs_uint32 *>(decoded),
@@ -477,23 +428,27 @@ namespace motion {
             sourcePixels = decoded;
         } else {
             pixelData = _source.GetDictionaryValueStrict("pixel")
-                            .GetResource(pixelSize);
+                            .GetResource(resourceSize);
             sourcePixels = pixelData;
         }
 
         const bool hasPalette = _source.ContainsDictionaryKey("pal");
         std::uint8_t *bgra = nullptr;
         if(hasPalette) {
-            std::uint32_t paletteSize{};
             const auto *paletteData =
-                _source.GetDictionaryValueStrict("pal").GetResource(paletteSize);
-            const std::size_t paletteCount =
-                paletteSize / sizeof(tjs_uint32);
-            std::vector<tjs_uint32> palette(paletteCount);
+                _source.GetDictionaryValueStrict("pal")
+                    .GetResource(resourceSize);
+            // 0x6DA648..0x6DA6B4 uses signed division by four for both the
+            // vector element count and TVPReverseRGB length.
+            const tjs_int paletteCount =
+                signedW32(resourceSize) /
+                static_cast<tjs_int>(sizeof(tjs_uint32));
+            std::vector<tjs_uint32> palette(
+                static_cast<std::size_t>(paletteCount));
             TVPReverseRGB(
                 palette.data(),
                 reinterpret_cast<const tjs_uint32 *>(paletteData),
-                static_cast<tjs_int>(paletteCount));
+                paletteCount);
             bgra = static_cast<std::uint8_t *>(
                 TJSAlignedAlloc(4u * pixelCount, 4));
             TVPBLExpand8BitTo32BitPal(
@@ -554,35 +509,22 @@ namespace motion {
     SourceCache::SourceCache() = default;
 
     SourceCache::SourceCache(tTJSVariant owner, tjs_int cacheSize) :
+        _owner(owner),
         _cacheLimitBytes(static_cast<std::uint32_t>(cacheSize)) {
-        setLayerOwner(std::move(owner));
+        // SourceCache_ctor @0x6A78F4 performs a strict Object conversion,
+        // reads primaryLayer, then asks the global dispatch to CreateNew the
+        // Layer member. It has no native-layer fallback or null recovery gate.
+        ncbPropAccessor ownerAccessor{tTJSVariant(owner)};
+        _primaryLayer = ownerAccessor.GetValue(
+            TJS_W("primaryLayer"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::primaryLayerMemberHint_guess);
+        tTJSVariant createdLayer =
+            createLayerVariantLike_0x6A78F4_0x6A7BA8(_owner, _primaryLayer);
+        _bufLayer = createdLayer;
     }
 
     SourceCache::~SourceCache() {
         clearCache();
-    }
-
-    void SourceCache::setLayerOwner(tTJSVariant owner) {
-        _owner = std::move(owner);
-        _primaryLayer.Clear();
-
-        if(_owner.Type() == tvtObject && _owner.AsObjectNoAddRef()) {
-            tTJSVariant primary;
-            if(getObjectProperty(_owner, TJS_W("primaryLayer"), primary) &&
-               primary.Type() == tvtObject && primary.AsObjectNoAddRef()) {
-                _primaryLayer = primary;
-            } else if(resolveNativeLayer(_owner.AsObjectNoAddRef())) {
-                _primaryLayer = _owner;
-            }
-        }
-
-        iTJSDispatch2 *parentLayer =
-            _primaryLayer.Type() == tvtObject ? _primaryLayer.AsObjectNoAddRef()
-                                              : nullptr;
-        const tTJSVariant &layerOwner = _owner;
-        if(layerOwner.Type() == tvtObject) {
-            ensureLayerObject(_bufLayer, layerOwner, parentLayer, false);
-        }
     }
 
     tTJSVariant SourceCache::loadSource(iTJSDispatch2 *source,
@@ -591,37 +533,66 @@ namespace motion {
         // ncbPropAccessor supplies the temporary AddRef/Release lifetime seen in
         // the binary while the cache entry itself never retains `source`.
         ncbPropAccessor descriptorAccessor(descriptor);
+        // 0x6A7C04..0x6A7C10 constructs this one complete candidate before
+        // reading the descriptor. key/layer/src and byteWeight are initialized;
+        // blendMode and colors deliberately are not.
+        Entry entry;
 
-        tTJSVariant key;
-        descriptor->PropGet(0, TJS_W("key"),
-                            &detail::commandKeyMemberHint_guess, &key,
-                            descriptor);
-        const ttstr src = descriptorAccessor.getStrValue(TJS_W("src"), ttstr());
-        const tjs_int blendMode = descriptorAccessor.getIntValue(
+        entry.key = descriptorAccessor.GetValue(
+            TJS_W("key"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::commandKeyMemberHint_guess);
+        entry.src = descriptorAccessor.getStrValue(TJS_W("src"), ttstr());
+        entry.blendMode = descriptorAccessor.getIntValue(
             TJS_W("blendMode"), 0);
 
-        tTJSVariant colorValue;
-        descriptor->PropGet(0, TJS_W("color"),
-                            &detail::colorMemberHint_guess, &colorValue,
-                            descriptor);
-        // Deliberately default-initialized, not value-initialized.  The
-        // color-void branch in 0x6A7BA8 writes only slot zero; slots 1..3 are
-        // genuine uninitialized source behavior and must not be "fixed".
-        tjs_int colors[4];
+        tTJSVariant colorValue = descriptorAccessor.GetValue(
+            TJS_W("color"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::colorMemberHint_guess);
         if(colorValue.Type() != tvtVoid) {
             ncbPropAccessor colorAccessor(colorValue);
             for(tjs_int index = 0; index < 4; ++index) {
-                colors[static_cast<std::size_t>(index)] =
+                entry.colors[static_cast<std::size_t>(index)] =
                     colorAccessor.getIntValue(index, 0);
             }
         } else {
-            colors[0] = (blendMode & 0xF0) != 0
+            // Only slot zero is written on this branch in 0x6A7E40..44.
+            entry.colors[0] = (entry.blendMode & 0xF0) != 0
                 ? static_cast<tjs_int>(0xFF808080u)
                 : static_cast<tjs_int>(0xFFFFFFFFu);
         }
 
-        return loadSourceLike_0x6A7BA8(
-            source, key, src, blendMode, colors);
+        tTJSVariant result;
+        for(auto it = _entries.begin(); it != _entries.end(); ++it) {
+            if(it->key.DiscernCompareStrictReal(entry.key) &&
+               it->src == entry.src && it->blendMode == entry.blendMode) {
+                result = it->layer;
+                if(packedColorsEqual(it->colors, entry.colors)) {
+                    return result;
+                }
+
+                copyPackedColors(it->colors, entry.colors);
+                bakeSourceLike_0x6A6BE0(source, *it);
+                // 0x6A80D8..0x6A8140 is std::list::push_front(copy) followed
+                // by erase(old), not splice: key/Layer/src all AddRef before
+                // the old node's src -> Layer -> key destruction chain.
+                _entries.push_front(*it);
+                _entries.erase(it);
+                return result;
+            }
+        }
+
+        trimCacheBeforeInsertLike_0x6A6B08();
+        {
+            tTJSVariant createdLayer =
+                createLayerVariantLike_0x6A78F4_0x6A7BA8(
+                    _owner, _primaryLayer);
+            entry.layer = createdLayer;
+            result = entry.layer;
+        }
+        bakeSourceLike_0x6A6BE0(source, entry);
+        _currentCacheBytes += static_cast<std::uint32_t>(entry.byteWeight);
+        _entries.push_front(entry);
+        return result;
     }
 
     tTJSVariant SourceCache::loadSourceByName(
@@ -788,48 +759,6 @@ namespace motion {
 
     std::size_t SourceCache::size() const {
         return _entries.size();
-    }
-
-    tTJSVariant SourceCache::loadSourceLike_0x6A7BA8(
-        iTJSDispatch2 *source,
-        const tTJSVariant &key,
-        const ttstr &src,
-        tjs_int blendMode,
-        const tjs_int (&colors)[4]) {
-        for(auto it = _entries.begin(); it != _entries.end(); ++it) {
-            if(it->key.DiscernCompareStrictReal(key) && it->src == src &&
-               it->blendMode == blendMode) {
-                tTJSVariant result(it->layer);
-                if(packedColorsEqual(it->colors, colors)) {
-                    return result;
-                }
-
-                copyPackedColors(it->colors, colors);
-                bakeSourceLike_0x6A6BE0(source, *it);
-                // 0x6A80D8..0x6A8140 is std::list::push_front(copy) followed
-                // by erase(old), not splice: key/Layer/src all AddRef before
-                // the old node's src -> Layer -> key destruction chain.
-                _entries.push_front(*it);
-                _entries.erase(it);
-                return result;
-            }
-        }
-
-        trimCacheBeforeInsertLike_0x6A6B08();
-        Entry entry;
-        entry.key = key;
-        entry.src = src;
-        entry.blendMode = blendMode;
-        copyPackedColors(entry.colors, colors);
-        if(iTJSDispatch2 *created = createLayerObject(_owner, _primaryLayer)) {
-            entry.layer = tTJSVariant(created, created);
-            created->Release();
-        }
-        tTJSVariant result(entry.layer);
-        bakeSourceLike_0x6A6BE0(source, entry);
-        _currentCacheBytes += static_cast<std::uint32_t>(entry.byteWeight);
-        _entries.push_front(entry);
-        return result;
     }
 
     void SourceCache::bakeSourceLike_0x6A6BE0(iTJSDispatch2 *source,

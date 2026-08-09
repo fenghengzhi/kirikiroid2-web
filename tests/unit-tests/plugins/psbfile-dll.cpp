@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -17,6 +18,9 @@
 
 extern tTJS *TVPScriptEngine;
 extern void TVPGetListAt(const ttstr &name, iTVPStorageLister *lister);
+
+static_assert(!noexcept(
+    std::declval<PSB::PSBFile &>().Transfer_guess())); // 0x598A64 caller EH
 
 namespace {
     class CollectingStorageLister final : public iTVPStorageLister {
@@ -130,7 +134,7 @@ namespace {
         const PSB::detail::PsbArray_guess offsets(packed);
         if(index >= offsets.nElementCount) return false;
         value = PSB::PSBRawNode(
-            node.GetOwner(), packed + offsets.nBytes + offsets[index]);
+            node.GetFile_guess(), packed + offsets.nBytes + offsets[index]);
         return true;
     }
 
@@ -178,6 +182,15 @@ TEST_CASE("raw psb storage load applies the Android motion decrypt filter") {
                              motionDecryptFilter(742877301u)));
     const auto root = file.GetRoot();
     REQUIRE(root.GetTypeCategory() == 7);
+    // PSBRawNode_ContainsDictionaryKey_guess @ 0x5995D8 constructs its
+    // temporary before the category gate, delegates only category 7, and
+    // returns false for known non-dictionary categories.
+    REQUIRE(root.ContainsDictionaryKey("id"));
+    REQUIRE_FALSE(
+        root.GetDictionaryValueStrict("id").ContainsDictionaryKey("id"));
+    // PSBRawNode_GetString_guess @ 0x598B58 returns null for every known
+    // non-category-4 tag before touching the owner's strings table.
+    REQUIRE(root.GetString() == nullptr);
     REQUIRE(std::string(root.GetDictionaryValueStrict("id").GetString()) ==
             "motion");
     REQUIRE(root.GetDictionaryValueStrict("spec").GetString() != nullptr);
@@ -189,7 +202,10 @@ TEST_CASE("raw psb owner and node views retain ezsave.pimg") {
     {
         PSB::PSBFile file;
         REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
-        retainedRoot = file.GetRoot();
+        // Android motionplayer callers inline this single-argument root
+        // constructor at seven sites; iOS keeps the shared boundary as
+        // iOS arm64 @0x1001263B8.
+        retainedRoot = PSB::PSBRawNode(file);
         REQUIRE(retainedRoot.GetType() == 0x21);
         REQUIRE(retainedRoot.GetDictionaryValueStrict("width").GetInt() == 1280);
         REQUIRE(retainedRoot.GetDictionaryValueStrict("height").GetInt() == 720);
@@ -346,6 +362,10 @@ TEST_CASE("raw psb dispatch reads packed values and retains its owner") {
     REQUIRE(root != nullptr);
     REQUIRE(root->IsInstanceOf(0, nullptr, nullptr, TJS_W("Dictionary"), root) ==
             TJS_S_TRUE);
+    REQUIRE(root->IsInstanceOf(0, nullptr, nullptr, TJS_W("Array"), root) ==
+            TJS_S_FALSE);
+    REQUIRE(root->IsInstanceOf(0, TJS_W("width"), nullptr,
+                               TJS_W("Dictionary"), root) == TJS_E_NOTIMPL);
     tTJSVariant width;
     REQUIRE(root->PropGet(0, TJS_W("width"), nullptr, &width, root) == TJS_S_OK);
     REQUIRE(width.AsInteger() == 1280);
@@ -359,6 +379,8 @@ TEST_CASE("raw psb dispatch reads packed values and retains its owner") {
     rootValue.Clear();
     auto *layers = layersValue.AsObjectNoAddRef();
     REQUIRE(layers != nullptr);
+    REQUIRE(layers->IsInstanceOf(0, nullptr, nullptr, TJS_W("Array"), layers) ==
+            TJS_S_TRUE);
     tjs_int count = 0;
     REQUIRE(layers->GetCount(&count, nullptr, nullptr, layers) == TJS_S_OK);
     REQUIRE(count == 32);
@@ -481,6 +503,46 @@ TEST_CASE("PSB dispatch enumerates packed dictionary and array members") {
         REQUIRE(arrayNames.records[index].flags == 0);
         REQUIRE(arrayNames.records[index].objthis == layers);
     }
+}
+
+TEST_CASE("PSB Resource Variant owns copied bytes after owner release") {
+    tTJSVariant copiedResource;
+    std::vector<std::uint8_t> expected;
+    {
+        PSB::PSBFile file;
+        REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
+
+        const PSB::PSBRawNode rootNode = file.GetRoot();
+        PSB::PSBRawNode resourceNode;
+        REQUIRE(rootNode.GetDictionaryValue("2157.tlg", resourceNode));
+        REQUIRE(resourceNode.GetType() == 0x19u);
+        std::uint32_t resourceSize = 0;
+        const std::uint8_t *resource =
+            resourceNode.GetResource(resourceSize);
+        REQUIRE(resource != nullptr);
+        REQUIRE(resourceSize == 612u);
+        expected.assign(resource, resource + resourceSize);
+
+        iTJSDispatch2 *rootDispatch = file.GetRootDispatch();
+        REQUIRE(rootDispatch != nullptr);
+        tTJSVariant rootValue(rootDispatch, rootDispatch);
+        rootDispatch->Release();
+        auto *root = rootValue.AsObjectNoAddRef();
+        REQUIRE(root != nullptr);
+        copiedResource = getProperty(root, TJS_W("2157.tlg"));
+        REQUIRE(copiedResource.Type() == tvtOctet);
+        auto *octet = copiedResource.AsOctetNoAddRef();
+        REQUIRE(octet != nullptr);
+        REQUIRE(octet->GetLength() == resourceSize);
+        REQUIRE(std::equal(expected.begin(), expected.end(), octet->GetData()));
+    }
+
+    // CreateVariant @0x596B50..0x596B74 owns a copied Octet allocation; the
+    // source PSBFile/raw-node holders above are all gone at this point.
+    auto *octet = copiedResource.AsOctetNoAddRef();
+    REQUIRE(octet != nullptr);
+    REQUIRE(octet->GetLength() == expected.size());
+    REQUIRE(std::equal(expected.begin(), expected.end(), octet->GetData()));
 }
 
 TEST_CASE("PSB dispatch preserves native instance and invalidation boundaries") {

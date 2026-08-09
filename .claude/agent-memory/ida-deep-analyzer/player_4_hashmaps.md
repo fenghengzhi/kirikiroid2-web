@@ -7,6 +7,8 @@ metadata:
 
 motion::Player(1384B, ctor 0x6CED30) 4 个内联 KiriKiri 哈希表权威结论。所有 4 个 HM 的 key 都是 ttstr(UTF-16LE)，hash 用 KiriKiri ttstr-hash(缓存 @key+68：`1025*x ^ (1025*x>>6)` 累加 → `*9` → `^>>11` → `*32769`，0→-1)。HM control struct 48B：base+0=bucket数组ptr, +8=nbkt, +16=before-begin sentinel/list-head, +24=count, +32=loadFactor(1.0f), +40=next_resize。
 
+> **2026-07-26 superseding correction:** 上述旧记录只覆盖非 null key 的算术 mix，错误地把它外推为 `ttstr_hash` 完整对齐。fresh 证据证明：`ttstr::Ptr == nullptr` 时 hash 为 `0`；Ptr 非 null 时先复用 `Hint@+68`，Hint 为 `0` 才计算并写回；仅非 null 计算结果为 `0` 时改为 `0xFFFFFFFF`。当前 `internal/ttstr_hash.h` 已按此修复，旧“缓存/算术即完整行为”结论不得继续使用。
+
 **HM1 @+264** = `unordered_map<ttstr, EvalCascadeState>`，node=operator new(0x60)=96B：{+0 next, +8 key(joined "scope::label" ttstr,owning), +16 key副本, +24/+32/+40 chainDispatches vector(begin/end/cap, tTJSVariant*), +48 writeVal(double), +56 weight(=1.0 seeded once), +64/+72 RenderItem* vector, +88 cached hash}。find=Player_HM1_find_node@0x6f51bc(读 node+88 hash)。upsert=Player_HM1_upsert_evalCascade@0x6f52ac。insert=Player_HM1_insert_node@0x6f53c8。WRITE: Player_bindParameterValue_writesHM1_HM2@0x6C4668。READ: Player_HM1_cascadeJoinAndLookup@0x6CD39C(读 node+48 writeVal)。语义=scope-join 变量 eval 缓存。本地镜像=_evalCascadeMap(Player.h L1158)。
 
 **HM2 @+320** = `unordered_map<ttstr, double>`，node=operator new(0x20)=32B：{+0 next, +8 key(raw label ttstr,owning), +16 value(double), +24 cached hash}。find=Player_HM2_find_node@0x686b6c。upsert=Player_HM2_upsert_labelToValue@0x686944(返回 &node+16)。insert=Player_HM2_insert_node@0x686a4c。WRITE: bindParameterValue LABEL_132@0x6C4C0C(key=rawLabel,val=a4)。READ: cascade fallback@0x6CD5A8 + evalKey_cascade@0x6CD2F4。语义=eval 结果 label→value。本地镜像=_evalResultValues(L1197)。

@@ -13,6 +13,9 @@ EmoteObject@0x67DBAC / RM@0x6A88CC / HM1destroy@0x6DD1A0 / HM3destroy@0x6DD06C).
   + operator new(8*bkt) bucket 数组 + _M_before_begin 单链。本地 internal/player_containers.h
   全 std::unordered_map<ttstr,V,ttstr_hash,ttstr_equal>。hash 自研(1025*x^(>>6),9*acc,32769)
   在 ttstr_hash.h:26 逐字对齐。✅
+
+> **2026-07-26 superseding correction:** 上述旧记录只覆盖非 null key 的算术 mix，错误地把它外推为 `ttstr_hash` 完整对齐。fresh 证据证明：`ttstr::Ptr == nullptr` 时 hash 为 `0`；Ptr 非 null 时先复用 `Hint@+68`，Hint 为 `0` 才计算并写回；仅非 null 计算结果为 `0` 时改为 `0xFFFFFFFF`。当前 `internal/ttstr_hash.h` 已按此修复，旧“逐字对齐”裁决不得继续使用。
+
 - 2 处 string→ttstr retype 已完成:_evalResultValues(HM2 @+320)=LabelValueMap(ttstr key,
   Player.h:1472);_nodeLabelMap(+24)=NodeLabelMap=std::map<ttstr,int,ttstr_utf16_less>
   (player_containers.h:84,comparator 对齐 sub_9B1ED0)。✅

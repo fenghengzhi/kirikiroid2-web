@@ -34,7 +34,7 @@
 | ② 数据流 | 🟡 持续忠实化 | anchor 数据流✅、setVariable cases4-8 路由✅、getVariable scope-router✅；**rewindRoot 反向段数据流缺失（高）**|
 | ③ 调用链 | ✅ 普遍对齐 | draw 原语全经 TJS dispatch (vtbl+16 FuncCall)✅、6 controller step 顺序✅ |
 | ④ 对象生命周期 | ⚠️ 机制偏差 | ctor 多 parentPlayer 参 + RM 为 native 非 dispatch；dtor 手写有序→RAII 逆序（框架内可接受）；EmoteObject +0 scriptObject 槽缺失（inert）|
-| ⑤ **内部容器实现** | ✅ **完全对齐** | **2 处 string→ttstr key retype 已完成（CLOSED）**；4 HM = libstdc++ `unordered_map` 选型对齐；var-track 56B slot / node 2632B deque 对齐 |
+| ⑤ **内部容器实现** | ✅ **当前已对齐（2026-07-26 纠错后）** | **2 处 string→ttstr key retype 已完成（CLOSED）**；4 HM = libstdc++ `unordered_map` 选型对齐；旧 hash functor 的 null/Hint 缺口已于 2026-07-26 补齐；var-track 56B slot / node 2632B deque 对齐 |
 | ⑥ 边界行为 | ✅ 普遍对齐 | **anchor color base 方向已修正** `isDefaultBlend?128.0:255.0`（byte 确证）；per-vertex-color 判定为正当平台边界（下钉 bake 消费点 0x6A7518）；float-bits raw 读取全对✅；**blend 源仍单值（🟡）**|
 
 **差分现状**：与基线一致——m2logo+yuzulogo 0 mismatch 仅覆盖非-emote logo 路径，不含 anchor/var-track/
@@ -78,19 +78,21 @@ inline seek `0x6B73DC`/`0x6BA1CC`、`reseekTimelineCursors@0x6B86C8`、`initNode
 fresh decompile registrars：Player `0x6D69C8`、EmotePlayer `0x67FAC8`、D3DEmotePlayer `0x52E504`、
 ResourceManager `0x6AB8BC`、ObjSource `0x69CCB8`。
 
-- 成员计数全对齐：**ResourceManager 12 / ObjSource 6 / Player 92 / EmotePlayer 69+2const / D3DEmotePlayer 54+4const**。
+- 成员计数（2026-07-18 UTF-16 补正）：**ResourceManager 12 / ObjSource 6 / Player 92 /
+  EmotePlayer 70+2const / D3DEmotePlayer 54+4const**。旧 69+2 统计漏掉
+  `activateSelectorTarget@0x14D7796`。
 - angleDeg/angleRad getter 方向正确（历史 swap 已修复，binary v98→getAngleDeg / v101→getAngleRad 字面确认）。
 - D3DEmotePlayer 4 处 name/callback 错配（clear→create / setTimelineBlendRatio→setTimeline /
   pass→addPlayCallback / modified→getPlayCallback）已忠实复刻，**无别名重复残留**（基线遗留项已 closed）。
 
 ### Open
 - **O-1（低危）** D3DEmotePlayer 4 个常量（MaskModeStencil/Alpha + TimelinePlayFlagParallel/Difference）binary 注册在
-  D3DEmotePlayer 类自身（0x52e5a0-0x52e5e8），本地放在 D3DEmoteModule（main.cpp:839-843）。标量 int，dict
+  D3DEmotePlayer 类自身（0x52e5a0-0x52e5e8），本地放在 D3DEmoteModule（main.cpp:786-790）。标量 int，dict
   顺序/类归属无 shape hazard。
 
 **本轮纠正 2 个误判**：(1) naive 正则只匹配 `sub_6F6970` 误得 Player=76 → 实际用 3 个 helper（descriptor +
 2 个直接注册），全集 92 成员，**证实** memory/注释的 92 计数。(2) O-2「本地 EmotePlayer 缺 TimelinePlayFlag 常量」
-是 `NCB_`-关键词 grep 落空导致的**假缺失** → 实际在 main.cpp:468-471 用 `Variant(...)` 宏注册（已撤销）。
+是 `NCB_`-关键词 grep 落空导致的**假缺失** → 实际在 main.cpp:415-418 用 `Variant(...)` 宏注册（已撤销）。
 
 ---
 
@@ -120,11 +122,15 @@ fresh decompile：builder `0x67D4D0`、setVariable keystone `0x671228`、step or
 
 fresh decompile ctor `0x6CED30`、dtor `0x6CFADC`，逐字段比对 `player_containers.h`/`value_structs.h`/`ttstr_hash.h`。
 
-### ⑤ 内部容器实现 — ✅ **完全对齐，无 open 偏差**
+### ⑤ 内部容器实现 — ✅ **当前已对齐（2026-07-26 纠错后）**
 - 4 个 HashMap = 标准 libstdc++ `std::unordered_map`（ctor 调 `_M_next_bkt(0xA)` + 1.0f load factor +
-  `_M_before_begin` 单链），**仅 hash 函数自研**（ttstr UTF-16 hash，`ttstr_hash.h:26` byte-for-byte 复刻
-  `(1025*x)^((1025*x)>>6)`→`9*acc`→`32769*(h^(h>>11))`）。本地 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>`
-  是正确 1:1 选型。**不存在「STL→KiriKiri 内联 HM」P3 重构目标（该前提本身有误）。**
+  `_M_before_begin` 单链），**仅 hash functor 自研**。**2026-07-26 纠正（supersedes 旧
+  “`ttstr_hash.h` byte-for-byte”结论）**：`0x6F52AC`、`0x686944`、`0x6F2674`、`0x689760`、
+  `0x6885CC`、`0x6E2060/0x6E2150/0x6E2484/0x6E2574` fresh decompile 证明，旧实现只有
+  `(1025*x)^((1025*x)>>6)`→`9*acc`→`32769*(h^(h>>11))` 算术 mix 正确；它把 null `Ptr`
+  折叠为空串且未读写 `Hint@+68`。现已修成 null→0、非零 Hint 复用、计算后写 Hint、非 null
+  计算结果 0→`0xFFFFFFFF`。本地 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>` 是正确 1:1
+  选型；**不存在「STL→KiriKiri 内联 HM」P3 重构目标（该前提本身有误）。**
 - **基线遗留「2 处 std::string→ttstr key retype」已全部完成（CLOSED）**：`_evalResultValues`(Player.h:1446,
   ttstr-key) + `_nodeLabelMap`(Player.h:1292, `std::map<ttstr,int,ttstr_utf16_less>` 复刻 RB-tree cmp
   sub_9B1ED0)。注：基线行号 `:1159/:1294` 已漂移到 `:1292/:1446`。
@@ -219,7 +225,7 @@ color 消费链 `0x6C7440→0x6C1B70→0x6A7518`、findSource。
 | reseekTimelineCursors | 0x6B86C8(标号 0x6B91B0) | 非独立函数；内部 per-node initNodeTimeline 循环 |
 | initNodeTimeline | 0x6B64AC(tail 0x6B674C) | per-node action push（本地缺失）|
 | Player NCB registrar | 0x6D69C8 | 92 成员（3 helper：sub_6F6970 descriptor + sub_6D993C/sub_6D97B4）|
-| EmotePlayer / D3DEmotePlayer / RM / ObjSource registrar | 0x67FAC8 / 0x52E504 / 0x6AB8BC / 0x69CCB8 | 69+2 / 54+4 / 12 / 6 |
+| EmotePlayer / D3DEmotePlayer / RM / ObjSource registrar | 0x67FAC8 / 0x52E504 / 0x6AB8BC / 0x69CCB8 | 70+2 / 54+4 / 12 / 6 |
 | EmoteEngine builder / setVariable / step | 0x67D4D0 / 0x671228 / 0x67D01C | cases4-8 路由 + 6-deque step 顺序对齐 |
 | 弹簧 bust/hair | 0x662768 / 0x6689A4 | 真实物理实装（sinf/cosf/atanf/sqrt/fmod）|
 | Player ctor / dtor | 0x6CED30 / 0x6CFADC | 4 HM = libstdc++ unordered_map；手写有序 teardown |

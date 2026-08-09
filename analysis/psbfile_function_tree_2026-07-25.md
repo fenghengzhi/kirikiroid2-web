@@ -17,19 +17,33 @@ callee 或整个 libstdc++ 调用闭包冒充成 PSB 专属函数。每个节点
 边界仍以 coverage manifest 及其链接的 fresh 反编译记录为准；本文负责关系索引。
 
 `_guess` 表示名字来自 Android 行为、vtable、调用链和本地交叉参照，而不是二进制保留的
-原始 C++ 符号。关系标记如下：
+原始 C++ 符号。节点分类标记如下：
 
-- `[direct]`：Android 中保留下来的直接调用；
-- `[inline]`：源码级关系可证，但目标函数体在该调用点被内联；
 - `[vslot]`：vtable 槽；
 - `[secondary]`：secondary-base 重复入口或 adjustor thunk；
-- `[ncb]`：ncbind/NCB 模板生成边界；
+- `[ncb]`：ncbind/NCB 模板生成边界；`callback`、`vslot` 只是该分类的限定词；
 - `[stl]`：该源码触发的标准库模板实例；
 - `↪ @地址`：指向 canonical 树中另一节点的关系引用。
 
-canonical 树的缩进只表示**归属/分类**，不是隐含调用。后面的关系树只使用下列显式边：
-`[construct]`（构造/登记）、`[register]`（安装 wrapper/member）、`[direct]`（直接调用）、
-`[inline]`（调用体内联）、`[vdispatch]`（虚分派/间接调用）、`[owns]` 与 `[retains]`。
+canonical 树的缩进只表示**归属/分类**，不是隐含调用。关系树使用以下显式边；逗号后的
+`first`、`second`、`filter non-empty` 等文字只是路径限定词，不改变边类型：
+
+- `[construct]`：构造对象或把对象登记进生命周期链；
+- `[register]`：安装 wrapper/member 元数据，不表示当场调用所绑定的 callback；
+- `[index only]`：只把对象归入模块索引，不执行其 callback；
+- `[direct]`：Android 中保留下来的直接调用；`callback` 仅说明直接目标的角色；
+- `[inline]`：源码级调用关系可证，但目标函数体在该调用点被内联；
+- `[inline/helper shape]`：调用点只证明存在与独立 helper 相同的 emitted 形状；不是 direct
+  call，也不能唯一证明 Android 原源码是否调用该 helper；
+- `[vdispatch]`：经 vtable 或其他运行时槽进行的间接调用；
+- `[binds runtime callback]` / `[binds runtime chain]`：注册元数据把 wrapper 绑定到之后才
+  执行的 callback 或 callback 链，不表示注册阶段发生调用；
+- `[registered member-pointer BLR]`：wrapper 随后经注册的 C++ member pointer 以 `BLR`
+  间接进入目标，不是静态 direct-call 边；
+- `[PLT]`：经 PLT/重定位边界进入目标实现；
+- `[lifetime]`：只表示对象最终析构/释放关系，不表示当前语句直接调用该入口；
+- `[owns]`、`[retains]`、`[contains]`、`[borrows]`：分别表示独占所有权、保留引用、内嵌
+  子对象和非 owning 借用关系。
 
 ## 总览
 
@@ -71,9 +85,10 @@ Android libkrkr2.so::embedded psbfile
 │  └─ PSBValueDispatch
 │     ├─ 构造与私有 helper（5）
 │     │  ├─ 0x597AD4  PSBValueDispatch_ctor_guess
-│     │  │              local: PSBValueDispatch(ownerSlot, node)
-│     │  ├─ 0x59673C  PSBValueDispatch_assign_guess
-│     │  │              local: assign(result, node)
+│     │  │              local: PSBValueDispatch(fileHolder, node)
+│     │  ├─ 0x59673C  PSBValueDispatch_CreateVariant_guess
+│     │  │              local: CreateVariant_guess(result, node)
+│     │  │              [inline] ↪ @596BC4, @596C70
 │     │  ├─ 0x596BC4  PSBValueDispatch_getString_guess
 │     │  ├─ 0x596C70  PSBValueDispatch_getResource_guess
 │     │  └─ 0x5975C0  PSBValueDispatch_decodeName_guess
@@ -205,7 +220,8 @@ Android libkrkr2.so::embedded psbfile
 │     ├─ 0x599E04  EnsureContainer_guess
 │     │              [direct] ↪ @59A284, @598538, @59A330
 │     ├─ 0x59A0B4  GetResourceData_guess
-│     │              [direct] ↪ @59A4B0; resource/chunk decode remains inline
+│     │              [direct] ↪ @59A4B0；[complete inline clone] ↪ @5996E4；本地已恢复
+│     │              source call，但 Android emitted body 没有对 @5996E4 的 BL
 │     ├─ 0x59A284  ttstr_IndexOfChar_guess
 │     │              shared char-index helper; used by @599E04 and @59A4B0
 │     ├─ 0x59A330  [ncb] ncbInstanceAdaptor<PSBFile>::CreateAdaptor_guess
@@ -250,7 +266,9 @@ Android libkrkr2.so::embedded psbfile
 │     ├─ 0x59B570  [ncb vslot] load FuncCall_guess → @59B708
 │     ├─ 0x59B6DC  [ncb vslot] PSBFile_loadMethod_deletingDestructor_guess
 │     ├─ 0x59B700  [ncb vslot] load GetFlags_guess → 0
-│     └─ 0x59B708  [ncb] load typed Invoke/CopyFirstArgument_guess → @598268
+│     └─ 0x59B708  [ncb] load CopyFirstArgument_guess
+│                    @59B570 随后经已注册 member pointer BLR → @598268；
+│                    @59B708 本体不调用 @598268
 │
 ├─ G. vector<string> 容量增长慢路径（1）
 │  └─ 0x59B7E8  [stl] std::vector<std::string>::_M_emplace_back_aux<std::string &>
@@ -295,12 +313,14 @@ AllRegist
          │  ├─ [register] outer root Property wrapper @59B28C
          │  │  └─ [binds runtime chain] @59B48C → @5981F8
          │  └─ [register] outer load Method wrapper @59B570
-         │     └─ [binds runtime chain] @59B708 → @598268
+         │     ├─ [direct] @59B708 copy first argument
+         │     └─ [registered member-pointer BLR] @598268
          └─ [direct] @59AD84 RegistEnd
 
 global Unregist lifecycle（若通用反注册流程调用；未证明 PSB-specific unload caller）
 └─ [vdispatch] class Unregist @59A968
-   └─ [register/remove] same three outer members → @597F08 Clear
+   └─ [inline/helper shape] 删除同三 outer members 后内联 class-info Clear 同形体
+      ↪ @597F08（非 direct call）
 ```
 
 ## 主要运行数据流树
@@ -308,7 +328,7 @@ global Unregist lifecycle（若通用反注册流程调用；未证明 PSB-speci
 ```text
 TJS: new PSBFile(value)
 └─ [vdispatch] @59B14C factory FuncCall
-   └─ [direct/callback] @5980F4 PSBFileFactory
+   └─ [direct] callback @5980F4 PSBFileFactory
       └─ [direct] @598268 PSBFile::Load
          ├─ String [direct] → @598538 LoadStorage → @598708 Adopt
          └─ Octet  [direct] → @598708 Adopt
@@ -319,18 +339,20 @@ TJS: new PSBFile(value)
 TJS: file.root
 └─ [vdispatch] @59B28C root PropGet
    └─ [direct] @59B48C typed invoke
-      └─ [direct/callback] @5981F8 GetRootDispatch
-         └─ [inline] PSBValueDispatch(owner,node) shape ↪ @597AD4
+      └─ [direct] callback @5981F8 GetRootDispatch
+         └─ [inline] PSBValueDispatch(fileHolder,node) shape ↪ @597AD4
 
 TJS: dispatch.member
 ├─ named access @597854 PropGet
 │  ├─ [direct] @59641C FindNameIndex
 │  ├─ [direct] @59659C FindDictionaryValueOffset
-│  └─ [direct] @59673C assign Variant
+│  └─ [direct] @59673C CreateVariant_guess
+│     ├─ [inline] @596BC4 getString
+│     └─ [inline] @596C70 getResource
 ├─ numeric access @5976C4 PropGetByNum [direct] → @59673C
 └─ enumeration @596F50 EnumMembers
    ├─ [direct] @597B1C DecodeName
-   └─ [direct] @59673C assign Variant
+   └─ [direct] @59673C CreateVariant_guess
 
 raw-node Dictionary
 ├─ strict @598C58 ─┬─[direct]→ @59641C
@@ -371,7 +393,9 @@ psb: storage media
 PSBFile holder
 ├─ [retains] one PSBRawOwner* (intrusive, non-atomic; holders may share it)
 ├─ copy: AddRef incoming owner
-└─ Transfer_guess: copy holder to result, then clear/release source holder
+└─ Transfer_guess
+   ├─ hidden-result copy 成功后，才 clear/release source holder
+   └─ hidden-result copy 抛异常时，source 不清空，未完成构造的 hidden-sret 不析构
 
 PSBRawOwner
 ├─ [owns] raw allocation
@@ -379,9 +403,10 @@ PSBRawOwner
 └─ final Release → aligned data dealloc → owner delete
 
 PSBRawNode
-├─ [retains] PSBRawOwner*
+├─ [contains/reuses] PSBFile-compatible holder first subobject → [retains] PSBRawOwner*
+├─ [contains] independent raw node pointer
 ├─ GetRoot/Dictionary child returns create retained node copies
-└─ copy assignment: Release old → copy incoming owner → AddRef incoming owner → copy node
+└─ implicit copy assignment: PSBFile assignment（Release old → copy owner → AddRef）→ copy node
 
 PSBValueDispatch : iTJSDispatch2, iTJSNativeInstance
 ├─ primary vptr + secondary vptr
@@ -389,7 +414,7 @@ PSBValueDispatch : iTJSDispatch2, iTJSNativeInstance
 ├─ [contains] PSBRawNode value_ → [retains] owner
 └─ Release-to-zero
    ├─ restore both derived vptrs
-   ├─ release owner through value_
+   ├─ release owner through value_.file_ / PSBFile destructor
    └─ delete this
 
 PSBMedia (process-lifetime pointer)
@@ -418,3 +443,9 @@ ncbInstanceAdaptor<PSBFile>
   `.init_array` 项直接引用。
 - 该结论证明 emitted-function 拓扑完整；被 O3 内联掉的 helper 原名、精确抽取边界和
   等价源码拼写仍不能由 stripped 二进制唯一恢复。
+- 逐函数**总判定**为 `ALIGNED=99`、`EVIDENCE_LIMITED=15`；这是每个入口综合六维后的
+  verdict，不能与任一单独维度的计数互换。
+- 单看**调用链维度**则为 `MATCH=113`、`EVIDENCE_LIMITED=1`；唯一受限入口是
+  `GetResourceData_guess@0x59A0B4`。Android emitted body 是
+  `GetResource_guess@0x5996E4` 的完整 inline clone，同 release iOS 又保留 source call，
+  因而本地已恢复该调用；但目标 O3 单独仍不能唯一恢复精确源码 token，所以该维继续受限。

@@ -20,6 +20,7 @@ READY <libkrkr2_base_hex> <heap_base_hex>
 Commands (host → harness, one per line):
 ```
 CALL <fn_hex> <ret> <nints> <int_hex>* <ndbls> <dbl_bits_hex>*
+CALL_SRET <fn_hex> <out_hex> <size_dec> <nints> <int_hex>*
 READ <addr_hex> <n_dec>
 WRITE <addr_hex> <n_dec> <hex_bytes>
 STORAGE_LIST <fn_hex> <media_hex> <ttstr_slot_hex>
@@ -36,7 +37,7 @@ Responses (harness → host):
 ```
 OK <retval_hex>          # int/uint/bool/ptr return, or TJS_INIT/TJS_GLOBAL VA
 OK_DOUBLE <bits_hex>     # IEEE754 bit pattern
-OK_VOID                  # void call, WRITE, TJS_EXEC, TJS_RESET, or QUIT
+OK_VOID                  # void call, CALL_SRET, WRITE, TJS_EXEC, TJS_RESET, or QUIT
 OK_DATA <hex_bytes>      # READ
 OK_STR  <utf8_hex>       # TJS_EXEC_STR
 OK_LIST <count> <u32le_length_prefixed_utf8_surrogatepass_hex_or_dash> # STORAGE_LIST
@@ -46,6 +47,16 @@ ERR <message>
 `ret` is one of `{int,uint,bool,ptr,double,void}`. Ints and doubles go
 through AAPCS64 x0..x7 / d0..d7 using a "universal signature" function
 pointer: up to 8 ints and 8 doubles, matching `arm64_abi.pack_args`.
+
+`CALL_SRET` covers non-trivial C++ return objects up to 32 bytes. Its
+ABI-matched return type has a user-provided empty destructor, so AAPCS64 puts
+the compiler-owned result slot in X8 while up to eight ordinary integer
+arguments remain in X0..X7. The harness copies the returned bytes to `out_hex`;
+the empty destructor deliberately does not interpret or release pointer bits.
+The adapter that requested the call owns every resource referenced by the
+copied result. Intrusive holders must be released exactly once; STL objects
+must be destroyed by an ABI-matched destructor inside `libkrkr2.so`, never by
+the harness C++ runtime.
 
 `STORAGE_LIST` invokes a supplied `iTVPStorageMedia::GetListAt` entry with a
 small vtable/layout-compatible lister surrogate compiled into the ABI-matched
@@ -106,9 +117,9 @@ recorder sit on top.
 ## Relationship with the Frida tracer
 
 This harness handles the call/return path only — it serves `CALL` /
-`READ` / `WRITE` / `TJS_*` commands, serialises a scalar/void/double
-result back, and doesn't observe the target function's internal call
-graph.
+`CALL_SRET` / `READ` / `WRITE` / `TJS_*` commands, serialises a
+scalar/void/double result or copies a hidden-sret object back, and doesn't
+observe the target function's internal call graph.
 
 The Frida tracer (see [../README.md](../README.md) and
 [../frida_tracer.py](../frida_tracer.py)) attaches to the

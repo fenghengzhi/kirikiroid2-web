@@ -49,14 +49,12 @@ namespace motion {
             ttstr src;
             tjs_int blendMode;
             tjs_int colors[4];
-            tjs_int byteWeight;
+            tjs_int byteWeight = 0;
         };
 
         SourceCache();
         SourceCache(tTJSVariant owner, tjs_int cacheSize);
         ~SourceCache();
-
-        void setLayerOwner(tTJSVariant owner);
 
         tTJSVariant loadSource(iTJSDispatch2 *source,
                                iTJSDispatch2 *descriptor);
@@ -78,12 +76,6 @@ namespace motion {
         std::size_t size() const;
 
     private:
-        tTJSVariant loadSourceLike_0x6A7BA8(
-            iTJSDispatch2 *source,
-            const tTJSVariant &key,
-            const ttstr &src,
-            tjs_int blendMode,
-            const tjs_int (&colors)[4]);
         void bakeSourceLike_0x6A6BE0(iTJSDispatch2 *source, Entry &entry);
         void trimCacheBeforeInsertLike_0x6A6B08();
         tTJSVariant loadRawSourceVariant(const Player *player,

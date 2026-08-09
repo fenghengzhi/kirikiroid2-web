@@ -36,7 +36,10 @@ V 是 `entry + 16` 偏移。
 - entry+8: 未使用（part of libstdc++ node layout）
 
 **Entry hash 缓存** (entry+88..+96, 8B):
-- entry+88: `size_t cached_hash` — `ttstr_hash(key) >> 11 (XOR scrambled) | 0x8001 mul`
+- entry+88: `size_t cached_hash` — 节点保存最终 hash。注意它与 key backing
+  `tTJSVariantString::Hint@+68` 是两个不同缓存槽：先按
+  `Ptr==null ? 0 : (Hint!=0 ? Hint : compute-and-store)` 得到 hash，非 null
+  计算结果为 0 时改为 `0xFFFFFFFF`，再把该最终值写入 node+88。
 - entry+92: 4B padding
 
 ### Ctor 序列 (Player_HM1_upsert_evalCascade @0x6F52AC)

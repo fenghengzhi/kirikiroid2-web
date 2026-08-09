@@ -127,7 +127,7 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 
 | 点 | 主张/提交 | 裁决 |
 |---|---|---|
-| ResourceManager NCB = 12 成员 | a074060 | ✅ `0x6AB8BC` 恰注册 12 成员，名/序与 main.cpp:412-428 镜像一致。RM 与 SourceCache **确为同一类**，无独立 SourceCache 注册函数 |
+| ResourceManager NCB = 12 成员 | a074060 | ✅ `0x6AB8BC` 恰注册 12 成员，名/序与 main.cpp:405-375 镜像一致。RM 与 SourceCache **确为同一类**，无独立 SourceCache 注册函数 |
 | ObjSource = 0x18 raw-node facade, 6 exposed members | 2026-07-19 corrected | ✅ `0x69CCB8` 注册 6 个 raw-node consumer；findSource 分配 `{retained owner,node,null texture}`。width/height 仅在非-dict raw node 时返回 32；strict/try getters、clip/ensureTexture/drawLayer 与析构顺序均已闭合。旧 dict-variant 结论已证伪。 |
 | findSource = outer map + mapped-record inner maps + raw upload | 3761a0b | ✅ 2026-07-18 后续纠正：本地已恢复 outer map 每项的 Win `name→texture` 表和 KRKR 平表 `src/group/icon→descriptor`、AddRef/Release 及 unload 生命期；Win/spec=2 与 KRKR/spec=1 均直接导航 raw `PSBRawNode`。KRKR 整页 CPU 合成后一次 Update 是已标注的 Web 上传 API 边界 |
 

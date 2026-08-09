@@ -56,7 +56,7 @@ HM1_cascadeJoinAndLookup(P,key):                                   // 0x6CD39C
 | 3 | container HM4 | unordered_map<ttstr,**double**>@+1240 (node16=RAW double) | `_variableSnapshotMap` VariableSnapshotMap unordered_map<ttstr,double> | ✅ (J-1 overturned) |
 | 4 | container +1296 | std::deque<160B item> | `_variableLabelScopes` deque<VariableLabelScope> | ✅ |
 | 5 | container +408 | std::multimap<ttstr id, Entry*> | `_parameterRampMap` multimap<ttstr,MotionParameterEntry*> | ✅ |
-| 6 | key type | ALL 4 HM keys = ttstr UTF-16LE, custom ttstr_hash (1025*acc^>>6 / 9* / 32769* / -1 sentinel) | ttstr_hash.h reproduces byte-identical | ✅ |
+| 6 | key type | ALL 4 HM keys = ttstr UTF-16LE；null `Ptr`→0，非零 Hint 复用，否则计算/写 Hint，非 null 计算结果 0→`0xFFFFFFFF` | 算术 mix 原本正确；旧 functor 的 null/Hint 缺口已于 2026-07-26 修复 | ✅ 当前对齐（旧 byte-identical 结论已 superseded） |
 | 7 | HM4 ownership | clearHM3_HM4 releases node[1]=KEY ttstr; value@+16 = bare double (memset only) | unordered_map<ttstr,double> — key owned by map, double trivial | ✅ |
 | 8 | getVariable router | 2-branch: inScope→HM1-join ; else HM4-first→HM1-join | getVariable() lines 645-690: isLabelInBindScope gate → HM4 lookup → HM1-join/HM2 | ✅ |
 | 9 | scope-gate scan | deque _M_start @+1312 (obj @+1296); item+0 cascadeKey ptr-eq OR wcscmp | isLabelInBindScopeListLike_0x6CD16C scans _variableLabelScopes, item.cascadeKey==key | ✅ |
@@ -78,6 +78,7 @@ Binary getVariable_wrapper @0x533E1C runs the entire cascade on `*(a1+1064)` (an
 ### Stale-memory CORRECTION (this session)
 - clusterJ J-1 "HM4 value type = OWNING tTJSVariant*" is **FALSIFIED**. clearHM3_HM4 @0x6B8118 releases `node[1]` = node+8 = the KEY ttstr (AddRef'd at insert), NOT node+16. The value @node+16 is a bare double written as double-bits by resetMotionState loop2 (0x6B2D40) and read as double by evalKey_cascade (0x6CD304); clear only memsets the bucket array. Port `unordered_map<ttstr,double>` is correct. IDB comment added at 0x6B8118.
 - clusterJ "deque @+1312" vs initVariables "@+1296": SAME container. +1296 is the std::deque object; +1312 is its `_M_start` iterator (cur@+1312/first@+1320/last@+1328/node@+1336, finish@+1344). isLabelInBindScopeList walks _M_start; initVariables ctors @+1296 and pushes via finish@+1344. No deviation. IDB comment added at 0x6CD16C.
+- **2026-07-26 hash correction (supersedes this report's “byte-identical” claim):** fresh decompiles at `0x6F52AC`, `0x686944`, `0x6F2674`, `0x689760`, `0x6885CC`, and `0x6E2060/0x6E2150/0x6E2484/0x6E2574` prove that the arithmetic mix was correct but the old local functor was incomplete: it collapsed null `Ptr` into the empty payload and never reused/wrote `Hint@+68`. The implementation now returns 0 for null, reuses a nonzero Hint, writes a newly computed Hint, and maps a zero result for non-null input to `0xFFFFFFFF`.
 
 ## DEFERRED (legitimate, evidence-backed, not deviations)
 - **sub_697D34 chainDispatches build** (bind 0x6C48BC): pure TJS-dispatch scope resolution into HM1 node+8..24 (vector<tTJSVariant*>). Port has NO getVariable consumer of chainDispatches (the cascade reads writeVal@node+48 / HM2, never chainDispatches; sub_6B9650 reads chainSegments STRING values only, which the port models as vector<ttstr>). DEFERRED with no observable effect.

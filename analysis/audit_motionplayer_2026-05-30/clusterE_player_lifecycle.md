@@ -103,14 +103,18 @@ correctly mirrored.
 
 ## 3. NCB registration / factory / dispatch chain
 
+> 2026-08-04 ownership correction: the member-table findings below are historical, but Player is no
+> longer a top-level class locally. Fresh `Motion_Player_ncb_register@0x6FDD04` confirms it is the
+> sixth Motion subclass; current code uses `NCB_REGISTER_SUBCLASS(Player)` and no post alias.
+
 | Binary fn | Addr | Role | Local counterpart | Status |
 |---|---|---|---|---|
 | Player_ncb_ctorDispatch | 0x6F6BD0 | ctor dispatch (param-count gate, a6==1 fast-path) | ncbind NCB_CONSTRUCTOR((ResourceManager)) | OK (framework) |
 | Player_ncb_createInstance | 0x6F6CA8 | calls factory, PropSet(2,classid) into objthis+8 | ncbind adaptor | OK (framework) |
 | Player_factory | 0x6F6DC0 | operator new(0x568); Player_ctor; sub_A0F778 | ncbind Factory | OK |
 | Player_ncb_classInit | 0x6FDE74 | new(0xB0) class obj, vtbl off_19FD6C8, register only `finalize` | ncbind class init | OK (framework) |
-| Player_ncb_registerMembers | 0x6D69C8 | registers 92 members | main.cpp NCB_REGISTER_CLASS(Player) | **DEVIATION (see 3.1)** |
-| Motion_Player_ncb_register | 0x6FDD04 | top-level register/unregister gate | NCB_REGISTER_CLASS macro | OK |
+| Player_ncb_registerMembers | 0x6D69C8 | registers 92 members | main.cpp NCB_REGISTER_SUBCLASS(Player) | current 92-member set aligned; historical diff below superseded |
+| Motion_Player_ncb_register | 0x6FDD04 | Motion subclass register/unregister gate | sixth `NCB_SUBCLASS(Player, Player)` row | OK |
 
 ### 3.1 NCB member-set diff — Player_ncb_registerMembers @ 0x6D69C8
 Binary registers **92 distinct member names** (extracted from L"..." literals,
@@ -144,7 +148,7 @@ canvasCaptureEnabled/clearEnabled/hitThreshold/busy/random/initPhysics/serialize
 unserialize/setRotate/setMirror/debugPrint/getD3DAvailable/doAlphaMaskOperation/
 isPlaying/motionList/emoteEdit`.
 - The timeline/variable query surface is a **D3DEmotePlayer** API in the binary
-  (cf. D3DEmotePlayer NCB @ 0x67FAC8 / main.cpp:496), NOT Motion.Player. They
+  (cf. D3DEmotePlayer NCB @ 0x67FAC8 / main.cpp:443), NOT Motion.Player. They
   were hoisted onto Player locally. This is a CLASS-BOUNDARY deviation: in the
   binary these live on the emote wrapper, here on Player. P2.
 - Host methods (resource/draw-device) are Web-port host adaptations with no

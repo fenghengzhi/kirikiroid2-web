@@ -97,7 +97,7 @@ HM node = `new(0x20)`=32B：`{_M_nxt@0, ttstr_key@8, value@16, hash@24}`，7 个
 - 注释误将两者画成单一拓扑。字段语义已查明：`_slot1`(+8) = EmoteEngine\* payload（懒创建），`_slot2`(+16) = ownership/sticky 标志（destroy gate `!*(a1+16)`，对应 ncbind `_sticky`）。建议重命名 `_payload` / `_owned`。
 
 #### P2-2: EmotePlayer 多注册 constructor
-- **位置**：`cpp/plugins/motionplayer/main.cpp:299-301`
+- **位置**：`cpp/plugins/motionplayer/main.cpp:292-294`
 - 二进制 NCB 注册（@ 0x686148）只注册 `finalize` → `sub_6862C8`（return 0，空操作）。本地多注册了 `NCB_CONSTRUCTOR(())`。取决于 ncbind 是否硬性要求 constructor 才能分配 native instance；若为框架要求则保留并加 PLATFORM_BOUNDARY 注释。
 
 #### P2-3: Player `_tjsRandomGenerator` 字段归属误判（2026-07-23 已纠正）

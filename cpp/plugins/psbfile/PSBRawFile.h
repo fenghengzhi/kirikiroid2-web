@@ -32,8 +32,10 @@ namespace PSB {
     // It owns exactly one raw PSB allocation and all node views point into it.
     class PSBRawOwner final {
     public:
-        // The owner retain/release operations are expanded at every Android
-        // call site; the libkrkr2.so psbfile plugin range has no standalone entry.
+        // The authoritative arm64 target expands owner retain/release at its
+        // psbfile call sites and has no standalone entry in this range. iOS
+        // iOS arm64 lineage retains shared Release: decrement first, then delete
+        // this only on zero. The exact identifier/inline token remains stripped.
         void AddRef() { ++refCount_; }
         void Release() {
             if(--refCount_ == 0) {
@@ -68,36 +70,25 @@ namespace PSB {
         std::int64_t size_{};
     };
 
-    // Two-pointer raw node handle used throughout the Android implementation.
-    // The real rvalue assignment in PSBMedia::Resolve @ 0x59A694 follows the
-    // retained-copy path plus temporary destruction, so this holder
-    // deliberately exposes Rule-of-Three copy lifetime rather than a
-    // speculative move path.
-    class PSBRawNode final {
+    class PSBRawNode;
+
+    // Native PSBFile holder reconstructed from sub_5980F4 @ 0x5980F4.  The
+    // class deliberately contains only the owner pointer.
+    class PSBFile final {
     public:
-        PSBRawNode() = default;
-        PSBRawNode(PSBRawOwner *owner, const std::uint8_t *node) :
-            owner_(owner), node_(node) {
+        using OwnerFilter = std::function<void(PSBRawOwner &)>;
+
+        PSBFile() = default;
+        PSBFile(const PSBFile &other) noexcept : owner_(other.owner_) {
+            // ResourceManager::load @ 0x6A8E94..0x6A8EB8.
             if(owner_ != nullptr) {
                 owner_->AddRef();
             }
         }
-        PSBRawNode(const PSBRawNode &other) :
-            PSBRawNode(other.owner_, other.node_) {}
-        ~PSBRawNode() {
-            if(owner_ != nullptr) {
-                owner_->Release();
-            }
-        }
-
-        PSBRawNode &operator=(const PSBRawNode &other) {
-            if(this == &other) {
-                return *this;
-            }
-            // The hit out-parameter path in sub_598D58 @ 0x598D58 exposes
-            // this raw-pair sequence: release destination, copy owner, retain
-            // owner, copy node.  It does not prove that the original source
-            // factored that one site into a class-wide operator=.
+        PSBFile &operator=(const PSBFile &other) {
+            // ResourceManager::load @ 0x6A926C..0x6A92A8 and the raw-node
+            // hit path @0x598DB8..0x598E00 share this exact order.  There is
+            // deliberately no self guard.
             if(owner_ != nullptr) {
                 owner_->Release();
             }
@@ -105,18 +96,68 @@ namespace PSB {
             if(owner_ != nullptr) {
                 owner_->AddRef();
             }
-            node_ = other.node_;
             return *this;
         }
-        [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
-        // sub_597AD4 @ 0x597AD4 receives the address of this first slot at
-        // all PSBValueDispatch construction sites.  The binary cannot prove
-        // a shared source-level holder type, so this ABI-only accessor keeps
-        // the uncertainty explicit instead of inventing one.
-        [[nodiscard]] PSBRawOwner *const *
-        GetOwnerSlotAddress_guess() const {
-            return &owner_;
+        [[nodiscard]] PSBFile Transfer_guess();
+        ~PSBFile() {
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
         }
+
+        [[nodiscard]] bool Load(tTJSVariant value);
+        [[nodiscard]] iTJSDispatch2 *GetRootDispatch() const;
+        [[nodiscard]] bool LoadStorage(const ttstr &name,
+                                       const OwnerFilter &filter = {});
+        [[nodiscard]] bool Adopt(std::uint8_t *data, std::size_t size,
+                                 const OwnerFilter &filter = {});
+
+        [[nodiscard]] PSBRawNode GetRoot() const;
+        [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
+
+    private:
+        PSBRawOwner *owner_{};
+    };
+
+    // Raw node is a PSBFile holder subobject followed by an independent node
+    // pointer. Android arm64 scalarizes both fields; iOS arm64 dispatch
+    // constructors independently preserve standalone-holder and raw-node-first-
+    // subobject callers with a separate node argument. iOS arm64
+    // PSBFile::GetRoot @0x1000ED8C8 passes its PSBFile `this` to the shared
+    // raw-node constructor @0x1000EEF28. That constructor zero-constructs the
+    // first subobject, calls the one-pointer assignment @0x1000ED740, then
+    // stores node. Consequently
+    // copy assignment/destruction must flow through PSBFile rather than a
+    // second, independently implemented owner lifecycle.
+    class PSBRawNode final {
+    public:
+        PSBRawNode() = default;
+        explicit PSBRawNode(const PSBFile &file) {
+            // Android callers inline this root construction at
+            // 0x694AB0..0x694AC8, 0x695FA0..0x695FC0,
+            // 0x6A9870..0x6A9890, 0x6A99A4..0x6A99C4,
+            // 0x6AA058..0x6AA078, 0x6AA360..0x6AA380, and
+            // 0x6AAF08..0x6AAF28. Same-lineage iOS arm64 preserves the shared
+            // constructor @0x1001263B8:
+            // capture entries first, assign the PSBFile holder, then store
+            // the independent node pointer.
+            const std::uint8_t *entries =
+                file.GetOwner()->GetHeader()->entries;
+            file_ = file;
+            node_ = entries;
+        }
+        PSBRawNode(const PSBFile &file, const std::uint8_t *node) {
+            file_ = file;
+            node_ = node;
+        }
+
+        [[nodiscard]] PSBRawOwner *GetOwner() const {
+            return file_.GetOwner();
+        }
+        // The first subobject is observably the same one-pointer holder passed
+        // to raw-node and dispatch constructors. Member-vs-base syntax and the
+        // original accessor name remain stripped, hence `_guess`.
+        [[nodiscard]] const PSBFile &GetFile_guess() const { return file_; }
         [[nodiscard]] const std::uint8_t *GetNode() const { return node_; }
         [[nodiscard]] bool IsValid_guess() const; // 0x598E44
 
@@ -138,56 +179,7 @@ namespace PSB {
         GetResource(std::uint32_t &size) const;
 
     private:
-        PSBRawOwner *owner_{};
+        PSBFile file_;
         const std::uint8_t *node_{};
-    };
-
-    // Native PSBFile holder reconstructed from sub_5980F4 @ 0x5980F4.  The
-    // class deliberately contains only the owner pointer.
-    class PSBFile final {
-    public:
-        using OwnerFilter = std::function<void(PSBRawOwner &)>;
-
-        PSBFile() = default;
-        PSBFile(const PSBFile &other) noexcept : owner_(other.owner_) {
-            // ResourceManager::load @ 0x6A8E94..0x6A8EB8.
-            if(owner_ != nullptr) {
-                owner_->AddRef();
-            }
-        }
-        PSBFile &operator=(const PSBFile &other) noexcept {
-            // ResourceManager::load @ 0x6A926C..0x6A92A8.
-            if(owner_ != nullptr) {
-                owner_->Release();
-            }
-            owner_ = other.owner_;
-            if(owner_ != nullptr) {
-                owner_->AddRef();
-            }
-            return *this;
-        }
-        [[nodiscard]] PSBFile Transfer_guess() noexcept;
-        ~PSBFile() {
-            if(owner_ != nullptr) {
-                owner_->Release();
-            }
-        }
-
-        [[nodiscard]] bool Load(tTJSVariant value);
-        [[nodiscard]] iTJSDispatch2 *GetRootDispatch() const;
-        [[nodiscard]] bool LoadStorage(const ttstr &name,
-                                       const OwnerFilter &filter = {});
-        [[nodiscard]] bool Adopt(std::uint8_t *data, std::size_t size,
-                                 const OwnerFilter &filter = {});
-
-        [[nodiscard]] PSBRawNode GetRoot() const;
-        [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
-        [[nodiscard]] PSBRawOwner *const *
-        GetOwnerSlotAddress_guess() const {
-            return &owner_;
-        }
-
-    private:
-        PSBRawOwner *owner_{};
     };
 } // namespace PSB

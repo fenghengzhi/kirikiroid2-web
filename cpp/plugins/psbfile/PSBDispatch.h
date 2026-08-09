@@ -8,16 +8,16 @@
 
 namespace PSB {
     // Raw collection dispatch reconstructed from sub_597AD4 @ 0x597AD4.
-    // Its constructor has two distinct source arguments: X1 refers to a
-    // one-pointer owner holder/slot and X2 supplies the node.  The exact C++
-    // type behind X1 remains unrecoverable, but a single PSBRawNode parameter
-    // is ruled out by all three emitted call sites.
+    // Its constructor has two distinct source arguments: X1 refers to the
+    // one-pointer PSBFile holder and X2 supplies the node. Android exposes the
+    // scalarized slot. Same-lineage iOS independently preserves one standalone
+    // holder caller and two raw-node-first-subobject callers with a separate
+    // node argument. A single PSBRawNode parameter remains ruled out.
     // valid_ is the independent byte toggled by sub_596F0C @ 0x596F0C.
     class PSBValueDispatch final : public iTJSDispatch2,
                                    public iTJSNativeInstance {
     public:
-        PSBValueDispatch(PSB::PSBRawOwner *const *ownerSlot,
-                         const std::uint8_t *node);
+        PSBValueDispatch(const PSBFile &file, const std::uint8_t *node);
 
         tjs_uint AddRef() override;
 
@@ -118,7 +118,8 @@ namespace PSB {
     private:
         ~PSBValueDispatch() = default;
 
-        tTJSVariant *assign(tTJSVariant *result, const std::uint8_t *node);
+        tTJSVariant *CreateVariant_guess(tTJSVariant *result,
+                                         const std::uint8_t *node);
         void decodeName_guess(std::string &name,
                               std::uint32_t nameIndex) const; // 0x5975C0
         [[nodiscard]] const char *

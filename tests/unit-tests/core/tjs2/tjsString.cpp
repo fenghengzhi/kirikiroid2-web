@@ -20,3 +20,19 @@ TEST_CASE("string to tjsString") {
         REQUIRE(v1_tjs.AsStdString() == v1);
     }
 }
+
+TEST_CASE("tTJSString character IndexOf") {
+    using namespace TJS;
+
+    const ttstr value{ TJS_W("a/b/a") };
+    CHECK(value.IndexOf(TJS_W('a')) == 0);
+    CHECK(value.IndexOf(TJS_W('/')) == 1);
+    CHECK(value.IndexOf(TJS_W('a'), 1) == 4);
+    CHECK(value.IndexOf(TJS_W('a'), 5) == -1);
+    CHECK(value.IndexOf(TJS_W('z')) == -1);
+    CHECK(value.IndexOf(TJS_W('\0')) == -1);
+
+    const ttstr empty;
+    CHECK(empty.IndexOf(TJS_W('/')) == -1);
+    CHECK(value == TJS_W("a/b/a"));
+}

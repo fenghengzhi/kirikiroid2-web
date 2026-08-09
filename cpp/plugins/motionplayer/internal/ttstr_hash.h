@@ -20,9 +20,10 @@
 
 namespace motion::detail {
 
-    // Compute the KiriKiri UTF-16 string hash byte-for-byte matching the
-    // libkrkr2.so algorithm. Empty / null strings collapse to (uint32_t)-1
-    // (the binary's "non-zero sentinel" so a zero hash never escapes).
+    // Compute the KiriKiri UTF-16 payload hash. A null C-string pointer and an
+    // empty payload both reach the non-zero sentinel here; the ttstr functor
+    // below handles a null ttstr backing pointer before calling this helper,
+    // as the Android unordered_map instances do.
     inline std::size_t ttstr_hash_utf16(const tjs_char *p) noexcept {
         std::uint32_t acc = 0;
         if (p) {
@@ -47,7 +48,21 @@ namespace motion::detail {
     struct ttstr_hash {
         using is_transparent = void;
         std::size_t operator()(const ttstr &s) const noexcept {
-            return ttstr_hash_utf16(s.c_str());
+            // Player HM1/HM2/HM3/HM4 @0x6F52AC/0x686944/0x6F2674,
+            // ResourceManager @0x6A96F8/0x6AAB3C and the Emote maps/sets all
+            // distinguish a null ttstr from a non-null zero hash and share the
+            // tTJSVariantString Hint cache.
+            tjs_uint32 *hint = const_cast<ttstr &>(s).GetHint();
+            if(!hint) {
+                return 0;
+            }
+            if(*hint) {
+                return *hint;
+            }
+            const auto hash = static_cast<tjs_uint32>(
+                ttstr_hash_utf16(s.c_str()));
+            *hint = hash;
+            return hash;
         }
         std::size_t operator()(const tjs_char *s) const noexcept {
             return ttstr_hash_utf16(s);

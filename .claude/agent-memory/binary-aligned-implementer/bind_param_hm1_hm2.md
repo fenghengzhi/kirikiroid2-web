@@ -21,3 +21,5 @@ Two-region control flow:
 **HM1/HM3/HM4 maps are declared-but-never-cleared dead storage.** _evalCascadeMap (HM1) now populated by bind but not cleared on reset — same state as HM3 _perNodeLayerStateMap / HM4 _dispatchAliasMap (all await resetMotionState port). Harmless: no reader. When reset is ported, clear all three together.
 
 Subfunction map: HM2 upsert=0x686944 (was ttstr_doubleMap_upsert), HM1 upsert=0x6F52AC, HM1 find=0x6F51BC, split=0x6D0BF4. ttstr_hash inline (1025*^>>6,*9,*32769^>>11) == internal/ttstr_hash.h ttstr_hash_utf16, reuse it.
+
+> **2026-07-26 superseding correction:** 上述旧记录只覆盖非 null key 的算术 mix，错误地把它外推为 `ttstr_hash` 完整对齐。fresh 证据证明：`ttstr::Ptr == nullptr` 时 hash 为 `0`；Ptr 非 null 时先复用 `Hint@+68`，Hint 为 `0` 才计算并写回；仅非 null 计算结果为 `0` 时改为 `0xFFFFFFFF`。当前 `internal/ttstr_hash.h` 已按此修复，旧“inline 等同完整 functor”结论不得继续使用。

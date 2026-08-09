@@ -40,9 +40,7 @@ namespace motion {
         bool findWinSourceGroupLike_0x6948E8(
             detail::LoadedResourceRecord &loadedResource,
             const std::string &group, PSB::PSBRawNode &groupNode) {
-            PSB::PSBRawOwner *owner = loadedResource.file.GetOwner();
-            const PSB::PSBRawNode root(owner,
-                                       owner->GetHeader()->entries);
+            const PSB::PSBRawNode root(loadedResource.file);
             const PSB::PSBRawNode sourceRoot =
                 root.GetDictionaryValueStrict("source");
             // 0x694AEC..0x694B44 uses the non-throwing group lookup and
@@ -74,14 +72,16 @@ namespace motion {
                                    .GetInt();
             const char *type =
                 textureNode.GetDictionaryValueStrict("type").GetString();
-            const PSB::PSBRawNode pixelNode =
-                textureNode.GetDictionaryValueStrict("pixel");
             // 0x694E08 passes an uninitialized 32-bit stack slot.  A null
             // resource chunk leaves it untouched in
             // PSBRawNode_GetResource_guess @ 0x5996E4.
             std::uint32_t sourceSize;
             const std::uint8_t *sourcePixels =
-                pixelNode.GetResource(sourceSize);
+                textureNode.GetDictionaryValueStrict("pixel")
+                    .GetResource(sourceSize);
+            // 0x694E18..0x694E3C releases that strict-lookup temporary before
+            // sourceSize/pixels are consumed; textureNode keeps the raw owner
+            // and borrowed chunk storage alive through the upload.
 
             // 0x694E44..0x694E54 performs both operations in W registers,
             // then calls TJSAlignedAlloc(bytes, 4).  Keep the wrap before the
@@ -358,9 +358,7 @@ namespace motion {
             detail::LoadedResourceRecord &loadedResource,
             const std::string &requestedGroup,
             const std::string &requestedIcon) {
-            PSB::PSBRawOwner *owner = loadedResource.file.GetOwner();
-            const PSB::PSBRawNode root(owner,
-                                       owner->GetHeader()->entries);
+            const PSB::PSBRawNode root(loadedResource.file);
             // sub_695DE8 initializes one raw-node scratch at 0x6960D4 and
             // keeps it alive across the requested-icon probe, source
             // enumeration, and packed-record loop. Later assignments
@@ -390,7 +388,13 @@ namespace motion {
             // copies each raw owner/string, then destroys the old range; there
             // is no per-record heap allocation or unique_ptr owner layer.
             std::vector<KrkrAtlasRecordLike_0x695DE8> records;
-            for(const auto &group : sourceRoot.GetDictionaryKeys()) {
+            // sub_695DE8 @0x69616C constructs this outer key vector after
+            // `records`, then keeps it alive across record decoding, packing
+            // and atlas upload.  Its strings are released only at
+            // 0x696C80..0x697340, immediately before the record vector.
+            const std::vector<std::string> groupKeys =
+                sourceRoot.GetDictionaryKeys();
+            for(const auto &group : groupKeys) {
                 const PSB::PSBRawNode groupNode =
                     sourceRoot.GetDictionaryValueStrict(group.c_str());
                 const PSB::PSBRawNode iconRoot =

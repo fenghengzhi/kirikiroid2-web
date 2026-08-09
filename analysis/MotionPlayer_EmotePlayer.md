@@ -14,11 +14,11 @@
 
 | 项目 | EmotePlayer | MotionPlayer |
 |------|------------|--------------|
-| **类型** | TJS2 脚本层插件类 | 底层纹理/动画帧管理器 |
-| **注册方式** | 作为 `EmotePlayer` 类注册到 TJS2 引擎 | 内部 C++ 模块，不直接暴露给脚本 |
-| **DLL名** | `emoteplayer.dll` (概念上) | 无独立 DLL |
-| **主要函数** | `sub_52E504` (类注册, 5460 bytes) | `sub_6948E8` (findSource, 4856 bytes) |
-| **方法数** | ~40+ 个 TJS2 方法/属性 | 通过回调和数据结构被间接调用 |
+| **类型** | `Motion.EmotePlayer` 与独立 `D3DEmotePlayer` 脚本类 | `Motion` namespace、Player/ResourceManager 等类与底层动画机器 |
+| **注册方式** | 由 `emoteplayer.dll` 独立 entry 延迟挂到 Motion | 由 `motionplayer.dll` namespace registrar 暴露给脚本 |
+| **DLL名** | `emoteplayer.dll` | `motionplayer.dll` |
+| **主要函数** | `0x682528` entry、`0x67FAC8` 成员注册、`0x52E504` D3D 类注册 | `0x6D9B08` namespace registrar、`0x6948E8` findSource |
+| **方法数** | Motion.EmotePlayer 70 members + 2 constants；D3D 类另有独立表 | Motion registrar 有 11 subclasses、常量与两个 namespace function |
 
 ---
 
@@ -28,14 +28,15 @@
 
 #### 静态初始化 (`sub_42EB00`, 0x42EB00)
 
-这是一个静态构造函数，在库加载时执行：
+这是一个静态构造函数，在库加载时执行。fresh 指令复核确认它只构造一只
+`emoteplayer.dll` auto-register node：
 
 ```
 sub_42EB00():
-  - 初始化全局状态 (qword_1AB7E68 等)
-  - 设置浮点初始值 (1.0f)
-  - 将 sub_682528 注册为 "emoteplayer.dll" 的入口回调
-  - 存储到全局注册链表 (xmmword_1AB8920)
+  - 清零 init/term callback pair
+  - 将 emoteplayer_entry@0x682528 写入 init 槽
+  - term 槽保持 null
+  - 以 UTF-16 "emoteplayer.dll" 构造并发布唯一注册节点
 ```
 
 #### 插件入口 (`sub_682528`, 0x682528, 640 bytes)
@@ -43,30 +44,39 @@ sub_42EB00():
 这是 EmotePlayer 插件的 TJS2 注册入口，在引擎加载 "emoteplayer.dll" 时调用：
 
 ```
-sub_682528():
-  1. 调用 sub_A136C0("m") 创建模块字符串
-  2. 通过 sub_8E3C20() 获取 TJS2 引擎实例
-  3. 在引擎中查找 "Motion" 命名空间 (vtable+32 = getMember)
-  4. 调用 sub_685BC0(L"EmotePlayer", 1) 加载/初始化 EmotePlayer 类
-  5. 调用 sub_9F5AF4() 将 "EmotePlayer" 类注册到 "Motion" 命名空间
+emoteplayer_entry@0x682528():
+  1. 调用 LoadModule("motionplayer.dll")
+  2. 通过 TVPGetScriptDispatch_guess@0x8E3C20 获取全局 dispatch
+  3. PropGet "Motion" 到栈上 value Variant，并强制转换为 Object
+  4. 调用 EmotePlayer_loadClass@0x685BC0(L"EmotePlayer", 1)
+     - 先 classInit@0x686148，再在同一 class object 上调用完整成员表@0x67FAC8
+  5. 调用 ncb_registerMember@0x9F5AF4 将该 class 注册到 Motion
      - 关联全局 qword_1AB8078
      - 标志位: 0x10000 (TJS2 类注册标志)
-  6. 查找 "ResourceManager" 子对象
-  7. 注册 sub_685D30 作为回调处理器 (PSB 解密种子设置)
-  8. 注册 "setEmotePSBDecryptSeed" 方法到 ResourceManager
-  9. 注册 "setEmotePSBDecryptFunc" 方法 (loc_685E60)
+  6. 复用同一 value Variant PropGet "ResourceManager"
+  7. 创建 seed native method；以同一 method 作为 Object/ObjThis，释放 raw method
+  8. 强制转换 ResourceManager Object，以 flags 0x10200 注入 setEmotePSBDecryptSeed
+  9. 创建 func native method，以 SetObject 覆盖同一 method Variant，再以 0x10200 注入
+ 10. 逆序析构 method/value Variant；不显式 Release global dispatch
 ```
 
 **调用图**:
 ```
 静态初始化 sub_42EB00
   └─> 注册回调 sub_682528 (emoteplayer.dll 入口)
+       ├─> sub_548A44  (加载 motionplayer.dll)
        ├─> sub_685BC0  (EmotePlayer 类加载)
-       │    └─> sub_67FAC8 (内部初始化)
-       │         └─> sub_6863C4 (延迟初始化回调)
-       ├─> sub_685D30  (setEmotePSBDecryptSeed 实现)
-       └─> loc_685E60  (setEmotePSBDecryptFunc 实现)
+       │    ├─> sub_686148 (class init/finalize)
+       │    └─> sub_67FAC8 (完整成员表，同一 class object)
+       ├─> sub_685D30  (setEmotePSBDecryptSeed callback)
+       └─> sub_685E60  (setEmotePSBDecryptFunc callback)
 ```
+
+`motionplayer_ncb_register@0x6D9B08` 自身只有 Point、Circle、Rect、Quad、LayerGetter、
+Player、SourceCache、ObjSource、ResourceManager、SeparateLayerAdaptor、D3DAdaptor 十一个
+subclass row，明确不含 EmotePlayer。当前本地已据此从 Motion 主表删除提前注册，并把原先
+拆开的 pre/post callback 合回上述唯一 entry 数据流；详细机械门禁见
+`psbfile_function_audit_2026-07-25/FOLLOWUP_EMOTE_REGISTRATION_INJECTION_SURFACE_2026-08-04.md`。
 
 ### 2.2 D3DEmotePlayer 类 (`sub_530C3C` + `sub_52E504`)
 
@@ -178,13 +188,14 @@ EmotePlayer 注册了两个 PSB (E-mote 数据格式) 解密相关方法到 Reso
    - 参数数少于 1 时返回 `TJS_E_BADPARAMCOUNT`；只转换首参数，额外参数忽略
    - 使用普通 `tTJSVariant`→64 位 TJS Integer 转换规则取得 seed；lambda target
      保存并 copy-clone 全部 8 字节，只在 xorshift 调用时读取低 32 位
-   - 构造捕获 seed 的临时 `std::function`，再经 `sub_6A87D0` copy-clone 到
+   - 构造捕获 seed 的临时 `std::function`；薄包装器 `0x6A87D0..0x6A87E8`
+     tail-call 独立 copy-assignment FDE `0x6A87E8..0x6A88CC`，由后者 copy-clone 到
      进程级 filter；setter 返回前独立销毁临时对象
 
 2. **setEmotePSBDecryptFunc** (`0x685E60..0x686148`)
    - 参数数少于 1 时返回 `TJS_E_BADPARAMCOUNT`，否则把首参数转换为 object closure
-   - closure 经 `tRefHolder` 控制块进入临时 `std::function`，随后同样由
-     `sub_6A87D0` copy-clone 到全局 filter
+   - closure 经 `tRefHolder` 控制块进入临时 `std::function`，随后同样经
+     `0x6A87D0 -> 0x6A87E8` wrapper/copy-assignment 两层复制到全局 filter
 
 3. **全局 filter 生命周期**
    - `motionplayer_static_init@0x42EE18` 默认构造 `0x1AB82E0` 并注册 atexit 析构

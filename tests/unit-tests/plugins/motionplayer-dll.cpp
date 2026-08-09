@@ -53,6 +53,35 @@ namespace {
                     nullptr, 1, params, nullptr) == TJS_S_OK);
     }
 
+    struct UnitTestLayerClass final : tTJSDispatch {
+        tjs_error CreateNew(tjs_uint32, const tjs_char *membername,
+                            tjs_uint32 *, iTJSDispatch2 **result,
+                            tjs_int numparams, tTJSVariant **params,
+                            iTJSDispatch2 *objthis) override {
+            // global.CreateNew("Layer", ...) resolves the class member first,
+            // then invokes its default constructor with the two Android
+            // SourceCache arguments intact.
+            REQUIRE(membername == nullptr);
+            REQUIRE(objthis != nullptr);
+            REQUIRE(numparams == 2);
+            REQUIRE(params != nullptr);
+            REQUIRE(params[0] != nullptr);
+            REQUIRE(params[1] != nullptr);
+            REQUIRE(params[0]->Type() == tvtObject);
+            REQUIRE(params[1]->Type() == tvtObject);
+            iTJSDispatch2 *owner = params[0]->AsObjectNoAddRef();
+            tTJSVariant expectedPrimary;
+            REQUIRE(TJS_SUCCEEDED(owner->PropGet(
+                0, TJS_W("primaryLayer"), nullptr, &expectedPrimary, owner)));
+            REQUIRE(expectedPrimary.AsObjectNoAddRef() ==
+                    params[1]->AsObjectNoAddRef());
+            if(result) {
+                *result = TJSCreateDictionaryObject();
+            }
+            return TJS_S_OK;
+        }
+    };
+
     struct ScopedCoreScriptEngine {
         ScopedCoreScriptEngine() {
             if(TVPScriptEngine == nullptr) {
@@ -60,21 +89,111 @@ namespace {
             }
 
             // Mirror application startup: index built-in NCB modules once,
-            // then register the real motionplayer.dll class objects before
-            // creating a ResourceManager adaptor.  NCB has no module-unload
-            // path, so this runtime intentionally lasts for the test process.
+            // then load motionplayer.dll followed by emoteplayer.dll.  The
+            // latter owns EmotePlayer class attachment and the two decrypt
+            // setter injections in emoteplayer_entry @0x682528.  NCB has no
+            // module-unload path, so this runtime intentionally lasts for the
+            // test process.
             static bool indexed = false;
             if(!indexed) {
                 ncbAutoRegister::AllRegist();
                 indexed = true;
             }
             REQUIRE(ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll")));
+            iTJSDispatch2 *global = TVPScriptEngine->GetGlobalNoAddRef();
+            tTJSVariant motionValue;
+            REQUIRE(TJS_SUCCEEDED(global->PropGet(
+                0, TJS_W("Motion"), nullptr, &motionValue, global)));
+            iTJSDispatch2 *motion = motionValue.AsObjectNoAddRef();
+
+            // motionplayer_ncb_register @0x6D9B08 creates Player only as the
+            // sixth Motion subclass; there is no separate global.Player class.
+            tTJSVariant globalPlayer;
+            REQUIRE(TJS_FAILED(global->PropGet(
+                0, TJS_W("Player"), nullptr, &globalPlayer, global)));
+            tTJSVariant playerValue;
+            REQUIRE(TJS_SUCCEEDED(motion->PropGet(
+                0, TJS_W("Player"), nullptr, &playerValue, motion)));
+            REQUIRE(playerValue.Type() == tvtObject);
+            iTJSDispatch2 *playerClass = playerValue.AsObjectNoAddRef();
+            tTJSVariant useD3DDescriptor;
+            REQUIRE(TJS_SUCCEEDED(playerClass->PropGet(
+                TJS_IGNOREPROP, TJS_W("useD3D"), nullptr,
+                &useD3DDescriptor, playerClass)));
+            REQUIRE(useD3DDescriptor.Type() == tvtObject);
+
+            for(const auto &[name, expected] : std::array{
+                    std::pair{TJS_W("MaskModeStencil"), tjs_int{0}},
+                    std::pair{TJS_W("MaskModeAlpha"), tjs_int{1}}}) {
+                tTJSVariant member;
+                REQUIRE(TJS_SUCCEEDED(motion->PropGet(
+                    0, name, nullptr, &member, motion)));
+                REQUIRE(member.AsInteger() == expected);
+            }
+            for(const tjs_char *name : {
+                    TJS_W("doAlphaMaskOperation"),
+                    TJS_W("getD3DAvailable")}) {
+                tTJSVariant member;
+                REQUIRE(TJS_SUCCEEDED(motion->PropGet(
+                    0, name, nullptr, &member, motion)));
+                REQUIRE(member.Type() == tvtObject);
+            }
+
+            // NCB has no module-unload path.  The negative boundary is
+            // observable only before the process's first emoteplayer load;
+            // subsequent fixture instances intentionally see the retained
+            // module registration.
+            static bool emoteplayerLoaded = false;
+            if(!emoteplayerLoaded) {
+                tTJSVariant earlyEmotePlayer;
+                REQUIRE(TJS_FAILED(motion->PropGet(
+                    0, TJS_W("EmotePlayer"), nullptr,
+                    &earlyEmotePlayer, motion)));
+                REQUIRE(ncbAutoRegister::LoadModule(
+                    TJS_W("emoteplayer.dll")));
+                emoteplayerLoaded = true;
+            } else {
+                REQUIRE(ncbAutoRegister::LoadModule(
+                    TJS_W("emoteplayer.dll")));
+            }
 
             // EmoteObject_init @0x67DBAC evaluates global.kag before it
             // constructs ResourceManager. The application always installs
             // this owner; make the unit-test script engine model that boundary
             // instead of relying on the old owner-less port constructor.
-            iTJSDispatch2 *global = TVPScriptEngine->GetGlobalNoAddRef();
+            for(const tjs_char *name : {
+                    TJS_W("EmotePlayer"),
+                    TJS_W("ResourceManager")}) {
+                tTJSVariant member;
+                REQUIRE(TJS_SUCCEEDED(motion->PropGet(
+                    0, name, nullptr, &member, motion)));
+                REQUIRE(member.Type() == tvtObject);
+            }
+            tTJSVariant managerValue;
+            REQUIRE(TJS_SUCCEEDED(motion->PropGet(
+                0, TJS_W("ResourceManager"), nullptr, &managerValue, motion)));
+            iTJSDispatch2 *manager = managerValue.AsObjectNoAddRef();
+            for(const tjs_char *name : {
+                    TJS_W("setEmotePSBDecryptSeed"),
+                    TJS_W("setEmotePSBDecryptFunc")}) {
+                tTJSVariant member;
+                REQUIRE(TJS_SUCCEEDED(manager->PropGet(
+                    0, name, nullptr, &member, manager)));
+                REQUIRE(member.Type() == tvtObject);
+            }
+
+            tTJSVariant layerClass;
+            if(TJS_FAILED(global->PropGet(
+                   0, TJS_W("Layer"), nullptr, &layerClass, global)) ||
+               layerClass.Type() == tvtVoid) {
+                auto *layerFactory = new UnitTestLayerClass();
+                tTJSVariant layerFactoryValue(layerFactory);
+                layerFactory->Release();
+                REQUIRE(TJS_SUCCEEDED(global->PropSet(
+                    TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("Layer"),
+                    nullptr, &layerFactoryValue, global)));
+            }
+
             tTJSVariant kag;
             if(TJS_FAILED(global->PropGet(
                    0, TJS_W("kag"), nullptr, &kag, global)) ||
@@ -86,6 +205,25 @@ namespace {
                 REQUIRE(TJS_SUCCEEDED(global->PropSet(
                     TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("kag"),
                     nullptr, &kagValue, global)));
+                kag = kagValue;
+            }
+
+            // SourceCache_ctor @0x6A78F4 strictly reads kag.primaryLayer and
+            // calls global.CreateNew("Layer", {kag, primaryLayer}). The unit
+            // harness supplies those two application-startup objects even
+            // though this test does not initialize the full visual subsystem.
+            iTJSDispatch2 *kagObject = kag.AsObjectNoAddRef();
+            tTJSVariant primaryLayer;
+            if(TJS_FAILED(kagObject->PropGet(
+                   0, TJS_W("primaryLayer"), nullptr, &primaryLayer,
+                   kagObject)) || primaryLayer.Type() == tvtVoid) {
+                iTJSDispatch2 *primaryObject = TJSCreateDictionaryObject();
+                tTJSVariant primaryValue(primaryObject, primaryObject);
+                primaryObject->Release();
+                REQUIRE(TJS_SUCCEEDED(kagObject->PropSet(
+                    TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                    TJS_W("primaryLayer"), nullptr, &primaryValue,
+                    kagObject)));
             }
         }
     };

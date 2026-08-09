@@ -33,6 +33,8 @@ h = 9*h; h = 32769*(h ^ (h>>11)); if(h==0) h=-1
 bucket = h % bucketCount
 ```
 
+> **2026-07-26 superseding correction:** 上述旧记录只覆盖非 null key 的算术 mix，错误地把它外推为全子系统 `ttstr_hash` 完整行为。fresh 证据证明：`ttstr::Ptr == nullptr` 时 hash 为 `0`；Ptr 非 null 时先复用 `Hint@+68`，Hint 为 `0` 才计算并写回；仅非 null 计算结果为 `0` 时改为 `0xFFFFFFFF`。当前 `internal/ttstr_hash.h` 已按此修复，旧的无条件计算流程不得继续使用。
+
 ## RM 方法地址(全部重命名完毕)
 - load(loadResource)  `ResourceManager_loadResource`(原名保留) — HashMap A 命中即返回;miss 则 sub_598538 打开 PSB → 校验 id=="motion"/spec(krkr|win)/version<=3.03 → 存入 HashMap A
 - loadSource(SourceCache) `Motion_ResourceManager_loadSource@0x6A7BA8` — 读 descriptor-dispatch 的 full-Variant key/src/blendMode/color[4]，在 +72 std::list 按 `(key,src,blendMode)` 命中复用 Layer；color mismatch 或 miss 才把借用 source object 交给 `sub_6A6BE0` 重烘焙，+60 是 current byte count（不是 LRU counter）

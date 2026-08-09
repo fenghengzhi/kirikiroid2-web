@@ -50,7 +50,7 @@
 - **本地**：ttstr 字段平凡赋值，无引用计数、无 release、无 replay。数据流错。
 
 ### R0-3: getLoopTime 返回标量而非 TJS Array
-- **位置**：`Player.h:154`、main.cpp:165/166（loopTime/frameLoopTime 都绑这个标量 getter）
+- **位置**：`Player.h:154`、main.cpp:158/166（loopTime/frameLoopTime 都绑这个标量 getter）
 - **二进制** 0x6D139C：构造 **TJS Array**（sub_704CB8），遍历内联 node deque `a1[164..168]`（160B stride），每项 `new(0x1F4)`=500B，type=2，AddRef node[0]。
 - **本地**：返回裸 `double _loopTime`(+1136)。形状严重不符。注意二进制可能有两个 getter：0x6D139C（Array）vs frameLoopTime 标量 getter ~0x6D97AC（读 +1136）；本地把两者塌成一个标量 getter——需用 NCB reg 表消歧。
 
@@ -69,7 +69,7 @@
 **M15 正确新增（已对二进制核实）**：angleDeg/angleRad、transformOrder/coordinate、flipX/Y、slantX/Y、zoomX/Y、visible、opacity（RW）、pixelateDivision、bounds(RO)、lastTime(RO)、setCoord/contains/clear、colorWeight。
 
 **残留偏差**：
-- **3 kind 错**：`onAction/onSync/onGroundCorrection`（main.cpp:145-147）本地绑 `NCB_PROPERTY`，二进制注册为**方法**（`L"Function"`，单 closure；onSync cb=nullsub_88）。
+- **3 kind 错**：`onAction/onSync/onGroundCorrection`（main.cpp:138-140）本地绑 `NCB_PROPERTY`，二进制注册为**方法**（`L"Function"`，单 closure；onSync cb=nullsub_88）。
 - **12 RO/RW 错**（二进制 `+64==0` 为 RO，本地绑成 RW）：loopTime(166)、variableKeys(174)、syncWaiting(176)、frameLastTime(164)、frameLoopTime(165)、hasCamera(178)、cameraTarget(227)、cameraPosition(228)、cameraFOV(229)、cameraAlive(230)、resourceManager(236)、processedMeshVerticesNum(167)。
 - **疑似误删 11 个二进制成员** ⚠️**需独立复核**：审计 agent 报告 stealthChara、stealthMotion、tags(RO)、project、meshline、useD3D、independentLayerInherit（与 colorWeight 不同名，非 alias）、setVariable、getVariable、getCommandList、onFindMotion 出现在 0x6D69C8 成员表里，而 M15 提交 9fb64d4/D-01/M-colorWeight 把它们当 port-extra 移除了。**注意：本次另一 agent 报告 0x6D69C8 函数体 ~161KB 反编译被截断，故"成员存在"的判定与提交时"port-extra"判定存在冲突，必须用 NCB reg 表（ncb_addMember 调用点逐个 get_bytes 取名）二次确认，再决定是否回滚这些删除。**
 - **24 个本地 extra** 不在二进制表（其中 meshDivisionRatio(191)、tickCount(182)、frameTickCount(200)、syncActive(177)、cameraActive(179) 是错类 hoist/发明，均无 `// PLATFORM_BOUNDARY` 标注）。

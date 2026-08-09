@@ -21,10 +21,12 @@ DEVIATION"实为 **IDB off-by-one 误命名**导致的误判,本轮 fresh decomp
 
 ---
 
-## 1. NCB 92-member 集 (main.cpp:137 NCB_REGISTER_CLASS(Player))
+## 1. NCB 92-member 集（当前 `NCB_REGISTER_SUBCLASS(Player)`）
 ✅ **已对齐**。本地注释逐条标注二进制 descriptor build site,RO/RW 区分正确,注册顺序对齐
 (play#70/progress#71/clear#72/stop#73 收尾)。2026-05-30 的"138 vs 92"偏差已消除:24 timeline-query
 + selector 方法判为 D3DEmotePlayer-only 不再注册;17 host 方法去 NCB 但保留 C++ body。
+- 2026-08-04 所有权补充：Player 由 Motion 主表第六个 subclass row 注册，不再先创建
+  顶层 class 再 post alias；成员表本身仍是本节的同一 92-member registrar。
 - `chara`→getChara/setChara, `stealthChara`→getStealthChara/setStealthChara(分别独立 setter,见 §3)。
 - `loopTime`/`lastTime`/`frameLoopTime` 都绑 getLastTime/getLoopTime(scalar +1136),`variableKeys`→getVariableKeys。
 

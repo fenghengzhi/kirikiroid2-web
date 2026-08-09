@@ -14,6 +14,9 @@ metadata:
 - Player 四 HM 全是 libstdc++ unordered_map: ctor@0x6CED30 各 `_M_next_bkt(...,0xA)`+1.0f load:
   HM1+264(seed 0x6cedd0)/HM2+320(0x6cee24)/HM3+1184(0x6cef58)/HM4+1240(0x6cefb0)。本地 std::unordered_map+ttstr_hash 即正确,**不要改成开放寻址表**。
 - ttstr_hash 逐位匹配 HM2_upsert@0x686944: (1025x)^((1025x)>>6)→9acc→32769(h^(h>>11))→0转-1。
+
+> **2026-07-26 superseding correction:** 上述旧记录只覆盖非 null key 的算术 mix，错误地把它外推为 `ttstr_hash` 完整对齐。fresh 证据证明：`ttstr::Ptr == nullptr` 时 hash 为 `0`；Ptr 非 null 时先复用 `Hint@+68`，Hint 为 `0` 才计算并写回；仅非 null 计算结果为 `0` 时改为 `0xFFFFFFFF`。当前 `internal/ttstr_hash.h` 已按此修复，旧“逐位/完整对齐”结论不得继续使用。
+
 - Player+408 param-ramp = std::multimap (finalize@0x6B1ECC 用 _Rb_tree_insert_and_rebalance+sub_9B1ED0 比较器; dtor 0x6cfd4c stdmap_recursive_destroy 证实)。本地 ParameterRampMap multimap 对齐(commit be77533 正确)。
 - var-track deque+1296: initVariables@0x6CD750 new(0x1E0)=480B chunk, 元素 stride160B, cascadeKey=scope+"::"+label。本地 VariableLabelScopeDeque 字段序对齐。
 - node deque+184: ctor 0x6cf17c 内联 push 单 root(stride2632B)。本地 std::deque<MotionNode> 对齐。

@@ -8,7 +8,7 @@ metadata:
 libkrkr2.so exposes TWO distinct EmotePlayer-family NCB classes, both with full APIs.
 
 **Fact:** `EmotePlayer_loadClass` (0x685BC0) calls BOTH `EmotePlayer_NCB_classInit` (0x686148,
-registers `finalize`->noop 0x6862C8) AND `EmotePlayer_ncb_registerMembers` (0x67FAC8, ~69-member
+registers `finalize`->noop 0x6862C8) AND `EmotePlayer_ncb_registerMembers` (0x67FAC8, 70-member
 Player-engine-facing API) into the SAME class object, which is then registered as
 `Motion.EmotePlayer`. xrefs_to confirm both 0x67FAC8 and 0x686148 are called only from 0x685BC0.
 

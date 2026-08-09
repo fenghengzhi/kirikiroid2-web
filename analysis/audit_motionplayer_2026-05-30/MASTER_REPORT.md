@@ -29,7 +29,9 @@
    - 节点/控制器 deque（stride 2632 / 160 / 0xA48 块）→ `std::deque`
    - 改变桶分布、迭代顺序、节点生命周期链 → 影响依赖插入序的遍历（EmoteEngine bind-loop、getLoopTime Array、isAnimating 桶扫描）。
 2. **C++ PSBDictionary helper 替代 TJS dispatch**（F/H/J/K）：二进制大量通过 `iTJSDispatch2::PropGet(player+528 / node 对象)` 读 PSB；本地直接读 PSB struct/cache。偏移多数对，但 dispatch 链/对象生命周期不同。
-3. **NCB 类暴露面重组**（C/D/E/K）：二进制 `Motion.EmotePlayer`(0x67FAC8, ~69 成员) / `D3DEmotePlayer`(0x52E504, 54 成员) / `Player`(0x6D69C8, 92 成员) 三套 API 在本地被搬移/合并/错配。
+3. **NCB 类暴露面重组**（C/D/E/K，历史缺口，现已修复）：二进制 `Motion.EmotePlayer`
+   (`0x67FAC8`, 70 成员 + 2 常量，含曾漏读的 UTF-16 `activateSelectorTarget`) /
+   `D3DEmotePlayer`(`0x52E504`, 54 成员) / `Player`(`0x6D69C8`, 92 成员) 是三套独立 API。
 
 ---
 
@@ -44,12 +46,12 @@
 | M3 | J | getVariable 0x533E1C + HM1 cascade 0x6CD39C + evalKey_cascade 0x6CD23C | PlayerVariable.cpp | getVariable 实为 scope-gate→HM1 join("scope::label")→HM2 fallback / HM4-first→HM1 fallback 的级联；本地只读 `_evalResultValues`+frame ranges，无 HM1/HM4/scope-join | 高 |
 | M4 | J | clearHM3_HM4 0x6B80E4 + evalKey_cascade | Player.h `_dispatchAliasMap` | HM4(+1240) 是 **owning ttstr→tTJSVariant\***（dtor 逐个 Release，eval 读 node+16 为 double）；本地建模成 non-owning `iTJSDispatch2*` 别名图且未用 → 数据流错 | 中 |
 | M5 | F | buildNodeTree_recursive 0x6B4A6C + buildNodePathKey 0x6B5C1C(**MISSING**) | NodeTree.cpp | 二进制按**层级 path ttstr**（`parent/child/..`）做节点索引/stencil/HM3 key；本地按扁平 PSB label → 重名碰撞、值串。path-key builder 本地完全缺失 | 高 |
-| M6 | K | doAlphaMaskOperation 0x6AF104 | 缺 / main.cpp:286 | 整个 alpha-mask op 缺失（shader cache + CPU `dst.a=src.a*dst.a/255` + 边界 fillRect）；且本地把它误挂在 Player 而非 namespace | 中 |
+| M6 | K | doAlphaMaskOperation 0x6AF104 | 缺 / main.cpp:279 | 整个 alpha-mask op 缺失（shader cache + CPU `dst.a=src.a*dst.a/255` + 边界 fillRect）；且本地把它误挂在 Player 而非 namespace | 中 |
 | M7 | H | anchor 0x6C0528（type10） | PlayerUpdateAnchor.cpp:36 | dampPow 公式错：二进制 `dt*(..)/v27/60/node+2432`，v27=player592/player1168；本地用 `abs(frameLastTime)/60/anchorDamping`。且 w/h 走 PSB dispatch，本地走 cache | 中 |
 | M8 | H | calcBounds 0x6C3D04 | PlayerRenderItems.cpp:32 | 二进制**递归** type3 子动作 + type4 粒子子节点；本地是扁平 | 中 |
 | M9 | K | ObjSource 0x69CCB8 / RM 0x6AB8BC / findSource 0x6948E8 | ResourceManager/PlayerResource | **【2026-07-23 再纠正】** 2026-07-19 的 raw mapped-record/ObjSource owner 结论保留；旧 CLOSED 漏掉 `0x6F1060→0x695DE8` 第二调用者、item→SourceState alias 与 getter 后 rect 重读。上述链及解码分支边界现已补齐；KRKR 整页上传为 Web API 边界，但未审计余部不得外推为全局 100% | AUDITED SITES + BOUNDARY |
 | M10 | L | particleSystem splice 0x6C1A00 + childMotion 0x6BE2C0（`sub_6F363C` 父←子 drawlist 拼接）| PlayerUpdateParticles.cpp:791 | 二进制把子 drawlist 拼进父 +936；本地无此 splice → 粒子/子精灵可能丢失（除非经 cluster I 渲染路径已覆盖，需核） | 中 |
-| M11 | D | D3DEmotePlayer 成员集 0x52E504 + contains 0x530B5C | main.cpp:496-583 | 54 成员表对不上（TimelinePlayFlagDifference 名错、"clear"绑 create cb、5 处故意 name/cb 别名未复刻、~28 EmotePlayer 风格属性多注册）；contains 本地自造 AABB 重载 | 中 |
+| M11 | D | D3DEmotePlayer 成员集 0x52E504 + contains 0x530B5C | main.cpp:443-530 | 54 成员表对不上（TimelinePlayFlagDifference 名错、"clear"绑 create cb、5 处故意 name/cb 别名未复刻、~28 EmotePlayer 风格属性多注册）；contains 本地自造 AABB 重载 | 中 |
 
 ### P1 — 结构/类型/容器/边界
 
@@ -87,7 +89,9 @@
 
 1. **build_flow / skipFlag1 / item+18 实际已对齐**（簇 I 反编译证明）。`sub_6C2334 @0x6c33c0`：`item+18 = inheritedFlag18 || (node+48!=0)`；`node+48 = priorDraw`（`sub_6BC4F0 @0x6bc6c4` 证明：仅 forceVisible 时 = `priorDraw&1`）。本地 `PlayerRenderItems.cpp:477` `skipFlag1 = !(inheritedFlag18||(node.priorDraw!=0))` **逐位精确**。m2logo items[1] frame12+ 残余 mismatch 不是公式 bug，而是 build/execute **阶段放置**差（rawFlag20 闩锁位置），低优先。
 2. **requireLayerId(node+16/+20) 提前物化不是偏差**（簇 F）：二进制 `buildNodeTree_recursive` 0x6B4D24/0x6B4DBC 本就每节点 2× requireLayerId，与本地 NodeTree.cpp:102-105 一致。render-build 的 `requireLayerId`(item+424) 是**第三个**独立 layer-id。先前 review 的 build_flow 担忧对 node+16/+20 而言是误判。
-3. **EmotePlayer 不是 finalize-only**（簇 C）：`EmotePlayer_loadClass 0x685BC0` 同时调 classInit(注册 finalize) + ncb_registerMembers(0x67FAC8, ~69 成员) 进同一类 → `Motion.EmotePlayer` 有完整引擎 API。推翻 `EmotePlayer_Internal_Implementation.md §2.4`。
+3. **EmotePlayer 不是 finalize-only**（簇 C）：`EmotePlayer_loadClass 0x685BC0` 同时调
+   classInit(注册 finalize) + ncb_registerMembers(`0x67FAC8`, 70 成员 + 2 常量) 进同一类 →
+   `Motion.EmotePlayer` 有完整引擎 API。推翻旧 finalize-only 结论。
 4. **P0-2 / P2-4（EmoteEngine 6 map 字节块 + applyVarControllers 顺序）已修**（簇 B 复核确认）。
 
 ---

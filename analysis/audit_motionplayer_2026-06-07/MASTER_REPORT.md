@@ -34,7 +34,7 @@
 |------|------|
 | 对象布局 / 字段语义 / vtable / 生命周期（裸指针 new/delete） | ✅ 普遍对齐 |
 | 内部容器实现 | ✅ **重大修正**：4 个 Player HM 经字节核实**本就是 libstdc++ `unordered_map<ttstr,…>`**（非自研内联 HM）；node/controller 用 `std::deque` 是源码选型对齐。**2026-05-30「STL 替代 KiriKiri 内联容器」这条跨簇系统性根因被证伪** —— libkrkr2.so 本身就用 STL，本地选型正确 |
-| NCB 暴露面（EmotePlayer/D3DEmotePlayer/Player/Motion namespace） | ✅ 三类 + namespace 成员集**逐条 1:1**（69/54/92 成员，故意 alias 全保留）；旧「暴露面重组」P0 已消除 |
+| NCB 暴露面（EmotePlayer/D3DEmotePlayer/Player/Motion namespace） | ✅ 三类成员集为 70+2 / 54+4 / 92；EmotePlayer 由独立 entry 挂接，Motion 主表为 23 constants → 11 subclasses（Player 第六）→ 2 functions，无 post alias/deferred attach |
 | 数据流 / 调用链 | ⚠️ 残留：渲染 execute/build 阶段放置（item+424/+20 闩、leaf/composed 双 Rb_tree pre-walk pass）、firstFrame `_deltaTime` 读序、Player::isAnimating 委托 |
 | 边界行为 | ⚠️ 少量局部：mesh `if(meshType!=0)` 门控缺、calcBounds 漏 `!_preview` gate、particle Pass2 用错 dt 字段 |
 

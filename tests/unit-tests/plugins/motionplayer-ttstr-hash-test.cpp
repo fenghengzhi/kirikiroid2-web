@@ -34,7 +34,7 @@ namespace {
     constexpr std::uint32_t kHashOfA = 0xCA2E9442u;
 } // namespace
 
-TEST_CASE("ttstr_hash_utf16: empty string collapses to -1 sentinel",
+TEST_CASE("ttstr_hash_utf16: raw empty payload uses the nonzero sentinel",
           "[motionplayer][ttstr_hash]") {
     REQUIRE(ttstr_hash_utf16(nullptr) == kEmptySentinel);
 
@@ -72,7 +72,35 @@ TEST_CASE("ttstr_hash functor: agrees with raw helper on ttstr",
           "[motionplayer][ttstr_hash]") {
     ttstr key(u"hello");
     const ttstr_hash hasher{};
-    REQUIRE(hasher(key) == ttstr_hash_utf16(key.c_str()));
+    tjs_uint32 *hint = key.GetHint();
+    REQUIRE(hint != nullptr);
+    *hint = 0;
+    const auto expected = ttstr_hash_utf16(key.c_str());
+    REQUIRE(hasher(key) == expected);
+    REQUIRE(*hint == expected);
+
+    constexpr tjs_uint32 cached = 0x12345678u;
+    *hint = cached;
+    REQUIRE(hasher(key) == cached);
+}
+
+TEST_CASE("ttstr_hash functor: null ttstr hashes to zero without a Hint",
+          "[motionplayer][ttstr_hash]") {
+    ttstr key;
+    const ttstr_hash hasher{};
+    REQUIRE(key.GetHint() == nullptr);
+    REQUIRE(hasher(key) == 0);
+}
+
+TEST_CASE("ttstr_hash functor: allocated empty payload caches the sentinel",
+          "[motionplayer][ttstr_hash]") {
+    ttstr key(TJS::tTJSStringBufferLength(0));
+    const ttstr_hash hasher{};
+    tjs_uint32 *hint = key.GetHint();
+    REQUIRE(hint != nullptr);
+    REQUIRE(*hint == 0);
+    REQUIRE(hasher(key) == kEmptySentinel);
+    REQUIRE(*hint == kEmptySentinel);
 }
 
 TEST_CASE("ttstr_hash functor: agrees with raw helper on c-string overload",

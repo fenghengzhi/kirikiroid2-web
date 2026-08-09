@@ -15,6 +15,7 @@ Prerequisites (done by operator + `setup_device()`):
 
 Public surface used by adapters:
     engine.call(addr, ints=(), doubles=(), ret="int")
+    engine.call_sret(addr, result_addr=..., result_size=..., ints=())
     engine.offset(off)
     engine.heap.alloc / heap.write / reset_heap()
     engine.ql.mem.read / mem.write  (ql.* is a facade; the backing is
@@ -506,6 +507,43 @@ class AdbHarnessEngine:
         if ret == "int":
             return x0 - (1 << 64) if (x0 & (1 << 63)) else x0
         return x0
+
+    def call_sret(
+        self,
+        addr: int,
+        *,
+        result_addr: int,
+        result_size: int,
+        ints: Iterable[int] = (),
+    ) -> None:
+        """Invoke an AArch64 non-trivial C++ return through hidden X8.
+
+        The harness compiler supplies its own 32-byte non-trivial result slot
+        in X8, copies ``result_size`` bytes into ``result_addr`` afterwards,
+        and leaves the ordinary integer arguments in X0..X7.
+        """
+        if self._socket is None:
+            raise RuntimeError("engine not started")
+        int_list = list(ints)
+        if len(int_list) > 8:
+            raise ValueError("harness supports ≤ 8 sret integer arguments")
+        if result_addr <= 0:
+            raise ValueError("sret result_addr must be non-zero")
+        if not 1 <= result_size <= 32:
+            raise ValueError("sret result_size must be between 1 and 32")
+
+        parts = [
+            f"CALL_SRET {addr:x} {result_addr:x} {result_size} "
+            f"{len(int_list)}"
+        ]
+        for value in int_list:
+            parts.append(f"{value & 0xFFFFFFFFFFFFFFFF:x}")
+        self._writeline(" ".join(parts))
+        reply = self._readline()
+        if reply.startswith("ERR "):
+            raise RuntimeError(f"harness error: {reply[4:]}")
+        if reply != "OK_VOID":
+            raise RuntimeError(f"expected OK_VOID, got {reply!r}")
 
     def storage_list(
         self, fn_addr: int, media_addr: int, name_slot_addr: int,

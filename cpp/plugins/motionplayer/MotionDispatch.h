@@ -57,6 +57,7 @@ namespace motion::detail {
     extern tjs_uint32 copyRectMemberHint_guess;    // 0x1AB82C8, "copyRect"
     extern tjs_uint32 operateRectMemberHint_guess; // 0x1AB82CC, "operateRect"
     extern tjs_uint32 adjustGammaMemberHint_guess; // 0x1AB82D0, "adjustGamma"
+    extern tjs_uint32 primaryLayerMemberHint_guess; // 0x1AB82D4, "primaryLayer"
     extern tjs_uint32 fillRectMemberHint_guess;    // 0x1AB8270, "fillRect"
     extern tjs_uint32 neutralColorMemberHint_guess; // 0x1AB826C, "neutralColor"
     extern tjs_uint32 windowMemberHint_guess;      // 0x1AB84A0, "window"

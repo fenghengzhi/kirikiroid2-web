@@ -447,7 +447,9 @@ namespace TJS {
         }
 
         [[nodiscard]] int IndexOf(tjs_char c, unsigned int pos = 0) const {
-            return IndexOf(tTJSString(c), pos);
+            // Android ttstr_IndexOfChar_guess@0x59A284 passes one code unit to
+            // the explicit-length allocator rather than forming a NUL string.
+            return IndexOf(tTJSString(&c, 1), pos);
         }
 
         [[nodiscard]] tTJSString SubString(unsigned int pos,

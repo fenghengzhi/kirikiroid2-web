@@ -78,9 +78,14 @@
   `0x599E04 → 0x598538 → 0x8ED920` 抛 storage 异常，并因异常跨 runtime 触发
   `std::terminate`。runner 现显式启动一只现有 self-contained XP3，并把 storage/media
   输入 staging 到 app-private files 目录、继承 app UID；正式 CLI 与 Frida 重跑均通过。
+- `CreateAdaptor-null` 已用现有 `ezsave.pimg` 在真实 API 31 ARM64 AVD 闭合：暂时清零
+  `PSBFile_ncbClassInfo_classObject@0x1AB5110` 后直调 `EnsureContainer@0x599E04`，实测
+  返回 true、`_file` 为 Void、container 仍更新；恢复原 class-object 指针后，同 container
+  重试会重新加载并发布 Object adaptor，最终 `status=ok`。详见
+  `psbfile_function_audit_2026-07-25/FOLLOWUP_CREATE_ADAPTOR_NULL_RUNTIME_2026-08-02.md`。
 - 尚未获得天然 runtime 覆盖的只剩损坏 MDF/zlib failure、filter 后 offset failure、损坏
-  packed table、tag `0x0B` 极端值、>4 GiB storage 与 CreateAdaptor-null。当前资产没有
-  相应可达样本；按物料规则不制造 fixture。这些验证缺口
+  packed table、tag `0x0B` 极端值与 >4 GiB storage。当前资产没有相应可达样本；按物料
+  规则不制造 fixture。这些验证缺口
   不推翻连续主实现簇 112 个函数、两只静态初始化入口（完整 PSBFile 模块专属 emitted
   topology 114 个）的
   静态归属与本轮正常/替换生命周期实测，但也不能被误写成已闭合。
@@ -288,8 +293,10 @@
   bit55，但 `GetInt@0x599544..0x599548` 只读取 `node+1` 的低 4 字节并返回 W0，没有任何
   `node+5..7` 读取。该差异影响损坏/页边界节点的 first-fault 行为，不能用健康输入数值相同
   或“wrapper 截断优化”抹平；本地现已拆分这两条数据流。
-- fresh decompile `EnsureContainer@0x599E04`、`Resolve@0x59A4B0`、
-  `GetListAt@0x5999F4` 与 `ContainsDictionaryKey@0x5995D8` 未发现新的本地差异。
+- fresh decompile `EnsureContainer@0x599E04`、`Resolve@0x59A4B0` 当时未发现新的本地
+  差异；这里曾把 `GetListAt@0x5999F4` 与 `ContainsDictionaryKey@0x5995D8` 的 Android
+  无 direct-classifier xref 误读成源码手写 switch。该 negative-xref 结论已在
+  `2026-08-02` 被同源 iOS arm64 的 retained call 正证据证伪并就地纠正。
   对现有资产的 packed table 做独立只读解析：`ezsave.pimg` root 是 11-key Dictionary，
   直属八个 `.tlg` 为 Resource、`height/width` 为 Integer、`layers` 为 Array，没有直属
   Dictionary；未过滤 motion root 是 Resource `0x1A`。Resolve 不暴露 root、每段只允许
@@ -304,11 +311,11 @@
   `0x5979F8` 调用 `tTJSVariant::operator=(tjs_int32)@0xA0FF28`；该 helper 在
   `0xA0FF44` 以 `SXTW` 写入 Integer。此前本地把 `uint32_t count` 直接提升为
   `tjs_int64`，高位 count 会零扩展；现已恢复 signed 32-bit 赋值边界。
-- `assign@0x59673C` 的 String 分支与 `EnumMembers@0x596F50` 的 dictionary name
+- `CreateVariant_guess@0x59673C` 的 String 分支与 `EnumMembers@0x596F50` 的 dictionary name
   都直接调用 narrow `tTJSVariant::operator=(const char *)@0xA0FEB4`。此前本地先构造
   `ttstr`，多出宽字符串 owner、AddRef/Release 和“先分配临时量、后释放旧 result”的
   异常生命周期；现已恢复直接 narrow 赋值。
-- 同一 `assign@0x59673C` 的入口 `0x596764` 把 destination 保存到 `X19`；各 tag
+- 同一 `CreateVariant_guess@0x59673C` 的入口 `0x596764` 把 destination 保存到 `X19`；各 tag
   正常/throw-helper-return 分支最终汇入 `0x596B88 MOV X0,X19`，返回同一 destination
   地址。四个直接 caller `0x5971B4/0x5973A4/0x597848/0x5979B4` 都忽略该返回值。
   本地此前误写为 `void`，现恢复返回现有 destination pointer；pointer/reference 的原始
@@ -321,7 +328,7 @@
   `TJS_E_NOTIMPL`。本地此前保留初始化值 `0`，现已恢复该 throw-helper continuation；
   对其余 `sub_95440C/sub_95458C` 调用点的独立复核没有发现第二处 continuation 偏差。
 - 本轮在**不运行或修改 oracle runner、也不使用 Frida**的条件下，对
-  `assign@0x59673C`、`EnumMembers@0x596F50`、`GetCount@0x5975E0`、
+  `CreateVariant_guess@0x59673C`、`EnumMembers@0x596F50`、`GetCount@0x5975E0`、
   `PropGetByNum@0x5976C4`、`PropGet@0x597854` 再做 fresh decompile，并对容易被
   Hex-Rays 省略的尾路径逐指令复核。`GetCount` 的精确边界为：invalid owner/valid byte
   返回 `TJS_E_INVALIDOBJECT(-1006)`；非空 member name 返回 `TJS_E_NOTIMPL(-1002)`；
@@ -332,15 +339,15 @@
   `PropGet` 的 unknown-tag continuation `0x5978E0..0x5978F0` 与普通 miss 共用同一
   flag gate，即未置该位时清 result/返回 0，否则返回 `-1001`。三处成功/清空站点都没有
   result-null guard。本地逐分支、写入时点与错误码均一致，未发现新的行为差异。
-- `assign@0x59673C`、`getResource_guess@0x596C70`、
+- `CreateVariant_guess@0x59673C`、`getResource_guess@0x596C70`、
   `PSBRawNode::GetResource@0x5996E4` 与 `PSBMedia::GetResourceData@0x59A0B4`
   四条 resource 路径都先取得 chunk-offset view、再取得 chunk-length view，索引 entry 时
   则先读 `lengths[index]`、后读 `offsets[index]`。三个 helper 原本已符合两层顺序；只有
-  `assign` 的 entry 访问反了，现已纠正，保留损坏表输入下的首个越界访问顺序。
+  `CreateVariant_guess` 的 entry 访问反了，现已纠正，保留损坏表输入下的首个越界访问顺序。
 - fresh decompile `TJSAllocVariantOctet_guess@0xA0E0F4`、
   `tTJSVariant_CopyRef_guess@0xA0FB64`、析构 wrapper
   `0xA0F778`/`tTJSVariant_ReleaseContent_guess@0xA0F790` 又闭合了
-  `PSBValueDispatch_assign_guess@0x59673C` 两条临时对象链。非空、非零长度 Octet 先以
+  `PSBValueDispatch_CreateVariant_guess@0x59673C` 两条临时对象链。非空、非零长度 Octet 先以
   ref=1 分配并复制 bytes，CopyRef 先增到 2、再释放旧 result 并
   安装，临时 Variant 析构后回到 1。Array/Dictionary child dispatch 则从 ref=1 开始，
   临时 Object/ObjThis 两槽使其到 3，CopyRef 到 result 后为 5，临时量析构两次 Release
@@ -423,7 +430,7 @@
 ## 2026-07-22：当前复核增量
 
 - 对 `0x59641C..0x59B708` 的 111 个 `libkrkr2.so` 内嵌 psbfile 业务/NCB入口重新枚举异常 helper
-  continuation，补齐 `assign@0x59673C`、`IsInstanceOf@0x596E24` 与
+  continuation，补齐 `CreateVariant_guess@0x59673C`、`IsInstanceOf@0x596E24` 与
   `GetDictionaryKeys@0x598E64` 的精确默认值。该轮曾误记 `PSBFile::Load@0x598268`
   已闭合；后续逐指令复核 `0x5983AC..0x5983B0` 发现 throw helper 返回后必须显式 true，
   本轮已纠正代码和本文结论。
@@ -435,7 +442,7 @@
   callsite 证据复原，不把本地 special-member 写法升格为二进制事实。
 - 删除无 Android 独立入口的 `CreatePSBValueDispatch/CreatePSBValueVariant`；
   `PSBValueDispatch` 的完整类声明位于 `PSBDispatch.h`，37 个定义仍在 `main.cpp`
-  out-of-line（32 个接口槽、构造器、`assign` 与 3 个私有 helper）。此前“35 个方法”是
+  out-of-line（32 个接口槽、构造器、`CreateVariant_guess` 与 3 个私有 helper）。此前“35 个方法”是
   已过期的统计口径，现已与 112-entry 主实现 manifest 纠正一致。`load@0x6A92FC..0x6A9358`
   直接从 selected owner/root 构造 dispatch，
   不再生成 retained `PSBRawNode` 临时量。
@@ -447,11 +454,15 @@
   以及六个无构建/源码消费者的旧 eager compatibility 头文件：`BitConverter.h`、
   `Consts.h`、`EMoteCTX.h`、`PSBEnums.h`、`PSBExtension.h`、`PSBHeader.h`。
 - raw node 已删除无 Android 独立/内联调用证据的 array/dictionary convenience API；
-  `PSBMedia::GetListAt@0x5999F4`、`GetString@0x598B58`、`GetInt@0x599438`、
-  `GetResource@0x5996E4` 直接展开自身 packed 分支；`GetInt@0x599438` 与
+  `PSBMedia::GetListAt@0x5999F4` 的 Array 分支保留自身 count decoder，Dictionary 分支
+  恢复同谱系 iOS arm64 保留的两只 `PsbArray_guess`（第二只为未消费对象）；
+  `GetString@0x598B58`、`GetInt@0x599438`、`GetResource@0x5996E4` 直接展开自身 packed 分支；`GetInt@0x599438` 与
   `GetDouble@0x5992E8` 则恢复为 outer dispatcher 加四类共享 `_guess` decoder 的
   高置信源码形状，Release 构建仍由优化器内联这些边界。
-  `PSBFile::Load@0x598268` 也已合并 octet/MDF 裸指针生命周期，不再经过本地 `LoadOctet`。
+  `PSBFile::Load@0x598268` 也已合并 octet/MDF 裸指针生命周期，不再经过本地 `LoadOctet`；
+  2026-08-02 又由 Android `0x5982B0..0x59841C/0x5985E0..0x5986B8` 两份完整 clone 与
+  iOS arm64 `0x1000ED5B4` 的 retained-call 证据恢复共享
+  `tryDecodeMdf_guess(source,size-in/out)`，不再在 Load/LoadStorage 手写两份算法。
 - `ResourceManager_loadResource@0x6A8D8C` 已恢复完整异常字符串拼接、
   `unordered_map::operator[]@0x6EB9E4` 默认构造 mapped record，以及 selected/loaded
   common tail；`findSource@0x6AAB3C` 已恢复 unchecked split 边界、String 型 blank
@@ -662,9 +673,9 @@ guarded-default-construct `ncbClassInfo<PSBFile>::_info`，随后
 | count/index/property | `0x5975E0`, `0x5976C4`, `0x597854` | array count、负下标、dictionary 属性、`TJS_MEMBERMUSTEXIST` 边界 |
 | name decode | `0x5975C0`, `0x597B1C` | 先经 `namesData[nameIndexes[index]]` 找 terminal，再沿 parent 回溯并 reverse |
 | NCB 注册 | `0x597E98..0x5981F8`, `0x59A8D8`, `0x59A968`, `0x59AA84..0x59B708` | typed class state、自动注册/反注册、factory、native holder、`root` property、`load` method；本地由 ncbind 模板承接通用注册机制；factory 在 load 抛异常时析构已写入 result 的 native holder、保留悬挂 result slot 后原样重抛 |
-| root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；小写 `mdf` 解压及失败 fallback；storage 数据 buffer 使用裸指针，异常清理只析构 stream |
+| root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；两 caller 共享 MDF 解压 helper（Android 各自内联、iOS arm64 保留），小写 `mdf` gate、失败 fallback 与 success-null size 写回；storage 数据 buffer 使用裸指针，异常清理只析构 stream |
 | owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；`0x598708/0x598A64` 的真实 rvalue 路径是 Rule-of-Three copy + 临时析构，AddRef/Release 相消后保留零引用删除分支；filter 后刷新 header view；transfer helper 原名及 member/free 身份仍不可辨识 |
-| node helper | `0x598A3C..0x5996E4` | raw-pair Rule-of-Three copy 生命周期、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node；当前生产 rvalue assignment 已由 `0x59A6D0/0x59A6D8` 的 identity refcount store 闭合为 copy + 临时析构，但优化后二进制不能数学上排除不可见位置曾声明其他 special member |
+| node helper | `0x598A3C..0x5996E4` | PSBFile-compatible holder 首子对象 + 独立 node；默认/copy/assignment/destruction 复用 `PSBFile` special members，而非 raw node 独立 Rule-of-Three；字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 holder/node；Android `0x59A6D0/0x59A6D8` 与双 iOS raw ctor/assignment/GetRoot caller共同闭合 copy + 临时析构，精确共同 holder 名及 member/base token 仍不可恢复 |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
 | media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历；strict 返回 retained 临时，循环内 copy-assign current 后析构临时，失败保持 caller out 不变，成功尾块才 copy/AddRef 写回 out |
 | motionplayer 原始加载链 | `0x6A8D8C`, `0x6A87D0`, `0x685D30`, `0x6863CC` | 规范化路径→缓存 raw owner→全局 `std::function` filter→严格读取 id/spec/version→每次新建 root dispatch；seed setter 接受至少一个可转整数的 TJS 参数 |
@@ -842,12 +853,15 @@ typed root getter `sub_5981F8@0x5981F8` 在 holder 为空时返回 null；raw ro
 getter 也不调用该 helper，而是在 guard 后直接构造 dispatch 内的 owner/node。本地旧实现
 曾把 guard 下沉到 raw helper并让 typed getter绕经它，掩盖直接调用空 holder 的崩溃边界、
 增加额外调用层；现已恢复两层职责。
-dispatch ctor `sub_597AD4@0x597AD4` 的 ABI 可观察到 incoming owner-slot value 与 node
-pointer，函数体从 X1 解引用一指针 owner holder/slot、从独立 X2 写入 node，并对 owner
-AddRef；三个直接 caller 都分别准备 X1/X2，异常路径也没有按值 holder 临时量的额外
-AddRef/Release。因此“构造器只接收一只两指针 raw-node holder”已被排除。本地用
-`ownerSlot + node` 表达这条数据流；仍不能唯一恢复的只是 X1 原类型究竟为
-`const PSBFile&`、共同一指针 holder 引用、`PSBRawOwner *const&` 还是等价 slot pointer。typed root
+dispatch ctor `sub_597AD4@0x597AD4` 的 ABI 可观察到 incoming one-pointer holder 与 node
+pointer，函数体从 X1 解引用 holder、从独立 X2 写入 node，并对 owner AddRef；三个直接
+caller 都分别准备 X1/X2，异常路径也没有按值 raw-node 临时量的额外 AddRef/Release。
+因此“构造器只接收一只两指针 raw-node holder”已被排除。2026-08-02 又穷举同源 iOS
+arm64 的 dispatch ctor、raw ctor、holder assignment 与 GetRoot caller：standalone
+PSBFile 与 raw node 首子对象共用同一 PSBFile-compatible holder 生命周期，旧的“X1 可同等
+解释为任意裸 owner-slot reference、因子化完全不可知”已被证伪。本地现用
+`const PSBFile& + node`；仍不能唯一恢复的只是共同 holder 原始类型名、raw node 的
+member/base token和 accessor 拼写。typed root
 getter、ResourceManager load 尾段和 findMotion 两个命中分支均由该 ctor 建立 dispatch owner
 引用，不再经过本地通用 Create factory。
 raw node validity `sub_598E44@0x598E44` 独立检查 `owner && node`；类型消费者
@@ -1320,8 +1334,10 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
     `OwnerFilter@0x1AB82E0`，并立即为它注册 `__cxa_atexit`；它不是带
     `__cxa_guard` 的 function-local static。两个 setter `0x685D30/0x685E60`
     都先构造自己的临时 `std::function`，再把 const 引用交给
-    `sub_6A87D0@0x6A87D0`。该 helper 以 manager op=2 copy-clone target，交换进
-    全局对象后以 op=3 销毁旧 target；setter 返回前还会独立销毁原临时对象。
+    `sub_6A87D0@0x6A87D0`。后续 `.eh_frame` 复核已纠正旧 IDA 合并：本入口只是
+    `0x6A87D0..0x6A87E8` 薄包装器，tail-call 独立 copy-assignment FDE
+    `0x6A87E8..0x6A88CC`；后者才以 manager op=2 copy-clone target，交换进全局对象后
+    以 op=3 销毁旧 target。setter 返回前还会独立销毁原临时对象。
     `ResourceManager_loadResource@0x6A8D8C` 则直接把全局对象地址传给
     `PSBFile::LoadStorage@0x598538`。本地已把惰性 accessor + prvalue move 改回
     TU 级 owner、const-ref copy helper、命名临时对象及直接加载引用，从而恢复静态
@@ -1330,6 +1346,35 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
     只有 invoker `0x6863CC` 初始化 xorshift 状态时才读取低 32 位。setter 指令流没有
     全局 seed 写入或日志调用，注入入口 `0x682528` 也只注册两个 setter，因此删除了本地
     测试旁路 `_decryptSeed`、getter 和额外日志。
+54. 沿 setter xref 回溯到 `emoteplayer_static_init@0x42EB00`、
+    `emoteplayer_entry@0x682528`、`EmotePlayer_loadClass@0x685BC0` 与
+    `motionplayer_ncb_register@0x6D9B08` 后，纠正了本地最后一层注册 owner/时序偏差。
+    Android 只构造一只 `emoteplayer.dll` auto-register node，init 指向 entry、term 为空；
+    entry 在同一函数内先加载 `motionplayer.dll`，取得 `Motion`，调用 class init +
+    `EmotePlayer_ncb_registerMembers@0x67FAC8` 并以 `0x10000` 挂 class，随后复用同一 value
+    Variant 取得 ResourceManager，再复用同一 method Variant 以 `0x10200` 依次注入 seed/
+    func setter。`motionplayer_ncb_register` 的 11 个 subclass row 不含 EmotePlayer。
+    本地已从 Motion 主表删除提前 row，把 split pre/post callback 合回唯一 pre callback，
+    删除二进制不存在的空指针/返回码/类型 guard、lambda helper、第二只 method Variant 与
+    global Release。首次只加载 motionplayer 时 EmotePlayer 缺席，加载 emoteplayer 后类和
+    两个 setter 才出现；21/21 cases、1555/1555 assertions 通过。独立 ELF 门禁固定
+    初始 7 FDE、3 个唯一 callback 物化、11 条 entry/class edge、11 条 Motion subclass
+    edge、52 个语义 word 与四只完整 FDE；下一项继续把 motionplayer static initializer
+    纳入后扩展为 8 FDE / 五只完整 FDE hash。
+55. 随后 fresh decompile `Motion_Player_ncb_register@0x6FDD04` 与
+    `Player_ncb_registerMembers@0x6D69C8`，关闭了上一项保留的 Player/post-alias 差异。
+    `motionplayer_ncb_register` 的源码顺序是 23 个 constants、11 个 subclasses、2 个
+    namespace functions；Player 是 LayerGetter 后、SourceCache 前的第六条，只挂在
+    `Motion.Player`。本地已把 Player 改为 subclass，删除 `global.Player`、post alias、
+    deferred free-function registrar，并把两个 MaskMode 常量和两个 function 移回 Motion
+    主注册 block。`useD3D` 已由 Player 成员表注册为 RW Property，因此一并删除二进制
+    不存在的字典覆盖。`motionplayer_static_init@0x42EE18` 还证明模块没有自定义
+    pre/post/unregister callback，因此删除两个 `ShortCutInitial*KeyMap` 表达式与三只额外
+    callback node。扩展 ELF 门禁固定 23 条 constant edge、11 条 subclass edge、两个
+    function callback 物化、两个 member-add、完整 static-init FDE 与两个 forbidden UTF-16
+    零命中，canonical surface 为 10,062 bytes；单测同时固定
+    `global.Player` 缺席、`Motion.Player`/raw `useD3D` descriptor 存在。21/21 cases、
+    1555/1555 assertions 与 Web Debug link 通过。
 
 ## 验证
 
@@ -1855,7 +1900,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   media/TJS 与 packed-table 损坏输入覆盖；下一阶段闭合了 typed TJS 构造、array listing
   和同-container 缓存分支，当时跨-container 替换、dictionary listing 与 adaptor-null
   仍未覆盖。2026-07-23 已用现有加密 PSB 补上前者，并用恢复后的天然 `autoskip.psb`
-  在真实 Android 补上 dictionary listing；现仅 adaptor-null 仍开放。
+  在真实 Android 补上 dictionary listing；2026-08-02 又以既有 `ezsave.pimg`、单槽
+  class-object 临时置空和同名重试，在真实 Android ARM64 闭合 adaptor-null。三项运行时
+  覆盖现均已闭合。
 
 - 2026-07-19 fresh decompile media singleton/register `0x59849C`、析构/ref/name
   `0x5997F0..0x5998A8`、exists/open/list/local-name `0x5998C4..0x599DD8`、container
@@ -1927,7 +1974,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   tag `0x0B` 的读取范围：
   `PSBValueDispatch` 惰性转换 `0x59673C`、node `GetDouble@0x5992E8` 与
   `GetInt@0x599438`：整数 tag `0x05..0x0A` 分别执行 signed 8/16/24/32/40/48-bit
-  扩展，tag `0x0C` 原样读取 64-bit。dispatch assign 与 `GetDouble` 的 tag `0x0B`
+  扩展，tag `0x0C` 原样读取 64-bit。dispatch `CreateVariant_guess` 与 `GetDouble` 的 tag `0x0B`
   7 字节路径只拼接低 56 位，**不**把 bit55 扩展到最高字节；`GetInt` 的 tag `0x0B`
   则在 `0x599544` 仅加载低 32 位。`GetInt@0x599438` 自身对 tag `0x09/0x0A/0x0C`
   会留下完整 X0，但完整 20 个 direct xref 中 18 个只消费 W0，另两个丢弃返回值。后续逐指令
@@ -2033,9 +2080,11 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `sub_598AAC@0x598AAC`、`sub_598960@0x598960`、`sub_598B58@0x598B58`、
   `sub_599554@0x599554`，纠正两处仍属“行为近似但源码调用链不一致”的实现：raw owner
   ctor 现在自行按原顺序建立 inline header view，不再伪调用后续 refresh helper；当输入
-  指针为空时，header view 与二进制一样保持未初始化。raw string getter 也恢复自己的完整
-  tag switch，不再绕经独立的 type-category helper；五个 string tag 返回 owner 内借用
-  指针、全部已知非 string tag 返回空、未知 tag 抛精确异常。Mac 四目标构建成功，
+  指针为空时，header view 与二进制一样保持未初始化。这里当时把 raw string getter 的
+  Android inline residual 误写成源码独立 tag switch；该 negative-xref 推断已在
+  2026-08-02 被同源 iOS arm64 retained classifier call 证伪。当前实现是共享 classifier
+  gate，仍保持五个 string tag 返回 owner 内借用指针、全部已知非 string tag 返回空、
+  未知 tag 抛精确异常。Mac 四目标构建成功，
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终
   `index.html` 链接通过；在线 Android AVD 的 `ezsave.pimg` octet/storage 与 motion
   octet/seed-filter oracle 全部 `status=ok`，filter 仍为 203,302 字节逐字节一致。上述
@@ -2118,32 +2167,81 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；`ezsave.pimg` 的 Android
   octet/storage oracle 两条继续为 `status=ok`，作为成功路径非回归守护。
 
-- 2026-07-19 继续 fresh decompile/disasm `PSBMedia::GetListAt@0x5999F4`，确认
-  `0x599A4C..0x599A70` 在 media 方法内部直接读取 raw `node[0]` 并执行完整 tag switch；
-  它没有调用独立的 type-category helper `sub_599554@0x599554`。本地此前先调用
-  `GetTypeCategory()` 再按 category 6/7 分流，正常 array/dictionary 输出虽等价，却增加了
-  Android 调用链中不存在的一层分类调用。现已恢复本函数自有的 raw tag switch：`0x20`
-  保留 signed 32-bit array 循环，`0x21` 保留 unsigned dictionary 循环及跨迭代复用的
-  `std::string`，全部已知非容器 tag 原样 no-op，未知 tag 继续抛精确 internal-error 文本。
-  Mac 目标对象的 undefined-symbol 表已确认 `PSBMedia.cpp.o` 不再引用
-  `PSBRawNode::GetTypeCategory`；四目标构建成功，`psbfile-dll` **484/484**、
-  `motionplayer-dll` **398/398**，Web Debug 最终链接成功。在线 AVD 的
-  `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
+- **2026-08-02 纠正 2026-07-19 的错误结论**：`GetListAt@0x5999F4` 在 target 中没有
+  `BL @599554` 只能证明没有调用 raw-node wrapper，不能证明源码没有调用被内联的底层
+  classifier。fresh target decompile/disasm 表明 `0x599A4C..0x599B50` 是完整
+  category-specialized residual；同谱系 iOS arm64 `GetListAt@0x1000EE4BC` 在
+  `0x1000EE50C` 保留 classifier call。Dictionary 分支还保留两次 packed-view constructor，第二只 record
+  构造后完全不消费。当前本地已恢复 `detail::GetTypeCategory_guess(tag)`、第一只 key view
+  与第二只 dead offsets view；Array 仍保留 signed 32-bit inline count decoder，Dictionary
+  仍保留 unsigned loop 与复用 `std::string`。Mac Debug/Release `psbfile-dll` 均为
+  **577/577 assertions（10 cases）**；Release 对象在 `GetListAt+0x50` 保留 classifier
+  relocation，优化器仍按 Android shape 消除第二只 dead view。
+
+- **2026-08-02 同类纠正**：fresh `GetDictionaryKeys@0x598E64` decompile/完整 193 指令
+  disasm 证明 `0x598EA0..0x598F48` 是只接受 category 7 的完整 classifier specialized
+  residual。iOS arm64 `GetDictionaryKeys@0x1000EDB8C` 在 `0x1000EDBBC` 调 classifier，
+  `0x1000EDBDC/0x1000EDBF4` 连续构造两只 packed view；第二只 offsets record 不消费。
+  本地已把手写 raw-tag switch 恢复为共享 classifier gate，并补回 `keys + dead offsets`；
+  MacOS Release 对象在 `GetDictionaryKeys+0x38` 保留 classifier relocation，同时仍消除 dead
+  view，符合 Android emitted shape。
+
+- **2026-08-02 第三处同类纠正**：fresh `GetString@0x598B58` decompile、完整 61 指令
+  disasm 与 8 个 caller xref 证明 `0x598B58..0x598B84` 是只接受 category 4 的完整
+  classifier specialized residual；unknown helper 反常返回仍返回 null。iOS arm64
+  `GetString@0x1000ED94C` 在 `0x1000ED968` 调 classifier、`0x1000ED984` 构造 packed
+  view。当前本地已把
+  手写 outer raw-tag switch 恢复为底层共享 classifier gate，同时保持单只 offsets view、
+  `0x2C→index 0`、width 1..5、无 count/index/null/range gate 与 borrowed pointer 返回。
+  Release 对象在 `GetString+0x18` 保留 classifier relocation；新增现有 root Dictionary 的
+  non-string 回归后，Mac Debug/Release `psbfile-dll` 均为 **578/578 assertions（10 cases）**，
+  Web Debug 最终链接成功。
+
+- **2026-08-02 第四处同类纠正**：fresh `ContainsDictionaryKey@0x5995D8` decompile、
+  完整 65 指令 disasm 与 15 个 caller xref 证明 Android 在临时 raw node 双槽清零后保存
+  完整 category-7 classifier residual，unknown helper 若反常返回则走 false cleanup。iOS
+  arm64 `0x1000EDEF0` 在 `0x1000EDF14/0x1000EDF2C` 保留 classifier/getter 两条调用，且临时对象在 gate 前
+  建立并覆盖正常/异常析构。当前本地已把手写 raw-tag switch 恢复为共享 classifier
+  gate，临时仍在 gate 前。Release object 在 `ContainsDictionaryKey+0x24/+0x3C` 保留
+  classifier/getter relocation；现有真实 motion fixture 同时新增 dictionary hit 与 string
+  non-dictionary false 回归，Mac Debug/Release `psbfile-dll` 均为 **580 assertions（10 cases）**，
+  Web Debug 与 `krkr2_wasmtime_guest` 均最终链接成功。现有 m2logo LLDB trace runner
+  在 630 秒硬超时且未生成 trace，因此本轮不把旧 trace hash 冒充为更新后的运行时证据。
+
+- **2026-08-02 第五处同类纠正**：对同谱系 iOS arm64 全 `__text` 穷举
+  classifier callsite 时，发现旧清单漏掉 `PSBValueDispatch::IsInstanceOf@0x596E24`。
+  fresh target decompile/完整 37 指令 disasm 证明 Android 的 `0x596E3C..0x596EB4` 是
+  classifier 的完整 category-specialized residual：category `4/5/6/7` 分别映射
+  `String/Octet/Array/Dictionary`，其余已知 category 返回 false，unknown 沿固定异常后
+  false continuation。iOS arm64 `IsInstanceOf@0x1000EC32C` 在 `0x1000EC350` 保留
+  shared-classifier call。当前本地已恢复该调用，
+  同时保持 `membername != null → TJS_E_NOTIMPL`、不查 valid/owner、单次大小写敏感 UTF-16
+  比较。Mac Debug/Release `psbfile-dll` 均为 **583 assertions（10 cases）**；Release
+  `main.cpp.o` 在 `IsInstanceOf+0x24` 保留 classifier relocation、`+0x44` 保留
+  `TJS_strcmp` relocation，Web Debug 与 Wasmtime guest 也重建成功。
 
 - 2026-07-19 fresh decompile/disasm dispatch 四入口
   `EnumMembers@0x596F50`、`GetCount@0x5975E0`、`PropGetByNum@0x5976C4`、
-  `PropGet@0x597854`，确认它们同样各自在函数体读取 raw `node[0]` 并展开完整 tag
-  switch，而不是调用 `GetTypeCategory@0x599554`。对 `0x599554` 的全 code-xref 复核得到
-  唯一四个真实调用点：`Motion_ObjSource_width_getter@0x69D19C`、height getter
-  `0x69D27C`、clip getter `0x69D35C`、drawLayer `0x69D6D8`；dispatch/media 均不在其中。
-  本地四个 dispatch 入口现已恢复自己的 raw-tag 分派，array/dictionary 逻辑及已知 tag
-  返回码保持不变。另一个正常标量路径上的生命周期偏差也已纠正：Android Enum 在完成
+  `PropGet@0x597854`，确认它们在 emitted body 内各自读取 raw `node[0]` 并展开 tag switch，
+  且没有 `BL GetTypeCategory@0x599554`。对 `0x599554` 的全 code-xref 复核得到唯一四个
+  raw-node-wrapper 调用点：`Motion_ObjSource_width_getter@0x69D19C`、height getter
+  `0x69D27C`、clip getter `0x69D35C`、drawLayer `0x69D6D8`。
+  **2026-08-02 纠正**：零 wrapper xref 只能证明没有调用 `PSBRawNode` wrapper，不能证明
+  源码没有调用已被内联的底层 classifier。Android
+  `CreateVariant/IsInstanceOf/PropGet/PropGetByNum/EnumMembers/GetCount/GetString/GetDictionaryKeys/ContainsDictionaryKey/GetListAt` 的完整或 category-specialized residual 与同谱系 iOS
+  arm64 retained classifier call 交叉闭合后，当前本地均恢复
+  `detail::GetTypeCategory_guess(tag)`；同簇六个 dispatch
+  consumer、三个 raw-node consumer 与一个 media consumer 已不再保留各自手写的
+  raw-tag classifier clone。
+  array/dictionary 逻辑及已知 tag 返回码没有改变。另一个正常
+  标量路径上的生命周期偏差也已纠正：Android Enum 在完成
   tag 分类后先构造 name/memberFlags/memberValue/callbackResult 四只 Variant，随后才判断
   category 6/7；non-container 因而仍经历四只 Variant 的逆序析构。本地旧 early-return
   位于构造之前，现已移到四只 owner 建立之后。上述 xref 同时保留了 `0x599554` helper，
   不能因插件内调用清零而删除；四个 ObjSource consumer 的 raw-node owner 形状已由下一条
   独立审计闭合，不以一次负搜索判断其实现状态。Mac 目标对象的 undefined-symbol
-  表已确认 `main.cpp.o` 不再引用 `PSBRawNode::GetTypeCategory`；四目标构建成功，
+  表只证明 `main.cpp.o` 不引用 raw-node wrapper，不能排除 header-inline classifier；该旧
+  推断已由上述正证据纠正。该阶段四目标构建成功，
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终链接成功。
   在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
@@ -2269,7 +2367,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 
 - 同轮用现有 `ezsave.pimg` 补齐 typed NCB `load/root`、只读 setter、dictionary/array
   `EnumMembers`（含 packed 顺序与 `TJS_ENUM_NO_VALUE`）、Octet、NativeInstanceSupport 与
-  Invalidate 状态机；复用原测试已加载的加密 motion PSB 覆盖 `assign@0x59673C` 的
+  Invalidate 状态机；复用原测试已加载的加密 motion PSB 覆盖 `CreateVariant_guess@0x59673C` 的
   float→Real 分支 `metadata/bustControl/0/friction == 0.125`，没有创建或篡改 fixture。
   Mac `psbfile-dll` 随后补入空 path segment miss 与缺失 container 抛异常后保留旧缓存，
   当前为 **554 assertions / 8 cases**。
@@ -2278,19 +2376,38 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `Resolve@0x59A698..0x59A6EC` 的 owner 生命周期及 `sub_598D58@0x598D58` 的 hit out
   更新顺序可证；2026-07-24 又以 identity refcount store 和 AArch64 对照闭合两个真实
   rvalue 调用点的 copy + temporary destruction。helper 原名/member 身份、不可见位置是否
-  另有显式 special members/self guards、`sub_597AD4` 第一实参的一指针 holder 精确类型、
+  另有显式 special members仍不可恢复；已见 shared assignment 则由 iOS arm64 明确证明
+  没有 self guard。
   Android stripped O3 不能确认 `PackedArrayView_guess` 或当前四字段 `PsbArray_guess`
   是否为真实源类型；目标只能证明 `nBytes/count/width/values-base` 四个语义量及其运算，
   不能证明它们来自同一个对象。当前结构是显式推测的本地 factorization，精确类型名、字段
   组织以及 `memcpy`/unaligned cast 写法均不可辨识；代码与本文不再把任一等价形状冒充
   唯一源码事实。
 
+- 2026-08-02 的 iOS arm64 全 caller 穷举补强并纠正了上一条证据上限：holder
+  assignment `0x1000ED740` 恰有三个 caller；raw ctor `0x1000EEF28` 恰有五个 caller；
+  GetRoot `0x1000ED8C8` 直接把 PSBFile `this` 传给该 raw ctor；dispatch ctor
+  `0x1000EC248` 恰有三个 caller，并分别消费 standalone PSBFile 或 raw node
+  首子对象。由此 raw node 已改为复用 `PSBFile` holder special members，dispatch 改为
+  `const PSBFile& + node`，旧 `GetOwnerSlotAddress_guess` 删除。剩余证据限制是共同 holder
+  原名和 member/base/accessor token，而不是共享因子化本身。assignment ctor EH cleanup
+  还正证 potentially-throwing call boundary，故 `PSBFile::operator=` 不显式 `noexcept`。
+  同轮进一步识别出独立的单参数 root ctor arm64 `0x1001263B8`：它先从 `PSBFile` 读取
+  `owner->header->entries`，再调共享 holder assignment，最后写 node；七个 direct caller 与
+  Android `0x694AB0/0x695FA0/0x6A9870/0x6A99A4/0x6AA058/
+  0x6AA360/0x6AAF08` 的 inline clone 完整对应。本地已恢复 `PSBRawNode(const PSBFile&)`
+  并只替换这七处 motionplayer 手工展开；两参数 ctor 与 `PSBFile::GetRoot` 保持独立。
+  改造后 macOS Release 三项回归分别为 psbfile **583/583**（10 cases）、motionplayer
+  **1386/1386**（21 cases）、ttstr hash **109/109**（24 cases）；Debug Web 完整链接与
+  `out/wasmtime/debug` 的 `krkr2_wasmtime_guest` 链接均成功。现有测试只作非回归守护，
+  不替代上述结构证据。
+
 - 2026-07-22 的最终 local→Android 与生命周期复核又修正四组细节。①
   `LoadStorage@0x598570..0x59858C` 的 placed-path `ttstr` 在 `TVPCreateStream` 返回后立即
   析构，本地不再把它保活到函数退出；MDF 成功路径 `0x5986A4..0x5986B4` 先写实际长度，
   仅在 decode pointer 非空时释放/替换 source。② `GetDictionaryKeys@0x598EF8` 的 reusable
-  `std::string` 只在 dictionary gate 后构造；`ContainsDictionaryKey@0x5995F8` 的空 raw-node
-  临时量则在 tag switch 前构造，所有出口共享同一析构层。③
+  `std::string` 只在 dictionary gate 后构造；`ContainsDictionaryKey@0x5995D8` 在
+  `0x5995F8` 清零的 raw-node 临时量则在 classifier gate 前构造，所有出口共享同一析构层。③
   `EnsureContainer@0x599F20..0x599FCC` 恢复
   `SetObject(AddRef×2) → Release factory 初始引用 → CopyRef 到 _file →
   析构局部 Variant`，null adaptor 也以 void 局部 Variant 走同一 CopyRef；
@@ -2347,7 +2464,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   listing 可达性记录。
 
 - 2026-07-24 继续只走静态反编译与本地非 oracle 验证。
-  `PSBValueDispatch_assign_guess@0x59673C` 的复杂临时量
+  `PSBValueDispatch_CreateVariant_guess@0x59673C` 的复杂临时量
   生命周期已通过 `TJSAllocVariantOctet_guess@0xA0E0F4`、
   `tTJSVariant_CopyRef_guess@0xA0FB64`、析构 wrapper `0xA0F778` 和
   `tTJSVariant_ReleaseContent_guess@0xA0F790` 闭合：非空、非零长度 Octet 为
@@ -2461,9 +2578,9 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `FindNameIndex@0x59641C`、`FindDictionaryValueOffset@0x59659C` 与
   `DecodeName@0x597B1C`。三者反复呈现 `count/width/values-base/next-table offset` 运算；
   需要进入下一张 table 的路径会在 W32 内计算完整 `headerBytes + count*width`，只读取元素的
-  路径则只消费 `width/values-base`。当前四字段 `PsbArray_guess` 仅是一种显式推测的本地
-  factorization，**不能**据此宣称原源码存在该结构、字段名、字段顺序或独立构造器；因此
-  `_guess` 与限制说明必须保留，完成度也不再引用任何其他平台二进制或外部逆向源码。
+  路径则只消费 `width/values-base`。权威 target arm64 的标量化结果不能独自唯一证明四字段
+  原属一个 record/constructor；独立 iOS arm64 只支持当前分组选择，精确类型/字段名、
+  `operator[]` 与 member/free/header-inline token继续保留 `_guess` 证据上限。
 - 同轮仅据 Android 三个独立消费者确认 `(tag-0x0D)<=4` 接受 width 1..5；width 5 经
   AArch64 shift-modulo 只保留低 8 位，非法 width 返回 0。本地四字段分组严格保持目标边界：
   `nBytes` 全式 W32，operator 的 index product 为 W32
@@ -2498,12 +2615,14 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
    replacement 后自身 metadata/析构仍可用的本地守护。stream 不保活 owner、block 为 borrowed
    仍由 ctor/dtor 反编译证据证明，测试不读取悬挂 block。dictionary media listing 已由天然
    `autoskip.psb/source/main/icon` 在真实 arm64 API 31 AVD 上取得精确三键回调及
-   ADB/RPC/Frida `status=ok`；仍未覆盖的是 CreateAdaptor-null。上述结果均来自真实
+   ADB/RPC/Frida `status=ok`。`CreateAdaptor-null` 也已通过暂时清零 class-object 单槽、
+   直调 `EnsureContainer`、恢复后同名重试取得 `status=ok`；上述结果均来自真实
    `libkrkr2.so`，不再由离线协议模拟替代。
 4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 已确定为
-   owner-holder-ref/slot 与 node 两个实参，但第一实参究竟是 `const PSBFile&`、共同 holder
-   引用还是 `PSBRawOwner *const&` 仍不可区分；另有 PSBFile/raw-node 的显式
-   special members 与 self guards、若干 inline helper 的原名/member 身份、四字段
+   PSBFile-compatible holder 与 node 两个实参，iOS arm64 也已证明 standalone PSBFile 与
+   raw-node 首子对象共享该 holder 生命周期；仍不可区分的是共同 holder 的原始类型名、
+   raw node 使用 member 还是 base 以及 accessor token。另有 PSBFile/raw-node 的不可见
+   显式 special members、若干 inline helper 的原名/member 身份、四字段
    `PsbArray_guess` 的精确 Android 类型名，以及 unaligned read 的具体写法。若要把“尽可能”
    提升为字面 100%，需要带符号/未优化构建、调试类型或原始源码等新增证据，不能从当前
    ARM64 优化产物反向唯一指定其中一种等价源码形状。

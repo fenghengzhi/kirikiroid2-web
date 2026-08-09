@@ -135,7 +135,7 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     NCB_PROPERTY(clearEnabled, getClearEnabled, setClearEnabled);
 }
 
-NCB_REGISTER_CLASS(Player) {
+NCB_REGISTER_SUBCLASS(Player) {
     // P3-B (2026-06-05): RM dispatch-in. Binary Player factory (sub_6F6E6C /
     //   Player_ncb_createInstance @0x6f6ce8) takes the FIRST TJS param — an RM
     //   dispatch object — and passes it to the single-param ctor @0x6CED30. So
@@ -450,24 +450,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD_RAW_CALLBACK(stop, &Player::stopCompat, 0);
 }
 
-// Motion.EmotePlayer — port currently registers only the ctor; the full
-// script-facing API lives on D3DEmotePlayer below.
-//
-// CORRECTION (2026-06-03, fresh decompile of EmotePlayer_loadClass @0x685BC0):
-// the earlier claim that "binary only registers `finalize`" is WRONG.
-// 0x685BC0 calls EmotePlayer_NCB_classInit @0x686148 (registers `finalize`)
-// and THEN EmotePlayer_ncb_registerMembers @0x67FAC8, which registers the
-// full ~69-member API (progress/draw/play/setVariable/playTimeline/... +
-// TimelinePlayFlag* constants + chara/motion/bounds/... properties) into the
-// SAME class object. So Motion.EmotePlayer DOES expose the full API in the
-// binary. Putting that API on D3DEmotePlayer and leaving Motion.EmotePlayer
-// ctor-only is an architecture-P0 mismatch (audit cluster C). Open complication:
-// the D3DEmotePlayer<->EmotePlayer binary relationship (sub_52E504) is not yet
-// decompiled, so "API fully missing" is not yet a settled verdict — verify
-// sub_52E504 before relocating the member table here.
 // Motion.EmotePlayer — full NCB surface (70 members + 2 constants), aligned
 //   with libkrkr2.so EmotePlayer_ncb_registerMembers @0x67FAC8. Registration
-//   ORDER matches the binary 1:1 (#1..#69). The binary native instance create
+//   ORDER matches the binary 1:1 (#1..#70). The binary native instance create
 //   @0x68629C is arg-less; constants (TimelinePlayFlag*) registered on the same
 //   class object. Member callbacks delegate to the shared Player/EmoteEngine
 //   machine (see EmotePlayer.cpp). These are SUBCLASS members (not Motion
@@ -596,62 +581,74 @@ NCB_REGISTER_SUBCLASS(ResourceManager) {
 // Motion top-level class with constants and subclasses
 // ============================================================
 
+static void motion_doAlphaMaskOperation(iTJSDispatch2 *dstLayer,
+                                        int dstX,
+                                        int dstY,
+                                        iTJSDispatch2 *srcLayer,
+                                        int srcX,
+                                        int srcY,
+                                        int width,
+                                        int height,
+                                        int threshold,
+                                        int maskMode,
+                                        int op);
+static bool motion_getD3DAvailable();
+
 class Motion {
 };
 
 NCB_REGISTER_CLASS(Motion) {
-    // Subclasses (Player registered as top-level class, aliased in PostRegistCallback)
-    NCB_SUBCLASS(ResourceManager, ResourceManager);
-    NCB_SUBCLASS(EmotePlayer, EmotePlayer);
-    NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
-    NCB_SUBCLASS(D3DAdaptor, D3DAdaptor);
-    NCB_SUBCLASS(SourceCache, SourceCache);
-    NCB_SUBCLASS(ObjSource, ObjSource);
-    // Aligned to libkrkr2.so Motion_namespace_ncb_register (0x6D9B08)
-    NCB_SUBCLASS(Point, Point);
-    NCB_SUBCLASS(Circle, Circle);
-    NCB_SUBCLASS(Rect, Rect);
-    NCB_SUBCLASS(Quad, Quad);
-    NCB_SUBCLASS(LayerGetter, LayerGetter);
-
-    // Layer types
+    // motionplayer_ncb_register @0x6D9B08 emits 23 constants first.
     Variant(TJS_W("LayerTypeObj"), (tjs_int)LayerTypeObj);
     Variant(TJS_W("LayerTypeShape"), (tjs_int)LayerTypeShape);
     Variant(TJS_W("LayerTypeLayout"), (tjs_int)LayerTypeLayout);
     Variant(TJS_W("LayerTypeMotion"), (tjs_int)LayerTypeMotion);
     Variant(TJS_W("LayerTypeParticle"), (tjs_int)LayerTypeParticle);
     Variant(TJS_W("LayerTypeCamera"), (tjs_int)LayerTypeCamera);
-
-    // Shape types
     Variant(TJS_W("ShapeTypePoint"), (tjs_int)ShapeTypePoint);
     Variant(TJS_W("ShapeTypeCircle"), (tjs_int)ShapeTypeCircle);
     Variant(TJS_W("ShapeTypeRect"), (tjs_int)ShapeTypeRect);
     Variant(TJS_W("ShapeTypeQuad"), (tjs_int)ShapeTypeQuad);
-
-    // Play flags
     Variant(TJS_W("PlayFlagForce"), (tjs_int)PlayFlagForce);
     Variant(TJS_W("PlayFlagChain"), (tjs_int)PlayFlagChain);
     Variant(TJS_W("PlayFlagAsCan"), (tjs_int)PlayFlagAsCan);
     Variant(TJS_W("PlayFlagJoin"), (tjs_int)PlayFlagJoin);
     Variant(TJS_W("PlayFlagStealth"), (tjs_int)PlayFlagStealth);
-
-    // Transform orders
     Variant(TJS_W("TransformOrderFlip"), (tjs_int)TransformOrderFlip);
     Variant(TJS_W("TransformOrderSlant"), (tjs_int)TransformOrderSlant);
     Variant(TJS_W("TransformOrderZoom"), (tjs_int)TransformOrderZoom);
     Variant(TJS_W("TransformOrderAngle"), (tjs_int)TransformOrderAngle);
-
-    // Coordinate types
     Variant(TJS_W("CoordinateRecutangularXY"),
             (tjs_int)CoordinateRecutangularXY);
     Variant(TJS_W("CoordinateRecutangularXZ"),
             (tjs_int)CoordinateRecutangularXZ);
+    Variant(TJS_W("MaskModeStencil"), (tjs_int)MaskModeStencil);
+    Variant(TJS_W("MaskModeAlpha"), (tjs_int)MaskModeAlpha);
+
+    // The exact eleven in-flow subclass rows follow the constants. Player is
+    // the sixth row; it is not a top-level class plus a post-registration alias.
+    NCB_SUBCLASS(Point, Point);
+    NCB_SUBCLASS(Circle, Circle);
+    NCB_SUBCLASS(Rect, Rect);
+    NCB_SUBCLASS(Quad, Quad);
+    NCB_SUBCLASS(LayerGetter, LayerGetter);
+    NCB_SUBCLASS(Player, Player);
+    NCB_SUBCLASS(SourceCache, SourceCache);
+    NCB_SUBCLASS(ObjSource, ObjSource);
+    NCB_SUBCLASS(ResourceManager, ResourceManager);
+    NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
+    NCB_SUBCLASS(D3DAdaptor, D3DAdaptor);
+
+    // 0x6DA180..0x6DA260: the two namespace functions are emitted in the same
+    // registrar immediately after D3DAdaptor.
+    Method(TJS_W("doAlphaMaskOperation"), &motion_doAlphaMaskOperation);
+    Method(TJS_W("getD3DAvailable"), &motion_getD3DAvailable);
 }
 
 // ============================================================
 // Motion namespace-level free functions
 // Aligned with libkrkr2.so motionplayer_ncb_register @0x6D9B08
-// (0x6da154..0x6da260): after the 10 subclasses, two functions are
+// (0x6da154..0x6da260): after the 11 binary subclasses, two functions are
 // registered directly on the Motion namespace dispatch object via
 // sub_6FCAAC(*Motion, name, descriptor) — they are namespace-level free
 // functions, NOT Motion.Player methods. Earlier the port mis-attached
@@ -700,122 +697,6 @@ static void motion_doAlphaMaskOperation(iTJSDispatch2 *dstLayer,
 // boundary.
 static bool motion_getD3DAvailable() { return true; }
 
-// Motion namespace-level free functions doAlphaMaskOperation / getD3DAvailable:
-// in-flow Motion-dispatch registration aligning libkrkr2.so motionplayer_ncb_register
-// (sub_6D9B08 @0x6D9B08), which registers both on the Motion namespace dispatch
-// *in-flow*, right after the last subclass (D3DAdaptor), via the same member-add
-// primitive as the subclasses (sub_6FCAAC -> ncb_registerMember @0x6da1f0 / 0x6da260)
-// — NOT as a separate deferred attach.
-//
-// Root-cause fix for the M6 motion-namespace regression: the port previously
-// registered these via two standalone NCB_ATTACH_FUNCTION auto-register units.
-// Those units run their Regist() at function-auto-register time (too early in the
-// NCB registration sequence); their presence silently disabled the entire motion
-// render pipeline (guest produced 0 render events, no trap/exception — see
-// project_m6_motion_namespace_attach_regression). Relocating the *same* member-add
-// (GetDispatch("Motion") -> PropSet TJS_MEMBERENSURE) into PostRegistCallback — the
-// local hook that already registers Motion-dispatch members (the Player alias),
-// running after the module's subclasses are registered, matching sub_6D9B08's
-// "after subclasses" timing — both aligns and fixes. Verified locally (wasmtime
-// guest, yuzulogo + m2logo): both functions present on Motion (PropGet rc=0,
-// tvtObject) AND render pipeline restored (306 / 346 events, 51 execute_post PNGs).
-// Residual minor mechanism difference vs binary: RegistFunction re-looks-up the
-// Motion dispatch (GetDispatch) rather than reusing the in-hand *a1; end-state
-// object graph is identical. The Player alias below uses the same re-lookup.
-//
-// Accessor to reach the protected static RegistFunction without constructing an
-// auto-register unit (which would re-introduce the early-timed standalone unit).
-struct MotionFreeFnRegistrar : ncbNativeFunctionAutoRegister {
-    MotionFreeFnRegistrar() : ncbNativeFunctionAutoRegister(NCB_MODULE_NAME) {}
-    using ncbNativeFunctionAutoRegister::RegistFunction;
-};
-
-// ============================================================
-// Callbacks (must be under motionplayer.dll module)
-// ============================================================
-
-static void PostRegistCallback() {
-    iTJSDispatch2 *global = TVPGetScriptDispatch();
-    if (!global) return;
-
-    // In-flow Motion-dispatch registration of the two namespace free functions
-    // (see sub_6D9B08 alignment / M6-fix note above). Same member-add path
-    // (GetDispatch("Motion") -> PropSet TJS_MEMBERENSURE) the Player alias uses
-    // below. Order matches binary: doAlphaMaskOperation then getD3DAvailable
-    // (0x6da1f0 then 0x6da260).
-    MotionFreeFnRegistrar::RegistFunction(
-        TJS_W("doAlphaMaskOperation"), TJS_W("Motion"),
-        &motion_doAlphaMaskOperation);
-    MotionFreeFnRegistrar::RegistFunction(
-        TJS_W("getD3DAvailable"), TJS_W("Motion"), &motion_getD3DAvailable);
-
-    auto ensurePlayerClassUseD3DProbe = [](iTJSDispatch2 *playerClass) {
-        if(!playerClass) {
-            return;
-        }
-        tTJSVariant marker;
-        try {
-            TVPExecuteExpression(TJS_W("%[]"), &marker);
-        } catch(...) {
-            return;
-        }
-        if(marker.Type() != tvtObject) {
-            return;
-        }
-
-        // Player_ncb_registerMembers @ 0x6D69C8 registers useD3D as a
-        // property object on the Player class; game scripts probe that with
-        // typeof Motion.Player.useD3D. This restores the class-level NCB shape
-        // without adding a mutable static useD3D state.
-        playerClass->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER,
-                             TJS_W("useD3D"), nullptr, &marker, playerClass);
-    };
-
-    // Alias Player class into Motion namespace
-    tTJSVariant motionVar;
-    if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
-        iTJSDispatch2 *motion = motionVar.AsObjectNoAddRef();
-        if (motion) {
-            tTJSVariant playerVar;
-            if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
-                if (playerVar.Type() == tvtObject &&
-                    playerVar.AsObjectNoAddRef() != nullptr) {
-                    ensurePlayerClassUseD3DProbe(playerVar.AsObjectNoAddRef());
-                    motion->PropSet(TJS_MEMBERENSURE, TJS_W("Player"),
-                                    nullptr, &playerVar, motion);
-                }
-            }
-
-        }
-    }
-
-    // Define ShortCutInitialPadKeyMap and related members as empty dictionaries.
-    // These are referenced by encrypted keybinder.tjs but may not be defined
-    // if the gamepad initialization script hasn't run yet.
-    {
-        tTJSVariant r;
-        try {
-            TVPExecuteExpression(
-                TJS_W("global.ShortCutInitialPadKeyMap === void "
-                      "? (global.ShortCutInitialPadKeyMap = %[]) : void"),
-                &r);
-            TVPExecuteExpression(
-                TJS_W("global.ShortCutInitialGamePadKeyMap === void "
-                      "? (global.ShortCutInitialGamePadKeyMap = %[]) : void"),
-                &r);
-        } catch(...) {}
-    }
-
-    global->Release();
-}
-
-static void PreRegistCallback() {}
-static void PostUnregistCallback() {}
-
-NCB_PRE_REGIST_CALLBACK(PreRegistCallback);
-NCB_POST_REGIST_CALLBACK(PostRegistCallback);
-NCB_POST_UNREGIST_CALLBACK(PostUnregistCallback);
-
 // ============================================================
 // emoteplayer.dll module — separate from motionplayer.dll
 // In libkrkr2.so, emoteplayer.dll is an independent module whose
@@ -826,49 +707,52 @@ NCB_POST_UNREGIST_CALLBACK(PostUnregistCallback);
 #define NCB_MODULE_NAME TJS_W("emoteplayer.dll")
 
 static void EmotePlayerPreRegist() {
-    // Load motionplayer.dll as dependency (matches libkrkr2.so sub_682528)
+    // emoteplayer_entry @0x682528 is the module's sole registration callback.
+    // motionplayer_ncb_register @0x6D9B08 deliberately does not contain
+    // EmotePlayer; this entry creates the full class and attaches it only when
+    // emoteplayer.dll is loaded.
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    tTJSVariant value;
+    global->PropGet(0, TJS_W("Motion"), nullptr, &value, global);
+    iTJSDispatch2 *motion = value.AsObjectNoAddRef();
+
+    // EmotePlayer_loadClass @0x685BC0 creates finalize + the complete member
+    // table. Its boolean result is ignored by emoteplayer_entry before the
+    // class object is registered on Motion with flags 0x10000.
+    ncbSubClassItem<EmotePlayer>::Setup(TJS_W("EmotePlayer"), true);
+    TJSNativeClassRegisterNCM(
+        static_cast<tTJSNativeClass *>(motion), TJS_W("EmotePlayer"),
+        ncbClassInfo<EmotePlayer>::GetClassObject(), TJS_W("EmotePlayer"),
+        nitClass, TJS_STATICMEMBER);
+
+    // The binary reuses the Motion variant for ResourceManager, constructs the
+    // first method variant before converting that value to Object, then reuses
+    // the same method variant for the second callback.
+    motion->PropGet(0, TJS_W("ResourceManager"), nullptr, &value, motion);
+    iTJSDispatch2 *method = TJSCreateNativeClassMethod(
+        &ResourceManager::setEmotePSBDecryptSeed);
+    tTJSVariant methodValue(method, method);
+    method->Release();
+
+    iTJSDispatch2 *manager = value.AsObjectNoAddRef();
+    manager->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER,
+                     TJS_W("setEmotePSBDecryptSeed"), nullptr,
+                     &methodValue, manager);
+
+    method = TJSCreateNativeClassMethod(
+        &ResourceManager::setEmotePSBDecryptFunc);
+    methodValue.SetObject(method, method);
+    method->Release();
+    manager->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER,
+                     TJS_W("setEmotePSBDecryptFunc"), nullptr,
+                     &methodValue, manager);
+
+    // emoteplayer_entry has no explicit Release for the AddRef returned by
+    // TVPGetScriptDispatch; only methodValue and value are destructed.
 }
 NCB_PRE_REGIST_CALLBACK(EmotePlayerPreRegist);
-
-static void EmotePlayerPostRegist() {
-    // emoteplayer_entry @0x682528 performs these steps after attaching the
-    // EmotePlayer class: Motion.ResourceManager PropGet, two
-    // TJSCreateNativeClassMethod calls, then PropSet flags 0x10200 with each
-    // method used as both Object and ObjThis in the temporary variant.
-    iTJSDispatch2 *global = TVPGetScriptDispatch();
-    if(!global)
-        return;
-
-    tTJSVariant motionValue;
-    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr,
-                                     &motionValue, global)) &&
-       motionValue.Type() == tvtObject) {
-        iTJSDispatch2 *motion = motionValue.AsObjectNoAddRef();
-        tTJSVariant managerValue;
-        if(motion &&
-           TJS_SUCCEEDED(motion->PropGet(0, TJS_W("ResourceManager"),
-                                         nullptr, &managerValue, motion)) &&
-           managerValue.Type() == tvtObject) {
-            iTJSDispatch2 *manager = managerValue.AsObjectNoAddRef();
-            const auto inject = [manager](
-                                    const tjs_char *name,
-                                    tTJSNativeClassMethodCallback callback) {
-                iTJSDispatch2 *method = TJSCreateNativeClassMethod(callback);
-                tTJSVariant methodValue(method, method);
-                method->Release();
-                manager->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER, name,
-                                 nullptr, &methodValue, manager);
-            };
-            inject(TJS_W("setEmotePSBDecryptSeed"),
-                   &ResourceManager::setEmotePSBDecryptSeed);
-            inject(TJS_W("setEmotePSBDecryptFunc"),
-                   &ResourceManager::setEmotePSBDecryptFunc);
-        }
-    }
-    global->Release();
-}
-NCB_POST_REGIST_CALLBACK(EmotePlayerPostRegist);
 
 NCB_REGISTER_CLASS(D3DEmoteModule) {
     NCB_CONSTRUCTOR(());

@@ -20,6 +20,10 @@
  *     CALL <fn_hex> <ret> <nints> <int_hex>* <ndbls> <dbl_bits_hex>*
  *         ret ∈ {int,uint,bool,ptr,double,void}; ints in hex u64; doubles
  *         as their IEEE754 bit pattern in hex u64 (avoids parsing issues).
+ *     CALL_SRET <fn_hex> <out_hex> <size_dec> <nints> <int_hex>*
+ *         invoke a non-trivial C++ return of at most 32 bytes; AAPCS64 passes
+ *         the compiler-owned result slot in X8, then the harness copies it to
+ *         out_hex. Ordinary integer arguments remain in X0..X7.
  *     READ <addr_hex> <n_dec>
  *     WRITE <addr_hex> <n_dec> <hex_bytes>
  *     STORAGE_LIST <fn_hex> <media_hex> <ttstr_slot_hex>
@@ -38,7 +42,7 @@
  *   Responses (harness -> host):
  *     OK <retval_hex>          // CALL/TJS_GLOBAL with int/uint/bool/ptr return
  *     OK_DOUBLE <bits_hex>     // CALL with double return
- *     OK_VOID                  // CALL with void return, or QUIT, WRITE, TJS_EXEC
+ *     OK_VOID                  // CALL void/CALL_SRET, or QUIT, WRITE, TJS_EXEC
  *     OK_DATA <hex_bytes>      // READ
  *     OK_STR  <utf8_hex>       // TJS_EXEC_STR
  *     OK_LIST <count> <u32le_length_prefixed_utf8_surrogatepass_hex_or_dash>
@@ -119,6 +123,22 @@ typedef void     void_fn(uint64_t, uint64_t, uint64_t, uint64_t,
                          uint64_t, uint64_t, uint64_t, uint64_t,
                          double, double, double, double,
                          double, double, double, double);
+
+/* A user-provided destructor makes this result non-trivial-for-calls.  The
+ * AArch64 C++ ABI therefore passes its result address in X8 while preserving
+ * the eight ordinary arguments in X0..X7.  The destructor is intentionally
+ * empty: returned PSBFile/PSBRawNode holder bits are copied to the host-owned
+ * guest slot, whose intrusive owner is released explicitly by the oracle. */
+struct harness_sret32 {
+    uint64_t words[4];
+    ~harness_sret32() {}
+};
+static_assert(sizeof(harness_sret32) == 32,
+              "CALL_SRET ABI carrier must stay exactly 32 bytes");
+
+typedef harness_sret32 sret32_fn(
+    uint64_t, uint64_t, uint64_t, uint64_t,
+    uint64_t, uint64_t, uint64_t, uint64_t);
 
 /* ---------- RPC I/O (fd-based; stdio just passes 0/1) ---------- */
 
@@ -283,6 +303,38 @@ static void handle_call(const char *args) {
         snprintf(buf, sizeof(buf), "OK %llx", (unsigned long long)r);
         println(buf);
     }
+}
+
+static void handle_call_sret(const char *args) {
+    uint64_t fn_addr, out_addr, result_size, nints;
+    uint64_t ints[8] = {0};
+    const char *cur = args;
+
+    if (parse_u64_hex(&cur, &fn_addr) < 0) {
+        println("ERR parse fn"); return;
+    }
+    if (parse_u64_hex(&cur, &out_addr) < 0 || out_addr == 0) {
+        println("ERR parse out"); return;
+    }
+    if (parse_u64_dec(&cur, &result_size) < 0
+            || result_size == 0 || result_size > sizeof(harness_sret32)) {
+        println("ERR parse result_size"); return;
+    }
+    if (parse_u64_dec(&cur, &nints) < 0 || nints > 8) {
+        println("ERR parse nints"); return;
+    }
+    for (uint64_t i = 0; i < nints; ++i) {
+        if (parse_u64_hex(&cur, &ints[i]) < 0) {
+            println("ERR parse int"); return;
+        }
+    }
+
+    sret32_fn *fn = (sret32_fn *)(uintptr_t)fn_addr;
+    harness_sret32 result = fn(
+        ints[0], ints[1], ints[2], ints[3],
+        ints[4], ints[5], ints[6], ints[7]);
+    memcpy((void *)(uintptr_t)out_addr, &result, (size_t)result_size);
+    println("OK_VOID");
 }
 
 static void handle_read(const char *args) {
@@ -950,7 +1002,9 @@ extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
         if (n < 0) break;
         if (n == 0) continue;
 
-        if (strncmp(line, "CALL ", 5) == 0) {
+        if (strncmp(line, "CALL_SRET ", 10) == 0) {
+            handle_call_sret(line + 10);
+        } else if (strncmp(line, "CALL ", 5) == 0) {
             handle_call(line + 5);
         } else if (strncmp(line, "STORAGE_LIST ", 13) == 0) {
             handle_storage_list(line + 13);

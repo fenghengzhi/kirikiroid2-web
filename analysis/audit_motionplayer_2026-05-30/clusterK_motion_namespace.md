@@ -1,5 +1,10 @@
 # Cluster K — Motion namespace classes alignment audit (2026-05-30)
 
+> Superseding registrar update (2026-08-04): fresh decompilation closed K-7. The current
+> Motion block emits 23 constants, 11 subclasses (Player sixth), then two namespace methods in one
+> registration flow. There is no `global.Player`, post alias, deferred function attach, or
+> `useD3D` descriptor overwrite.
+
 libkrkr2.so authoritative. Decompiled this session:
 - Motion_Player_findSource @0x6948e8 (renamed; the source resolve/cache + texture pipeline)
 - Motion_createTextureFromPixels @0x695d04
@@ -95,14 +100,15 @@ doAlphaMask(maskLayerVar, dstX,dstY, srcLayerVar, srcX,srcY, w,h, threshold, op,
 ```
 String constants (exact, all ASCII GLSL/shader names): "AddAlphaMask","AlphaMask","AlphaMaskRev","AlphaMaskThreshold","AlphaMaskThresholdFill","AlphaMaskThresholdCrop", uniform "threshold", and the fixed fragment shaders. Dispatch keys (UTF-16): L"clipLeft/clipTop/clipWidth/clipHeight","fillRect","update". GPU-blend factors: 32774(GL_FUNC_ADD eq) with src/dst factor args (1,1,771 / 1,0,770 / 1,0,771 / step shaders 32774/32776 with 770/771).
 
-Local counterpart: **MISSING.** No alpha-mask pixel op anywhere. main.cpp:286 binds `NCB_METHOD(doAlphaMaskOperation)` to a Player method (wrong owner — see finding K-7); grep the Player impl — it is a stub at best. No shader cache, no fillRect-border passes, no CPU per-pixel `dst.a = src.a*dst.a/255` loops.
+Local counterpart: **MISSING.** No alpha-mask pixel op anywhere. main.cpp:279 binds `NCB_METHOD(doAlphaMaskOperation)` to a Player method (wrong owner — see finding K-7); grep the Player impl — it is a stub at best. No shader cache, no fillRect-border passes, no CPU per-pixel `dst.a = src.a*dst.a/255` loops.
 
 ================================================================
 ## 4. Motion_getD3DAvailable @0x6b0960
 
 Binary: `return (hasGPUAccel_guess() & 1) == 0;`  (D3D "available" == NOT GPU-accelerated GLES path).
-Local counterpart: main.cpp:285 `NCB_METHOD(getD3DAvailable)` on Player — wrong owner (K-7). Find impl; if it returns a constant or D3DAdaptor-probe it is not the `!hasGPUAccel` inversion.
-Verdict: ⚠️ likely value-mismatch + wrong registration owner.
+Current local counterpart is the namespace-level `motion_getD3DAvailable`, registered directly on
+Motion after all subclasses. Owner and registration timing now match; the constant `true` result is
+the documented Web platform boundary because the port has no GLES-vs-D3D backend split.
 
 ================================================================
 ## 5. NCB registration — namespace registrar @0x6d9b08 (motionplayer_ncb_register)
@@ -112,16 +118,19 @@ Binary registers under the **Motion namespace object** (not on Player):
 - Subclasses in order: Point, Circle, Rect, Quad, LayerGetter, **Player** (key "Player" @MEMORY[0x14C1E9C][5]), SourceCache, ObjSource, ResourceManager, SeparateLayerAdaptor, D3DAdaptor.
 - **Namespace-level functions: doAlphaMaskOperation (@0x6da1f0) and getD3DAvailable (@0x6da260)** — registered directly on the Motion namespace dispatch, NOT on any class.
 
-Local (main.cpp NCB_REGISTER_CLASS(Motion), lines 331-378):
-- Subclasses present: ResourceManager, EmotePlayer, SeparateLayerAdaptor, D3DAdaptor, SourceCache, ObjSource, Point, Circle, Rect, Quad, LayerGetter. **Player is aliased via PostRegistCallback (line 420), not NCB_SUBCLASS** — order-divergent (binary lists Player between LayerGetter and SourceCache). **EmotePlayer is an EXTRA subclass not in this binary registrar** (it belongs to emoteplayer.dll's separate registrar — acceptable, separate module).
-- Constants: LayerType*/ShapeType*/PlayFlag*/TransformOrder*/CoordinateRecutangular* all present (347-377). **MaskModeStencil/MaskModeAlpha are MISSING from the Motion namespace** — local only adds them on D3DEmoteModule (line 474-475). Binary puts them on Motion namespace.
-- doAlphaMaskOperation / getD3DAvailable: registered as `NCB_METHOD` on **Player** (main.cpp:285-286) — WRONG owner; binary registers them on the namespace.
+Local (2026-08-04 current `main.cpp` Motion block):
+- emits all 23 constants in binary order, including both MaskMode constants;
+- emits the exact eleven subclasses in binary order, with Player sixth and no EmotePlayer row;
+- emits doAlphaMaskOperation and getD3DAvailable directly on Motion after D3DAdaptor;
+- has no `global.Player`, post alias, or deferred function-registration callback.
+
+The complete registration structure now matches `motionplayer_ncb_register@0x6D9B08`.
 
 ================================================================
 ## 6. Per-class member-set diffs
 
 ### SourceCache (binary @0x6a85a8) — members: constructor, loadSource(sub_6A7BA8), clearCache(sub_6A8438), property bufLayer RO(getter sub_6A84FC).  [4 members]
-Local (main.cpp:27): constructor, loadSource, clearCache, bufLayer RO. ✅ member set MATCHES.
+Local (main.cpp:20): constructor, loadSource, clearCache, bufLayer RO. ✅ member set MATCHES.
 Caveat: binary loadSource = sub_6A7BA8 (a distinct function, not
 findSource/0x6948e8). Its layer-list implementation is a separate audit item; it
 does not describe the now-restored per-resource Win/KRKR maps.
@@ -148,12 +157,12 @@ divergence. This member-set closure does not prove every method body globally
 100%; use the per-function audits for remaining behavioral gaps.
 
 ### Point (binary @0x690fbc) — members: constructor, type RO(sub_691248), contains(Player_hitTest!), x RO(sub_691250), y RO(sub_691258).  [5]
-Local (main.cpp:36): constructor, type RO, contains, x RO, y RO. ✅ member set MATCHES.
+Local (main.cpp:29): constructor, type RO, contains, x RO, y RO. ✅ member set MATCHES.
 Caveat: binary `contains` = Player_hitTest (shared hit-test fn); local `contains` returns false stub (SourceCache.h:145). ⚠️ impl stub vs real hit-test.
 
 ### D3DAdaptor (binary @0x6ace94) — 19 members:
 constructor(D3DAdaptor_constructor), setPos(nullsub_81), setSize(sub_6AD7A8), setClearColor(sub_6AD7B0), setResizable(sub_6AD7B8), removeAllTextures(sub_6AD8B8), removeAllBg(nullsub_82), removeAllCaption(nullsub_83), registerBg(nullsub_84), registerCaption(nullsub_85), unloadUnusedTextures(nullsub_86), visible prop(get sub_6AD904/set sub_6AD90C), alphaOpAdd prop(sub_6AD918/sub_6AD920), captureCanvas(D3DAdaptor_captureCanvas), canvasCaptureEnabled prop(sub_6ADAE8/sub_6ADAF0), clearEnabled prop(sub_6ADAFC/sub_6ADB04).
-Local (main.cpp:107): factory, setPos, setSize, setClearColor, setResizable, removeAllTextures, removeAllBg, removeAllCaption, registerBg, registerCaption, unloadUnusedTextures, captureCanvas, visible, alphaOpAdd, canvasCaptureEnabled, clearEnabled. ✅ member set MATCHES (note binary has no explicit "setPos" name change; many are nullsub stubs — acceptable platform stubs for Web/D3D).
+Local (main.cpp:100): factory, setPos, setSize, setClearColor, setResizable, removeAllTextures, removeAllBg, removeAllCaption, registerBg, registerCaption, unloadUnusedTextures, captureCanvas, visible, alphaOpAdd, canvasCaptureEnabled, clearEnabled. ✅ member set MATCHES (note binary has no explicit "setPos" name change; many are nullsub stubs — acceptable platform stubs for Web/D3D).
 
 ================================================================
 ## 7. PrivateMotionGLL
@@ -171,11 +180,11 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 |----|-----------|-----------------|-----|----------|
 | K-1 | Motion_Player_findSource @0x6948e8 | ResourceManager/PlayerResource | AUDITED SITES + BOUNDARY | **2026-07-23 再纠正**：raw mapped record/两内表结论保留；旧 CLOSED 漏掉 `0x6F1060→0x695DE8`、item→SourceState alias 与 getter 后 rect 重读。该链及解码分支边界现已补齐；KRKR 整页上传是 Web API 边界，未审计余部不得外推为全局 100% |
 | K-2 | Motion_createTextureFromPixels @0x695d04 | SourceCache.cpp:594 | P1 🔧 | Binary = guarded "opengl" backend singleton + vtbl+24 upload into cache slot; local = TVPGetRenderManager()->CreateTexture2D per-call |
-| K-3 | Motion_doAlphaMaskOperation @0x6af104 | (none) / main.cpp:286 | P0 ❌ | Alpha-mask op MISSING: no shader cache, fillRect borders, or CPU dst.a=src.a*dst.a/255 loops; also wrong registration owner |
-| K-4 | Motion_getD3DAvailable @0x6b0960 | main.cpp:285 + Player impl | P1 ⚠️ | Must be `!hasGPUAccel`; registered on Player not namespace |
-| K-5 | ObjSource_ncb_registerMembers @0x69ccb8 | main.cpp:33 | P0 ❌ | Local registers only constructor; binary has originX/originY/width/height/clip RO + drawLayer method (6 missing) |
+| K-3 | Motion_doAlphaMaskOperation @0x6af104 | (none) / main.cpp:279 | P0 ❌ | Alpha-mask op MISSING: no shader cache, fillRect borders, or CPU dst.a=src.a*dst.a/255 loops; also wrong registration owner |
+| K-4 | Motion_getD3DAvailable @0x6b0960 | main.cpp:278 + Player impl | P1 ⚠️ | Must be `!hasGPUAccel`; registered on Player not namespace |
+| K-5 | ObjSource_ncb_registerMembers @0x69ccb8 | main.cpp:26 | P0 ❌ | Local registers only constructor; binary has originX/originY/width/height/clip RO + drawLayer method (6 missing) |
 | K-6 | ResourceManager_ncb_registerMembers @0x6ab8bc | main.cpp ResourceManager registrar | ✅ member set | Constructor + 12 exposed members match, including bufLayer/unloadAll/isExistMotion/findMotion/random; setEmotePSBDecrypt* belongs to the separate emoteplayer injection path |
-| K-7 | motionplayer_ncb_register @0x6d9b08 | main.cpp:285-286,331-378,420 | P1 ⚠️ | doAlphaMaskOperation/getD3DAvailable & MaskModeStencil/Alpha belong on Motion namespace not Player/D3DEmoteModule; Player subclass order/registration diverges |
+| K-7 | motionplayer_ncb_register @0x6d9b08 | current Motion registration block | ✅ CLOSED 2026-08-04 | Exact `23 constants -> 11 subclasses -> 2 functions`; Player is sixth in-flow row, EmotePlayer remains independently owned, no post alias/deferred attach |
 | K-8 | Point_ncb_registerMembers @0x690fbc | SourceCache.h:145 | P2 ⚠️ | `contains` = Player_hitTest in binary; local returns false stub (member set otherwise matches) |
 | K-9 | PrivateMotionGLL_CreateClass @0x6dd284 | PrivateMotionGLL.h | P2 🔧 | Binary is a registered TJS class (setSize/visible/absolute + delegating ctor); local has no class, uses free fns + std::vector |
 | K-10 | SourceCache loadSource impl | SourceCache.cpp | ✅ named chain aligned 2026-07-23 | `std::list<Entry>`; full Variant key+src+blend identity, mutable color, node copy/erase, greedy byte trim, exact descriptor bridge. This remains independent of Player_findSource's mapped-record texture maps. |
@@ -184,12 +193,12 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 - Motion_doAlphaMaskOperation full body (shader cache + CPU pixel loops + fillRect-border passes).
 - ObjSource: originX/originY/width/height/clip RO props + drawLayer.
 - Player::findSource 的 raw PSBRawNode 像素导航（容器/生命周期已在 2026-07-18 复原）。
-- Motion namespace MaskModeStencil/MaskModeAlpha constants.
 - PrivateMotionGLL as a registered NCB class (setSize/visible/absolute).
 
 ## ALIGNED (member set)
 - SourceCache (4), Point (5), D3DAdaptor (19): member sets match (impls vary; D3DAdaptor nullsub stubs acceptable for Web).
-- Namespace constants LayerType*/ShapeType*/PlayFlag*/TransformOrder*/CoordinateRecutangular*: match.
+- All 23 namespace constants, including MaskModeStencil/MaskModeAlpha: match.
+- Motion subclass order and both in-flow namespace function registrations: match.
 
 ## PLATFORM_BOUNDARY notes
 - None explicitly annotated in the audited K files. D3DAdaptor's nullsub-backed methods (setPos/removeAllBg/registerBg/...) are binary-side stubs already, so local stubs are faithful, not platform deviations.

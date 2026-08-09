@@ -3,6 +3,12 @@
 Audit date: 2026-06-07. Authoritative = libkrkr2.so. Scope: cpp/plugins/motionplayer/
 {main.cpp, D3DAdaptor.cpp/.h, D3DEmoteModule.h, MotionNodeBridge.cpp}.
 
+Superseding registration update: 2026-08-04. Fresh decompilation of
+`motionplayer_ncb_register@0x6D9B08`, `Motion_Player_ncb_register@0x6FDD04` and
+`Player_ncb_registerMembers@0x6D69C8` closed the stale Motion constants / Player alias /
+free-function mechanism findings in §2. The current authoritative registrar is
+`23 constants -> 11 subclasses -> 2 namespace functions` in one flow.
+
 This re-audits the 2026-05-30 Cluster D/K findings against the CURRENT main.cpp, which
 has been substantially reworked since (D3DEmotePlayer 54-table rebuilt, M6 namespace fix
 landed, namespace free-fns relocated). Most 2026-05-30 P0s are now RESOLVED.
@@ -24,7 +30,7 @@ has been rebuilt to the exact binary shape. Remaining items are callback-identit
 placement nits, plus expected D3D platform stubs.
 
 ================================================================
-## 1. D3DEmotePlayer member table (binary sub_52E504 vs main.cpp:870-1022)
+## 1. D3DEmotePlayer member table (binary sub_52E504 vs main.cpp:817-969)
 
 Binary registration order (ncb_addMember / sub_52FC90 / sub_530328 / sub_53043C sequence):
 
@@ -119,61 +125,50 @@ for distinct names (no aliasing collision), so this is cosmetic, not a behavior 
 ### 1c. ⚠️ D-A (P2): progress callback identity
 Binary member #50 'progress' binds **EmoteEngine_progress** (@0x52f76c), NOT a
 D3DEmotePlayer_progress. The 'progress' member forwards straight into the EmoteEngine
-progress routine. Local main.cpp:1001 binds NCB_METHOD(progress) -> D3DEmotePlayer::progress
+progress routine. Local main.cpp:948 binds NCB_METHOD(progress) -> D3DEmotePlayer::progress
 (double dt). NAME matches; callback identity differs. To be 1:1, D3DEmotePlayer::progress
 must tail-call the EmoteEngine progress (the engine-side tick), not a player-local routine.
 Verify the wrapper body in EmotePlayer.cpp. (IDB comment added at 0x52f76c.)
 
 ================================================================
-## 2. Motion namespace registrar (binary sub_6D9B08 vs main.cpp:607-654 + PostRegistCallback)
+## 2. Motion namespace registrar (binary sub_6D9B08 vs current Motion registration block)
 
 ### 2a. Constants — 23 total. ✅ all present
 Binary: LayerType{Obj0..Camera5}(6), ShapeType{Point0..Quad3}(4), PlayFlag{Force1,Chain2,
 AsCan4,Join8,Stealth16}(5), TransformOrder{Flip0,Slant3,Zoom2,Angle1}(4),
 CoordinateRecutangular{XY0,XZ1}(2), **MaskModeStencil0, MaskModeAlpha1**(2) = 23.
-Local NCB_REGISTER_CLASS(Motion) main.cpp:623-653 registers all 21 LayerType/ShapeType/
-PlayFlag/TransformOrder/Coordinate constants 1:1.
-- ⚠️ D-C (P3): **MaskModeStencil / MaskModeAlpha are NOT on the local Motion namespace.**
-  Binary registers them on the Motion namespace (sub_6D9B08 @0x6d9d24/0x6d9d3c) AS WELL AS on
-  D3DEmotePlayer (sub_52E504). Local has them on D3DEmotePlayer (main.cpp:883-884) but the
-  Motion namespace block (:623-653) omits them. Binary has them in BOTH places. Add two
-  Variant(TJS_W("MaskModeStencil"/"MaskModeAlpha"), ...) to NCB_REGISTER_CLASS(Motion).
-  Scalar ints, additive-safe.
+Current `NCB_REGISTER_CLASS(Motion)` registers all 23 in binary order, including
+`MaskModeStencil=0` and `MaskModeAlpha=1` at the tail. The constants remain independently present
+on D3DEmotePlayer as required by `sub_52E504`; D-C is closed.
 
-### 2b. Subclass registration ORDER. ✅ aligned (Player via PostRegist alias)
+### 2b. Subclass registration ORDER. ✅ aligned
 Binary sub_6D9B08 order: Point, Circle, Rect, Quad, LayerGetter, **Player**(key @MEMORY
 [0x14C1E9C][5]), SourceCache, ObjSource, ResourceManager, SeparateLayerAdaptor, D3DAdaptor.
 Each via sub_6FCAAC(*a1, name, descriptor) — in-flow member-add on the Motion dispatch.
-Local: NCB_SUBCLASS order in main.cpp:609-620 is ResourceManager, EmotePlayer, SLA, D3DAdaptor,
-SourceCache, ObjSource, Point, Circle, Rect, Quad, LayerGetter. Player is aliased into Motion
-via PostRegistCallback (:789). NCB_SUBCLASS source order differs from the binary in-flow order,
-but ncbind defers subclass attach and the end-state object graph (Motion namespace owns the
-same 11 subclasses + Player) is identical; NCB member order on a namespace dispatch is not
-script-observable across distinct names. EmotePlayer as an extra Motion subclass is the
-emoteplayer.dll module's own (separate module, acceptable). NOT a deviation.
+Current local Motion table emits the same eleven rows in the same order. Player uses
+`NCB_REGISTER_SUBCLASS(Player)` and is the sixth in-flow row; no top-level `global.Player` or post
+alias remains. The former extra EmotePlayer row is also absent; the sole `emoteplayer.dll` entry owns
+its later creation/attachment. The owner, order and call-chain gap is closed.
 
 ### 2c. Namespace free-fns doAlphaMaskOperation + getD3DAvailable. ✅ owner + timing aligned
 Binary sub_6D9B08 registers BOTH on the Motion namespace dispatch IN-FLOW, after the last
 subclass (D3DAdaptor), via the same sub_6FCAAC member-add primitive:
   - doAlphaMaskOperation @0x6da1f0 (cb Motion_doAlphaMaskOperation)
   - getD3DAvailable @0x6da260 (cb Motion_getD3DAvailable)
-Local main.cpp:751-755 registers both via MotionFreeFnRegistrar::RegistFunction(..., "Motion")
-INSIDE PostRegistCallback (after subclasses), order doAlphaMaskOperation then getD3DAvailable.
-This is the M6 fix (commit f50f197) — owner (Motion namespace, not Player) and timing (after
-subclasses) both now match sub_6D9B08. The 2026-05-30 K-7 wrong-owner finding is RESOLVED.
-Residual mechanism diff (RegistFunction re-looks-up Motion dispatch via GetDispatch vs binary's
-in-hand *a1) is benign; end-state object graph identical.
+Current `NCB_REGISTER_CLASS(Motion)` registers both with `Method(...)` immediately after
+D3DAdaptor, in order `doAlphaMaskOperation` then `getD3DAvailable`. The obsolete
+`MotionFreeFnRegistrar` and PostRegist Motion re-lookup have been removed, so the local path now uses
+the same in-hand Motion registration object and no residual mechanism difference remains.
 
 ### 2d. M6 namespace-attach regression — RESOLVED (memory cross-check)
-project_m6_motion_namespace_attach_regression confirms the wasmtime regression (render
-pipeline silently 0 events when the two free-fns were registered via standalone
-NCB_ATTACH_FUNCTION auto-register units, too early) was root-caused and fixed by relocating
-the same member-add into PostRegistCallback. The binary registration topology (sub_6D9B08
-in-flow after subclasses) is what the current code now mirrors. No registration-topology
-deviation remains; this is the binary-aligned shape, not a workaround.
+project_m6_motion_namespace_attach_regression records the historical regression (render pipeline
+silently produced 0 events when the functions were standalone auto-register units). The intermediate
+PostRegist relocation restored timing but retained a mechanism difference. The 2026-08-04 update
+completed the architectural fix by putting both methods directly in the Motion registrar after all
+subclasses, matching `sub_6D9B08` rather than preserving the intermediate workaround.
 
 ================================================================
-## 3. D3DAdaptor (binary sub_6ACE94 vs D3DAdaptor.h/.cpp + main.cpp:118-135)
+## 3. D3DAdaptor (binary sub_6ACE94 vs D3DAdaptor.h/.cpp + main.cpp:111-128)
 
 ### 3a. Member set — 16 members. ✅ 1:1 (set, names, order)
 Binary order: constructor, setPos(nullsub_81), setSize(sub_6AD7A8), setClearColor(sub_6AD7B0),
@@ -181,7 +176,7 @@ setResizable(sub_6AD7B8), removeAllTextures(sub_6AD8B8), removeAllBg(nullsub_82)
 removeAllCaption(nullsub_83), registerBg(nullsub_84), registerCaption(nullsub_85),
 unloadUnusedTextures(nullsub_86), visible(prop), alphaOpAdd(prop), captureCanvas,
 canvasCaptureEnabled(prop), clearEnabled(prop).
-Local main.cpp:118-135: factory, setPos, setSize, setClearColor, setResizable, removeAllTextures,
+Local main.cpp:111-128: factory, setPos, setSize, setClearColor, setResizable, removeAllTextures,
 removeAllBg, removeAllCaption, registerBg, registerCaption, unloadUnusedTextures, captureCanvas,
 visible, alphaOpAdd, canvasCaptureEnabled, clearEnabled. Same 16, same order. ✅
 (Cluster K's "19 members" was a miscount; the binary ncb table is exactly 16.)
@@ -207,19 +202,19 @@ beyond the 16 above; impl-level container choice (std::vector readback) is a web
 not part of the NCB facade. Acceptable for this cluster's scope (NCB facade + namespace).
 
 ================================================================
-## 4. D3DEmoteModule (binary sub_52DFA8 vs D3DEmoteModule.h + main.cpp:839-868)
+## 4. D3DEmoteModule (binary sub_52DFA8 vs D3DEmoteModule.h + main.cpp:786-815)
 
 ### 4a. Member set — 8 members. ✅ 1:1 (set, names, order)
 Binary order: constructor(off_1A02790,cb=0 default ctor), maskMode(sub_52E3F8/sub_52E3F0),
 maskRegionClipping(sub_52E408/sub_52E400), mipMapEnabled(sub_52E41C/sub_52E414),
 alphaOp(sub_52E430/sub_52E428), protectTranslucentTextureColor(sub_52E440/sub_52E438),
 pixelateDivision(sub_52E454/sub_52E44C), setMaxTextureSize(sub_52E45C).
-Local main.cpp:839-868: ctor, maskMode, maskRegionClipping, mipMapEnabled, alphaOp,
+Local main.cpp:786-815: ctor, maskMode, maskRegionClipping, mipMapEnabled, alphaOp,
 protectTranslucentTextureColor, pixelateDivision, setMaxTextureSize. Same 8, same order. ✅
 
 ### 4b. Constants placement
 The 4 constants (MaskModeStencil/Alpha + TimelinePlayFlagParallel/Difference) were previously
-on D3DEmoteModule; they have been MOVED to D3DEmotePlayer (main.cpp:883-888) per sub_52E504,
+on D3DEmoteModule; they have been MOVED to D3DEmotePlayer (main.cpp:830-835) per sub_52E504,
 which is correct — sub_52DFA8 (D3DEmoteModule registrar) registers NO constants. ✅
 
 ### 4c. pixelateDivision — correctly on BOTH classes
@@ -243,9 +238,9 @@ NCB-registration scope but verified architecturally consistent; no deviation.
 
 | id | func@addr | local | sev | one-line |
 |----|-----------|-------|-----|----------|
-| D-A | progress cb @0x52f76c | main.cpp:1001 | P2 ⚠️ | binary 'progress' cb=EmoteEngine_progress, not D3DEmotePlayer_progress; verify wrapper tail-calls engine progress |
+| D-A | progress cb @0x52f76c | main.cpp:948 | P2 ⚠️ | binary 'progress' cb=EmoteEngine_progress, not D3DEmotePlayer_progress; verify wrapper tail-calls engine progress |
 | D-B | ctor @0x542764/0x5428D8 | D3DEmotePlayer::factory | P2 ⚠️ | D3DImage type and shell owner data flow corrected; native owner child add/remove bridge still missing |
-| D-C | MaskMode* @0x6d9d24/0x6d9d3c | main.cpp:623-653 | P3 ⚠️ | binary registers MaskModeStencil/Alpha on Motion namespace too; local Motion block omits them (only on D3DEmotePlayer) |
+| D-C | MaskMode* @0x6d9d24/0x6d9d3c | main.cpp:570-600 | P3 ⚠️ | binary registers MaskModeStencil/Alpha on Motion namespace too; local Motion block omits them (only on D3DEmotePlayer) |
 | D-D | removeAllTextures @0x6AD8B8 | D3DAdaptor.h:43 | P3 ⚠️ | binary has real body (sub_6AD8B8); local empties it w/o explicit PLATFORM_BOUNDARY note |
 
 ## RESOLVED since 2026-05-30 (was P0/P1, now ✅)
@@ -263,7 +258,7 @@ NCB-registration scope but verified architecturally consistent; no deviation.
 - D3DAdaptor.cpp std::vector readback buffer + CreateTexture2D capture path: web draw-device
   impl detail; the NCB facade (16 members) is what this cluster audits. No explicit boundary
   comment present; impl-level, not facade-level.
-- motion_getD3DAvailable returns true (main.cpp:706): annotated platform boundary (web port
+- motion_getD3DAvailable returns true (main.cpp:653): annotated platform boundary (web port
   has no GLES-GPU-accel vs D3D split to invert). Owner relocation is binary-aligned; the value
   is a pre-existing boundary with a stated reason — legal.
 

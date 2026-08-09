@@ -1,182 +1,158 @@
 # Cluster C Audit — EmotePlayer NCB binding + native instance lifecycle
 
-Date: 2026-05-30. Authoritative source: libkrkr2.so. Local: cpp/plugins/motionplayer/.
-All binary claims below have a decompile call in this session.
+Original audit: 2026-05-30. Superseding update: 2026-08-04.
+Authoritative source: Android ARM64 `libkrkr2.so`. Local:
+`cpp/plugins/motionplayer/`.
 
-## 0. Verdict
+## 0. Current verdict
 
-🔧 NEEDS ARCHITECTURAL REFACTOR (one P0 class-identity defect) + ✅ on lifecycle funcs.
+The former P0 class-identity/member-set defect and the later-discovered module-entry defect are
+both fixed.
 
-The lifecycle / loader / static-init / decrypt-seed functions are all faithfully restorable
-and mostly aligned. But the central NCB member-set claim from the prior review (P2-2:
-"binary EmotePlayer only registers finalize") is FALSE. `EmotePlayer_loadClass` also calls
-`EmotePlayer_ncb_registerMembers` (0x67FAC8), so the binary `Motion.EmotePlayer` class
-exposes a full ~69-member script API. The local port instead leaves `Motion.EmotePlayer`
-with only a constructor and puts an API on a *separate* local `D3DEmotePlayer` class. The two
-EmotePlayer-family classes and their member sets are mismatched against the binary.
+- `Motion.EmotePlayer` now owns the full `EmotePlayer_ncb_registerMembers@0x67FAC8` surface;
+- `D3DEmotePlayer` retains its independent `0x52E504` surface;
+- `motionplayer_ncb_register@0x6D9B08` no longer gets an extra EmotePlayer subclass row;
+- the sole `emoteplayer.dll` callback now performs dependency load, class attachment and both
+  ResourceManager setter injections in one data flow;
+- the two setters retain their independently audited OwnerFilter target/control-block lifecycle.
 
----
+Current status for the registration path covered here: **ALIGNED**. The same-day namespace follow-up
+also closed the former Motion.Player post-alias item: Player is now the sixth in-flow subclass and no
+top-level alias path remains.
 
-## 1. Binary call graph (decompiled this session)
+## 1. Binary call graph
 
+```text
+emoteplayer_static_init@0x42EB00
+  -> one "emoteplayer.dll" auto-register node
+     init = emoteplayer_entry@0x682528; term = null
+
+emoteplayer_entry@0x682528
+  -> LoadModule("motionplayer.dll")
+  -> global = TVPGetScriptDispatch(); value = global.Motion; motion = value.AsObject()
+  -> EmotePlayer_loadClass@0x685BC0("EmotePlayer", 1)
+       -> EmotePlayer_NCB_classInit@0x686148
+       -> EmotePlayer_ncb_registerMembers@0x67FAC8 on the same class object
+  -> attach class as Motion.EmotePlayer with flags 0x10000
+  -> value = motion.ResourceManager
+  -> create seed method; Variant(seed,seed); Release raw method
+  -> manager = value.AsObject(); PropSet seed with flags 0x10200
+  -> create func method; overwrite the same Variant via SetObject(func,func); Release raw method
+  -> PropSet func with flags 0x10200; destroy both Variants
 ```
-emoteplayer_static_init (0x42EB00)            -> .init_array: registers "emoteplayer.dll" entry = emoteplayer_entry
-emoteplayer_entry (0x682528) [on dll load]
-  ├─ LoadModule("motionplayer.dll")           (sub_548A44)
-  ├─ find/create namespace "Motion"
-  ├─ EmotePlayer_loadClass(0x685BC0, mode=1)
-  │     ├─ EmotePlayer_NCB_classInit (0x686148)            -> new(0xB0) class; native ctor=0x68629C; registers "finalize"->0x6862C8(noop ret 0)
-  │     └─ EmotePlayer_ncb_registerMembers (0x67FAC8)      -> ~69 script members into SAME class object
-  ├─ register class as Motion.EmotePlayer (flag 0x10000 = static? attr)
-  ├─ namespace "ResourceManager"
-  ├─ register setEmotePSBDecryptSeed (0x685D30) into Motion.ResourceManager (attr 66048=0x10200)
-  └─ register setEmotePSBDecryptFunc (loc_685E60) into Motion.ResourceManager (attr 66048)
+
+The complete `.text` scan finds exactly one materialization of the entry callback and exactly one
+materialization of each setter callback. The setter UTF-16 names likewise have no other registration
+owner.
+
+`motionplayer_ncb_register@0x6D9B08` has exactly eleven subclass rows, in this order:
+
+```text
+Point, Circle, Rect, Quad, LayerGetter, Player, SourceCache, ObjSource,
+ResourceManager, SeparateLayerAdaptor, D3DAdaptor
 ```
 
-Native instance lifecycle (D3DEmotePlayerNativeInstance vtable off_1A18BB0 == EmotePlayer native):
+It has no EmotePlayer class-name materialization and no direct edge to the entry, class loader or
+member registrar. EmotePlayer's final script owner is Motion, but its creation/attachment owner is
+the independent emoteplayer module.
+
+## 2. Motion.EmotePlayer class surface
+
+`EmotePlayer_loadClass@0x685BC0` first calls class init at `0x685C24`, then the complete member
+registrar at `0x685C2C`. Both operate on the same class object. The obsolete conclusion that the
+binary class was finalize-only is false and has been removed from current notes.
+
+The local `NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer)` now contains the two timeline constants and
+the complete 70-member table in binary order: progress/frameProgress/draw/physics/wind/play/clear,
+variable and serialization methods, transform/color/force methods, state properties, timing/bounds,
+camera/root/scale accessors, selector/timeline queries and `getCommandList`. The formerly empty
+constructor-only class no longer exists.
+
+The separate `D3DEmotePlayer` class remains distinct. Its D3D-shell member table is not collapsed
+into Motion.EmotePlayer.
+
+## 3. Module-entry source alignment
+
+The former local shape had two callbacks:
+
+- pre callback only loaded `motionplayer.dll`;
+- post callback separately looked up ResourceManager and injected the setters;
+- Motion's main class table registered EmotePlayer early;
+- local success/null/type guards changed the binary exception boundary;
+- a lambda created two independent method Variants;
+- the global dispatch was explicitly Released.
+
+Current `main.cpp:803-858` mirrors `emoteplayer_entry` instead:
+
+1. one module callback performs the complete operation;
+2. Motion and ResourceManager PropGet reuse the same `value` Variant;
+3. `Setup("EmotePlayer", true)` materializes class init + full member registration;
+4. `TJSNativeClassRegisterNCM(... nitClass, TJS_STATICMEMBER)` reproduces type 0 / flags 0x10000;
+5. one `methodValue` is constructed for seed and overwritten by `SetObject` for func;
+6. both PropSet calls use `TJS_MEMBERENSURE | TJS_STATICMEMBER` (`0x10200`);
+7. no binary-absent guards or explicit global Release remain.
+
+The Motion main table at `main.cpp:587-599` contains no EmotePlayer row. ResourceManager's own
+12-member table also contains neither setter; both appear only after emoteplayer module load.
+
+## 4. Native instance lifecycle
+
+```text
+EmotePlayerNativeInstance_create@0x68629C:
+  r = new(0x18); r.vptr = off_1A18BB0; r.payload = 0; r.sticky = 0; return r
+
+EmotePlayerNativeInstance_destroy@0x6862D0:
+  if (payload && !sticky) { EmoteEngine_dtor@0x67F4B8(payload); delete payload; }
+  payload = 0; sticky = 0
 ```
-EmotePlayerNativeInstance_create (0x68629C):  r=new(0x18); r[0]=off_1A18BB0; r[+8]=0; r[+16]=0; return r
-EmotePlayerNativeInstance_destroy(0x6862D0):  p=this[+8]; if(p && !this[+16]){ EmoteEngine_dtor(0x67F4B8)(p); operator delete(p);} this[+8]=0; this[+16]=0
-```
 
-Confirmed: 24-byte shell = {vtable@+0, EmoteEngine* payload@+8, sticky/owned byte@+16}.
-Destroy gate = `+8 != 0 && +16 == 0` (matches local EmotePlayer.h comment & P2-1).
+The 24-byte ARM64 shell means `{vptr, EmoteEngine *payload, sticky/owned state}` at the target ABI;
+the local source restores the named-field semantics and lets wasm32 calculate its own layout.
+`payload != null && sticky == 0` remains the destruction gate.
 
----
+## 5. Decrypt setter / OwnerFilter status
 
-## 2. P0 — CLASS IDENTITY / MEMBER-SET MISMATCH (refutes prior P2-2)
+`setEmotePSBDecryptSeed@0x685D30..0x685E60` and
+`setEmotePSBDecryptFunc@0x685E60..0x686148` were both fresh-decompiled after the original audit.
+The first stores a full 8-byte TJS Integer capture and consumes only its low W32 in the xorshift
+invoker. The second owns Object/ObjThis through a closure and refcount control block. Both create a
+named temporary `std::function`, copy-assign through the separate `0x6A87D0` wrapper /
+`0x6A87E8` assignment FDE, then destroy the source temporary independently.
 
-### Evidence
-- xrefs_to(0x67FAC8) = ONLY 0x685C2C inside EmotePlayer_loadClass (0x685BC0).
-- xrefs_to(0x686148) = ONLY 0x685C24 inside the SAME EmotePlayer_loadClass.
-- In loadClass: `v11[0]=classKey; classInit(v11)` sets `v11[1]=classObj`; then
-  `registerMembers(&v9)` where v9=v11, so registerMembers' `*a1`/`**a1` = the SAME classObj.
-- => binary `Motion.EmotePlayer` gets `finalize` + the full 69-member API. NOT finalize-only.
+That producer/consumer lifecycle is covered by
+`FOLLOWUP_OWNER_FILTER_BRIDGE_LIFECYCLE_SURFACE_2026-08-04.md`; this update closes the distinct
+question of who registers the setters and when.
 
-### Binary `Motion.EmotePlayer` member set (0x67FAC8, source order)
-First member: `finalize` (name passed dynamically as `**a1`, callback off_1A18BE8) — actually
-the classInit-registered finalize; registerMembers re-emits a leading Function member too.
-Then in order:
-TimelinePlayFlagParallel(const=1), TimelinePlayFlagDifference(const=2), progress, frameProgress,
-draw, initPhysics, startWind, stopWind, play, clear, getVariable, contains, serialize,
-unserialize, pass, setVariable, setCoord, setScale, setRotate, setColor, setOuterForce,
-completionType, chara, motion, motionKey, project, maskMode, meshDivisionRatio, outline,
-priorDraw, frameLastTime, frameLoopTime, lastTime, loopTime, bounds, processedMeshVerticesNum,
-setDrawAffineTranslateMatrix, getCameraOffset, setCameraOffset, modifyRoot, setHairScale,
-setPartsScale, setBustScale, hairScale, bustScale, partsScale, debugPrint, queuing, directEdit,
-selectorEnabled, variableKeys, animating, setMirror, skip, playTimeline, stopTimeline,
-getTimelinePlaying, setTimelineBlendRatio, fadeInTimeline, fadeOutTimeline, getTimelineBlendRatio,
-getVariableRange, getVariableFrameList, getMainTimelineLabelList, getDiffTimelineLabelList,
-getLoopTimeline, getTimelineTotalFrameCount, getPlayingTimelineInfoList, isSelectorTarget,
-deactivateSelectorTarget, getCommandList.  (= 71 named slots incl. 2 constants)
+## 6. Mechanical and runtime gates
 
-NOTE: these member NAMES and callback addrs are mostly the *Player engine* callbacks
-(sub_6818B4, loc_67D018, sub_675E40, sub_681C48, sub_681EF0, sub_681F0C, sub_681F20/28/30,
-sub_66EB8C, sub_674F54, sub_6750C0, sub_6754C4, sub_682520, Player_setDrawAffineTranslateMatrix...)
-i.e. Motion.EmotePlayer here is effectively the *Player-facing* emote API, NOT a thin shell.
+`verify_elf_surface.py` now independently fixes:
 
-### Local state
-- main.cpp:299-301 `NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer)` registers ONLY `NCB_CONSTRUCTOR(())`.
-- The full emote API lives on a SEPARATE local class `D3DEmotePlayer` (main.cpp:496-583).
-- main.cpp:298 comment asserts "Binary only registers finalize" — INCORRECT.
+- eight registration-related FDEs after including the complete motionplayer static initializer;
+- seven UTF-16 module/class/member literals;
+- `1 entry + 2 setter` unique full-text materializations;
+- eleven entry/class-loader direct edges;
+- 23 Motion constant edges, eleven subclass registration edges, two namespace callback
+  materializations and two function member-add edges;
+- zero forbidden EmotePlayer references inside the Motion registrar;
+- zero full-ELF UTF-16 matches for the removed `ShortCutInitial*KeyMap` callback literals;
+- 52 semantic words and five complete FDE hashes (3,404 raw bytes);
+- a 10,062-byte canonical digest.
 
-### Why this is P0 / architectural
-The binary has TWO real classes, both with full APIs but DIFFERENT member sets and DIFFERENT
-callback target layers:
-  (a) `Motion.EmotePlayer`  via 0x67FAC8  — Player-engine-facing API (71 slots above).
-  (b) `D3DEmotePlayer`      via 0x52E4xx (D3DEmotePlayer_ncb_registerMembers, register 0x541D98)
-      — 54 D3D-shell members (module, clear, load, clone, show, hide, visible, smoothing,
-      meshDivisionRatio, queing, hairScale, partsScale, bustScale, assignState, setCoord, setScale,
-      getScale, setRot, getRot, setColor, getColor, count/getVariable*, setVariable, getVariable,
-      startWind, stopWind, timeline*, animating, skip, pass, progress, modified, setOuterForce,
-      getOuterForce, contains) + consts MaskModeStencil/MaskModeAlpha/TimelinePlayFlag*.
-Local collapses these: empty `Motion.EmotePlayer` + a `D3DEmotePlayer` carrying an API that is a
-hybrid of both binary sets (e.g. local D3DEmotePlayer has `bodyScale`, `create`, `addPlayCallback`,
-`setMirror`, `setTimeline`, `isTimelinePlaying` — but binary D3DEmotePlayer uses `clear`(->create cb),
-`pass`(->addPlayCallback cb), and has NO bodyScale/setMirror). Cannot be patched member-by-member;
-the class-to-binary-function mapping must be fixed first:
-  - `Motion.EmotePlayer` must expose the 0x67FAC8 set.
-  - local `D3DEmotePlayer` must match the 0x52E4xx set exactly (names + order + const set).
+The unit test checks the process's first-load boundary: `motionplayer.dll` alone has no
+`Motion.EmotePlayer`; after loading `emoteplayer.dll`, EmotePlayer, ResourceManager and both setter
+members are Object values. NCB has no unload path, so later fixture instances correctly observe the
+retained module. Final result: 21/21 test cases and 1555/1555 assertions.
 
-### Severity: P0 (class identity wrong; both member sets diverge from their binary owners).
+## 7. Corrected stale conclusions
 
----
+The following historical claims are superseded and must not be reused:
 
-## 3. Lifecycle / loader function ledger
+- local Motion.EmotePlayer is constructor-only;
+- the full API exists only on local D3DEmotePlayer;
+- registering EmotePlayer in Motion's main table is an acceptable equivalent;
+- the local emoteplayer entry only loads its dependency;
+- putting the two setters in ResourceManager's own member table is equivalent;
+- `0x685E60` is an unanalyzed loc inside the entry.
 
-| id | binary func @ addr | local counterpart | severity | one-line |
-|----|--------------------|-------------------|----------|----------|
-| C1 | EmotePlayerNativeInstance_create @0x68629C | EmotePlayer.h:36-53 (24B {vtable,_payload,_owned}) | ✅ | 24B shell, +8=0,+16=0 init; layout & semantics match |
-| C2 | EmotePlayerNativeInstance_destroy @0x6862D0 | (ncbind native dtor / EmotePlayer dtor) | ⚠️ | gate `+8 && !+16` then EmoteEngine_dtor+delete; local default ~EmotePlayer relies on unique semantics — verify sticky(+16) gate is reproduced in ncbind wrapper |
-| C3 | EmotePlayer_NCB_classInit @0x686148 | part of NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) | ⚠️ | binary registers `finalize`->noop(0x6862C8); local registers ctor only, no explicit finalize member |
-| C4 | EmotePlayer_finalize_noop @0x6862C8 | (none) | ⚠️ | binary `finalize` = `return 0;` noop; not represented locally |
-| C5 | EmotePlayer_loadClass @0x685BC0 | implicit (NCB macro expansion) | 🔧 | drives BOTH classInit + registerMembers; local split loses this dual-registration into one class |
-| C6 | emoteplayer_entry @0x682528 | EmotePlayerPreRegist main.cpp:464-468 | ⚠️ | local only LoadModule("motionplayer.dll"); binary also registers setEmotePSBDecryptSeed/Func into Motion.ResourceManager from here (local does it via ResourceManager subclass instead — acceptable if attrs match, see C8) |
-| C7 | EmotePlayer_setEmotePSBDecryptSeed_callback @0x685D30 | ResourceManager::setEmotePSBDecryptSeed (main.cpp:316) | ⚠️ | binary: argc<1 -> ret 0xFFFFFC14; switch on variant type tag (*a3+16): case1/2 toInt path, case3/4 raw int, case5 double->int; new(8) box + dispatch sub_6A87D0. Verify local replicates type-switch + error code, not a plain int read |
-| C8 | setEmotePSBDecryptFunc (loc_685E60) | ResourceManager::setEmotePSBDecryptFunc (main.cpp:319) | ❓ | not decompiled this session (loc_ inside 0x682528); both registered with attr 66048(0x10200) + TJS_STATICMEMBER — confirm attr bits match |
-| C9 | emoteplayer_static_init @0x42EB00 | NCB module auto-register (emoteplayer.dll) | ✅ | registers "emoteplayer.dll" module entry=emoteplayer_entry; zero-init globals; framework-equivalent in ncbind |
-
----
-
-## 4. Member-set diff highlights (binary Motion.EmotePlayer 0x67FAC8 vs local Motion.EmotePlayer)
-
-| member | binary Motion.EmotePlayer | local Motion.EmotePlayer | status |
-|--------|---------------------------|--------------------------|--------|
-| finalize | present (classInit) | absent (only ctor) | ABSENT |
-| progress/play/draw/contains/setCoord/setScale/setColor/setRotate/setOuterForce | present | absent | ABSENT (all 69) |
-| setHairScale/setPartsScale/setBustScale | present (methods, cb sub_681F20/28/30) | absent | ABSENT |
-| hairScale/bustScale/partsScale | present (RO-ish props) | absent | ABSENT |
-| all timeline/* + getVariable* + serialize/unserialize | present | absent | ABSENT |
-| (constructor) | NOT a named member (native ctor=0x68629C bound via classInit v2[21]) | NCB_CONSTRUCTOR(()) | EXTRA(framework) |
-
-Every script-facing member of binary Motion.EmotePlayer is ABSENT locally. This is the P0.
-
-NOTE: binary uses sub_681F20/28/30 (setHairScale/Parts/Bust) as **Motion.EmotePlayer** members
-(callbacks live in 0x67FAC8). This CONTRADICTS analysis/EmotePlayer_Internal_Implementation.md
-§2.4 note which said sub_681F20/28/30 are "EmotePlayer-only" — true, but it concluded they belong
-to the local `EmotePlayer` class which is currently empty. They belong on the API-bearing
-Motion.EmotePlayer.
-
----
-
-## 5. Subfunction alignment status
-
-- EmotePlayer_NCB_classInit (0x686148): ✅ decompiled — new(0xB0), native ctor slot v2[21]=0x68629C,
-  vtable off_19FD6C8, registers finalize. Singleton guard byte_1AB8060 ("Already registerd class.").
-- EmotePlayer_ncb_registerMembers (0x67FAC8): ✅ decompiled & enumerated (71 slots).
-- D3DEmotePlayer_ncb_registerMembers (0x52E4xx) / _ncb_register (0x541D98): ✅ decompiled — 54 members.
-- EmoteEngine_dtor (0x67F4B8): ❓ not re-decompiled (referenced by destroy gate; trusted from prior).
-- setEmotePSBDecryptFunc (loc_685E60): ❓ not decompiled (loc_ inside emoteplayer_entry).
-- sub_6A87D0 / sub_A0E48C / sub_A13294 (decrypt-seed dispatch helpers): ❓ not decompiled.
-
----
-
-## 6. Platform boundary notes
-
-None encountered in cluster C local code carrying `// PLATFORM_BOUNDARY:`. The `NCB_CONSTRUCTOR(())`
-on EmotePlayer could be a legitimate ncbind requirement (native instance allocation) but is NOT
-labelled as a platform boundary and is paired with a wrong claim — treat as part of P0 until the
-class identity is fixed and, if the ctor must stay for ncbind, add an explicit PLATFORM_BOUNDARY note.
-
----
-
-## 7. Fix guidance (do NOT apply here — code edits out of scope)
-
-1. (P0) Re-map classes: make local `Motion.EmotePlayer` expose the 0x67FAC8 member set in order;
-   make local `D3DEmotePlayer` match the 0x52E4xx set (drop bodyScale/setMirror/setTimeline/create/
-   addPlayCallback unless they map to binary clear/pass cbs; add module-const set MaskMode*/TimelineFlag*).
-2. (P0) Move setHairScale/setPartsScale/setBustScale + hairScale/bustScale/partsScale onto the
-   API-bearing Motion.EmotePlayer (callbacks sub_681F20/28/30), per 0x67FAC8.
-3. (P1) Add explicit `finalize` member to Motion.EmotePlayer mapping to a noop (0x6862C8).
-4. (P1) Verify destroy gate: native dtor must skip delete when sticky(+16) set; ensure ncbind
-   `_sticky` path is wired, else clone()/assignState ownership transfer will double-free.
-5. (P1) Audit setEmotePSBDecryptSeed local impl vs 0x685D30 type-switch (5 cases) + error 0xFFFFFC14.
-6. Correct analysis/MotionPlayer_Restoration_Review_2026-05-30.md P2-2 and
-   analysis/EmotePlayer_Internal_Implementation.md §2.4 ("only finalize" / class ownership of
-   sub_681F20/28/30).
-
-## 8. IDB changes made
-- renamed sub_67FAC8 -> EmotePlayer_ncb_registerMembers (confirmed)
-- renamed sub_6862C8 -> EmotePlayer_finalize_noop
-- renamed 0x42EB00 -> emoteplayer_static_init
-- comments added at 0x685BC0 (dual-registration), 0x67FAC8 (member helpers + gate). idb_save done.
+The detailed entry gate and current source mapping are recorded in
+`FOLLOWUP_EMOTE_REGISTRATION_INJECTION_SURFACE_2026-08-04.md`.

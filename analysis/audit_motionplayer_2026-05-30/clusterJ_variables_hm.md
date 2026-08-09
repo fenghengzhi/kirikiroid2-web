@@ -15,7 +15,7 @@ The 4-HM byte layout is now fully reverse-engineered (all node sizes + hash offs
 | HM3 +1184 (hdr@+1184, bucketcount@+1192) | 0x2D0=720B | node+712 | ttstr@+8 (node-path key) | PerNodeLayerState@+16.. (8 ttstr/5 dispatch/2 heap) | `_perNodeLayerStateMap` PerNodeLayerStateMap | ⚠️ shape OK, STL boundary |
 | HM4 +1240 (hdr@+1240, bucketcount@+1248) | 0x20=32B | node+24 | ttstr@+8 | **tTJSVariant*@+16 (OWNING)** | `_dispatchAliasMap` ttstr→iTJSDispatch2* (non-owning) | ❌ P0 WRONG value type + WRONG ownership + UNUSED |
 
-HM1/HM2/HM3/HM4 all share the KiriKiri UTF-16 ttstr hash (1025*acc XOR>>6 … 9* … 32769* … -1 sentinel), confirmed byte-identical inline in setVariable/upsert/cascade. Local ttstr_hash.h reproduces it exactly. ✅
+**2026-07-26 correction (supersedes the original report's “byte-identical/exact” claim):** HM1/HM2/HM3/HM4 do share the KiriKiri UTF-16 ttstr hash, and the local 1025/6/9/32769/11 arithmetic mix was correct. However, the old functor called `s.c_str()` directly, collapsing a null `Ptr` into the empty payload and skipping the backing rep's `Hint@+68`. Fresh decompiles at `0x6F52AC`, `0x686944`, `0x6F2674`, `0x689760`, `0x6885CC`, and `0x6E2060/0x6E2150/0x6E2484/0x6E2574` prove the full contract: null `Ptr` hashes to 0; a nonzero Hint is reused; otherwise the hash is computed and written to Hint; a computed zero for a non-null input becomes `0xFFFFFFFF`. `ttstr_hash.h` now implements that full contract. ✅
 
 ## Decompiled functions / pseudocode
 

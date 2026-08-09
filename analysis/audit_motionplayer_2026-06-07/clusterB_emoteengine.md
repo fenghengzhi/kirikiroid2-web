@@ -147,8 +147,13 @@ residual-vs-original dt, B4 bind-loop) are ALL RESOLVED in current code:
 ================================================================================
 ## Recursive sub-function status
 ================================================================================
-- ttstr_doubleMap_upsert @0x686944 — ✅ shared HM7 upsert (verified prior; local
-  detail::ttstr_hash reproduces 1025/6/9/32769/11 mix).
+- ttstr_doubleMap_upsert @0x686944 — ✅ shared HM7 upsert. **2026-07-26 correction (supersedes the
+  old complete-alignment implication):** the local 1025/6/9/32769/11 arithmetic mix was correct, but
+  the old functor collapsed null `Ptr` into the empty payload and skipped backing-rep `Hint@+68`.
+  Fresh decompiles at `0x6F52AC`, `0x686944`, `0x6F2674`, `0x689760`, `0x6885CC`, and
+  `0x6E2060/0x6E2150/0x6E2484/0x6E2574` prove the full behavior now implemented: null→0, reuse a
+  nonzero Hint, compute and write Hint otherwise, and map a zero result for non-null input to
+  `0xFFFFFFFF`.
 - resolveShapeAnchor @0x67B970 — ✅ decompiled, local matches (getLayerMotion dispatch,
   PropGet shape/type/x/y, rootX/Y crossover, *r meshDivisionRatioDup).
 - Player_getAngleRad @0x6CD0C0 / Player_getAngleDeg @0x6C1780 — ✅ disambiguated.

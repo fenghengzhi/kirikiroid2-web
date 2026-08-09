@@ -58,7 +58,7 @@ namespace PSB {
         // The caller's output is not touched until the successful tail at
         // 0x59A730..0x59A774, so every miss preserves its previous value.
         PSBRawOwner *owner = file->GetOwner();
-        PSBRawNode current(owner, owner->GetHeader()->entries);
+        PSBRawNode current(*file, owner->GetHeader()->entries);
 
         const tjs_int firstSlash = name.IndexOf(TJS_W('/'));
         if(firstSlash == -1) {
@@ -116,37 +116,12 @@ namespace PSB {
         if(!Resolve(name, value)) {
             return nullptr;
         }
-        // The optimized Android body @0x59A0F4..0x59A204 expands the
-        // resource-index and chunk-table decoders here;
-        // PSBRawNode::GetResource @ 0x5996E4 is not part of its call chain.
-        const PSBRawHeader *header = value.GetOwner()->GetHeader();
-        if(header->chunkData == nullptr) {
-            return nullptr;
-        }
-        const detail::PsbArray_guess offsets(header->chunkOffsets);
-        const detail::PsbArray_guess lengths(header->chunkLengths);
-        const std::uint8_t *node = value.GetNode();
-        std::uint32_t index;
-        switch(node[0]) {
-            case 0x19:
-                index = node[1];
-                break;
-            case 0x1a:
-                index = detail::ReadUnaligned_guess<std::uint16_t>(node + 1);
-                break;
-            case 0x1b:
-                index = detail::ReadUnaligned_guess<std::uint32_t>(node + 1) &
-                    0xffffffu;
-                break;
-            case 0x1c:
-                index = detail::ReadUnaligned_guess<std::uint32_t>(node + 1);
-                break;
-            default:
-                index = 0;
-                break;
-        }
-        size = lengths[index];
-        return header->chunkData + offsets[index];
+        // sub_59A0B4 @ 0x59A0EC..0x59A214 is the complete inlined body of
+        // PSBRawNode::GetResource @ 0x5996E8..0x5997E8 after binding `this`
+        // to this local node.  Preserve that source-level member call; the
+        // Android arm64 -O3 build removes the BL but keeps every callee branch;
+        // iOS arm64 independently preserves the call after Resolve.
+        return value.GetResource(size);
     }
 
     bool PSBMedia::CheckExistentStorage(const ttstr &name) {
@@ -181,10 +156,11 @@ namespace PSB {
             return;
         }
 
-        // sub_5999F4 @ 0x599A4C reads the raw tag here and owns this switch;
-        // it does not route through the separate category helper at 0x599554.
-        switch(value.GetNode()[0]) {
-            case 0x20: {
+        // sub_5999F4 @ 0x599A4C contains the complete category-specialized
+        // classifier residual. Same-lineage iOS arm64 @0x1000EE50C retains
+        // the shared classifier call.
+        switch(detail::GetTypeCategory_guess(value.GetNode()[0])) {
+            case 6: {
                 const std::uint8_t *packed = value.GetNode() + 1;
                 tjs_int count;
                 switch(packed[0]) {
@@ -214,95 +190,30 @@ namespace PSB {
                 }
                 break;
             }
-            case 0x21: {
+            case 7: {
                 std::string key;
                 const std::uint8_t *packed = value.GetNode() + 1;
-                std::uint32_t count;
-                switch(packed[0]) {
-                    case 0x0d:
-                        count = packed[1];
-                        break;
-                    case 0x0e:
-                        count = detail::ReadUnaligned_guess<std::uint16_t>(
-                            packed + 1);
-                        break;
-                    case 0x0f:
-                        count = detail::ReadUnaligned_guess<std::uint32_t>(
-                                    packed + 1) &
-                            0xffffffu;
-                        break;
-                    case 0x10:
-                        count = detail::ReadUnaligned_guess<std::uint32_t>(
-                            packed + 1);
-                        break;
-                    default:
-                        return;
-                }
-                const std::uint8_t valueTag =
-                    packed[static_cast<std::ptrdiff_t>(packed[0]) - 0x0b];
-                const int width = static_cast<int>(valueTag) - 0x0c;
-                const std::uint8_t *values =
-                    packed + static_cast<std::ptrdiff_t>(packed[0]) - 0x0a;
-                for(std::uint32_t index = 0; index < count; ++index) {
-                    const std::uint32_t nameIndex =
-                        detail::ReadPackedValue_guess(values + index * width,
-                                                      valueTag);
-                    detail::DecodeName_guess(key, value.GetOwner(), nameIndex);
+                // Android arm64 @0x599B00..0x599C6C scalarizes the first view
+                // and eliminates the unused second one. iOS arm64 retains
+                // both constructor calls; the second record is deliberately
+                // dead after construction.
+                const detail::PsbArray_guess keys(packed);
+                const detail::PsbArray_guess offsets(packed + keys.nBytes);
+                (void)offsets;
+                for(std::uint32_t index = 0; index < keys.nElementCount;
+                    ++index) {
+                    detail::DecodeName_guess(key, value.GetOwner(), keys[index]);
                     lister->Add(ttstr(key));
                 }
                 break;
             }
-            case 0x01:
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x05:
-            case 0x06:
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a:
-            case 0x0b:
-            case 0x0c:
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
-            case 0x1c:
-            case 0x1d:
-            case 0x1e:
-            case 0x1f:
-            case 0x23:
-            case 0x24:
-            case 0x25:
-            case 0x26:
-            case 0x27:
-            case 0x28:
-            case 0x29:
-            case 0x2c:
-            case 0x2d:
-            case 0x2e:
-            case 0x2f:
-            case 0x30:
-            case 0x31:
-            case 0x33:
-            case 0x34:
-            case 0x35:
-            case 0x37:
-            case 0x38:
-            case 0x39:
-            case 0x3b:
-            case 0x3c:
-            case 0x3d:
-            case 0x3f:
-            case 0x41:
-                break;
+            case 0:
+            case 1:
+            case 2:
+            case 3:
+            case 4:
+            case 5:
             default:
-                TVPThrowExceptionMessage(TJS_W(
-                    "psb: internal error: unknown internal type detected.\n"));
                 break;
         }
     }
