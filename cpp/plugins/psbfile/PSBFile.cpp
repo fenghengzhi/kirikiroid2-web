@@ -477,11 +477,6 @@ namespace PSB {
             return false;
         }
 
-        if(_header.version > 3) {
-            LOGGER->critical("not support psb file format version > 3");
-            return false;
-        }
-
         // Pre Load Strings
         stream.SetPosition(_header.offsetStrings);
         stringOffsets = PSB::PSBArray(
