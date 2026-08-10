@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Record Android libkrkr2 motion_playback oracle goldens.
+"""Record transient Android libkrkr2 motion_playback oracle traces.
 
 This runner owns only the Android oracle-recording path:
     run_motion_playback.py --record-oracle --serial ADB_SERIAL
 
-Wasmtime verification against the checked-in goldens lives in
-`run_motion_playback_wasmtime.py`.
+CI uploads these traces as artifacts and compares them with fresh
+Wasmtime traces; the repository does not store a golden copy.
 """
 
 from __future__ import annotations

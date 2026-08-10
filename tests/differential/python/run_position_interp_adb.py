@@ -3,7 +3,7 @@
 
 With ``--trace``/``--record-trace``, the runner additionally attaches a
 Frida tracer to the guest harness and diffs runtime call sequences
-against checked-in golden traces under ``--trace-dir`` (default:
+against locally recorded traces under ``--trace-dir`` (default:
 ``tests/differential/traces``). See ``oracle_runner/README.md`` for
 frida-server provisioning.
 """

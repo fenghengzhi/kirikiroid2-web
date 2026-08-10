@@ -1,6 +1,6 @@
 # Frida version must match the frida-server binary pushed to the
 # device (see README "One-time setup"). Bumping here is a two-sided
-# change: update the CI download URL + checked-in goldens at the same
-# time, because the tracer output shape evolves between frida releases.
+# change: update the CI download URL and verify fresh trace artifacts at
+# the same time, because tracer output can evolve between releases.
 frida==16.4.10
 Pillow

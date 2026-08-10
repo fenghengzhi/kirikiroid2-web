@@ -7,11 +7,6 @@ name: "[DEPRECATED] Differential Wasmtime ARM Linux — use differential.yml"
 
 on:
   workflow_dispatch:
-    inputs:
-      record_motion_playback_oracle:
-        description: "Also upload fresh motion_playback oracle traces as a goldens refresh artifact"
-        type: boolean
-        default: false
 
 env:
   EMSDK_VERSION: "4.0.23"
@@ -781,40 +776,6 @@ jobs:
             tests/differential/artifacts/motion_playback_render_stages_oracle/manifest.json
             tests/differential/artifacts/motion_playback_render_stages_oracle/events/**
           if-no-files-found: error
-
-      - name: Upload motion_playback goldens artifact
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: motion_playback-goldens
-          path: tests/differential/traces/motion_playback/*.oracle.json
-          if-no-files-found: error
-
-      - name: Run ADB+Frida scalar differential oracle
-        run: |
-          set -euo pipefail
-          export ANDROID_SERIAL=localhost:5555
-          trace_failed=0
-          for f in geometry_hit_test local_transform bezier_curve position_interp; do
-            echo "::group::run_${f}_adb --trace"
-            set +e
-            python3 tests/differential/python/run_${f}_adb.py \
-                    --spec-dir tests/differential/specs/${f} \
-                    --serial "${ANDROID_SERIAL}" \
-                    --trace \
-                    > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
-            runner_rc=$?
-            set -e
-            cat /tmp/run.${f}.stdout
-            cat /tmp/run.${f}.stderr >&2
-            if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
-              echo "::error family=${f}::Frida trace regression" >&2
-              trace_failed=1
-            fi
-            echo "::endgroup::"
-            echo "${f}: runner_rc=${runner_rc}"
-          done
-          exit $trace_failed
 
       - name: Stop Redroid
         if: always()

@@ -2,7 +2,7 @@
 """ADB oracle runner for local_transform (sub_699940).
 
 With ``--trace``/``--record-trace``, also attaches a Frida tracer and
-diffs the call sequence against checked-in golden traces. See
+diffs the call sequence against locally recorded traces. See
 ``oracle_runner/README.md`` for frida-server provisioning.
 """
 

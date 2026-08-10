@@ -5,7 +5,7 @@ Drives Player_hitTest inside a real Android emulator/device via adb shell.
 Uses the stdin/stdout RPC harness (see oracle_runner/harness/harness.cpp).
 
 With ``--trace``/``--record-trace``, also attaches a Frida tracer and
-diffs the call sequence against checked-in golden traces. See
+diffs the call sequence against locally recorded traces. See
 ``oracle_runner/README.md`` for frida-server provisioning.
 """
 

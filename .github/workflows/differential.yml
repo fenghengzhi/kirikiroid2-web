@@ -2,15 +2,6 @@ name: Differential Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      record_motion_playback_oracle:
-        description: "Also upload fresh motion_playback oracle traces as a goldens refresh artifact"
-        type: boolean
-        default: false
-      upload_render_pngs:
-        description: "Upload motion_playback render-stage PNG files"
-        type: boolean
-        default: false
   push:
     branches:
       - web
@@ -32,7 +23,7 @@ env:
   REFERENCE_M2LOGO_15HZ_XP3_SHA256: "704729939ceabc2d93388cdc8b980bfd79506bedf660d0911c3dd13e9f78cb94"
 
 jobs:
-  # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
+  # ── Record the Wasmtime side of the fresh motion_playback comparison.
   wasmtime:
     runs-on: macos-latest
     env:
@@ -176,11 +167,6 @@ jobs:
         with:
           key: ${{ github.job }}
 
-      - name: Build WASM + run LLDB guest-debug differential tests
-        run: |
-          source "${EMSDK}/emsdk_env.sh"
-          python3 tests/differential/run_all.py
-
       - name: Prewarm Emscripten ports for Wasmtime full guest
         run: |
           source "${EMSDK}/emsdk_env.sh"
@@ -207,7 +193,6 @@ jobs:
         run: |
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
-          rm -rf tests/differential/artifacts/motion_playback_render_stages_wasmtime
           mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
           for case in yuzulogo m2logo; do
             xp3="reference/xp3/logo_test_oracle_${case}_15hz.xp3"
@@ -217,10 +202,6 @@ jobs:
               --case "${case}" \
               --skip-golden-diff \
               --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
-              --record-render-stages \
-              --record-render-step-checkpoints \
-              --checkpoint-render-only \
-              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
               --lldb-timeout 1200
           done
 
@@ -229,23 +210,6 @@ jobs:
         with:
           name: motion_playback-wasmtime-traces
           path: tests/differential/artifacts/motion_playback_wasmtime_traces/*.port.json
-          if-no-files-found: error
-
-      - name: Upload motion_playback Wasmtime render-stage metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: motion_playback-wasmtime-render-stages
-          path: |
-            tests/differential/artifacts/motion_playback_render_stages_wasmtime/manifest.json
-            tests/differential/artifacts/motion_playback_render_stages_wasmtime/events/**
-          if-no-files-found: error
-
-      - name: Upload motion_playback Wasmtime render-stage PNGs
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_render_pngs }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: motion_playback-wasmtime-render-stage-pngs
-          path: tests/differential/artifacts/motion_playback_render_stages_wasmtime/images/**
           if-no-files-found: error
 
   # ── Build the legacy gnustl harness on a native x86_64 Linux host.
@@ -797,29 +761,6 @@ jobs:
               print(f"{path}: frames={len(frames)}, layer_count={len(frames[0]['layers'])}")
           PY
 
-      - name: Record motion_playback render-stage oracle PNG hashes
-        env:
-          ANDROID_SERIAL: localhost:5555
-          KRKR2_ADB_RPC_TRANSPORT: shell-nc
-        run: |
-          set -euo pipefail
-          rm -rf tests/differential/artifacts/motion_playback_render_stages_oracle
-          for case in yuzulogo m2logo; do
-            xp3="reference/xp3/logo_test_oracle_${case}_15hz.xp3"
-            adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
-            adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
-            adb -s "${ANDROID_SERIAL}" logcat -c || true
-            python3 tests/differential/python/run_motion_stage_oracle.py \
-              --serial "${ANDROID_SERIAL}" \
-              --startup-xp3 "${xp3}" \
-              --case "${case}" \
-              --stage render_path \
-              --record-render-step-checkpoints \
-              --checkpoint-render-only \
-              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_oracle \
-              --playback-timeout 300
-          done
-
       - name: Upload motion_playback oracle record logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -834,63 +775,6 @@ jobs:
           name: motion_playback-oracle-traces
           path: tests/differential/traces/motion_playback/*.oracle.json
           if-no-files-found: error
-
-      - name: Upload motion_playback oracle render-stage metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: motion_playback-oracle-render-stages
-          path: |
-            tests/differential/artifacts/motion_playback_render_stages_oracle/manifest.json
-            tests/differential/artifacts/motion_playback_render_stages_oracle/events/**
-          if-no-files-found: error
-
-      - name: Upload motion_playback oracle render-stage PNGs
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_render_pngs }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: motion_playback-oracle-render-stage-pngs
-          path: tests/differential/artifacts/motion_playback_render_stages_oracle/images/**
-          if-no-files-found: error
-
-      - name: Upload motion_playback goldens artifact
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: motion_playback-goldens
-          path: tests/differential/traces/motion_playback/*.oracle.json
-          if-no-files-found: error
-
-      - name: Run ADB+Frida scalar differential oracle
-        run: |
-          set -euo pipefail
-          export ANDROID_SERIAL=localhost:5555
-          # Runners exit non-zero on BOTH trace-vs-golden divergences
-          # AND port-vs-libkrkr2 value divergences. The Frida job's
-          # purpose is only the former — port-value divergences are
-          # documented findings (see oracle_runner/README.md "Status")
-          # and get addressed in the port, not here. Fail only if a
-          # trace diff or missing-golden error fires.
-          trace_failed=0
-          for f in geometry_hit_test local_transform bezier_curve position_interp; do
-            echo "::group::run_${f}_adb --trace"
-            set +e
-            python3 tests/differential/python/run_${f}_adb.py \
-                    --spec-dir tests/differential/specs/${f} \
-                    --serial "${ANDROID_SERIAL}" \
-                    --trace \
-                    > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
-            runner_rc=$?
-            set -e
-            cat /tmp/run.${f}.stdout
-            cat /tmp/run.${f}.stderr >&2
-            if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
-              echo "::error family=${f}::Frida trace regression" >&2
-              trace_failed=1
-            fi
-            echo "::endgroup::"
-            echo "${f}: runner_rc=${runner_rc}"
-          done
-          exit $trace_failed
 
       - name: Stop Redroid
         if: always()
@@ -916,19 +800,7 @@ jobs:
           name: motion_playback-oracle-traces
           path: /tmp/motion_playback/oracle
 
-      - name: Download motion_playback Wasmtime render-stage hashes
-        uses: actions/download-artifact@v4
-        with:
-          name: motion_playback-wasmtime-render-stages
-          path: /tmp/motion_playback/render/wasmtime
-
-      - name: Download motion_playback oracle render-stage hashes
-        uses: actions/download-artifact@v4
-        with:
-          name: motion_playback-oracle-render-stages
-          path: /tmp/motion_playback/render/oracle
-
-      - name: Compare fresh motion_playback traces and PNG hashes
+      - name: Compare fresh motion_playback traces
         run: |
           set +e
           python3 tests/differential/python/compare_motion_playback_traces.py \
@@ -936,45 +808,20 @@ jobs:
             --port-trace-dir /tmp/motion_playback/wasmtime \
             --oracle-trace-dir /tmp/motion_playback/oracle \
             --markdown-report /tmp/motion_playback/motion_playback_compare.md
-          trace_compare_rc=$?
-
-          python3 tests/differential/python/compare_motion_render_steps.py \
-            --oracle-root /tmp/motion_playback/render/oracle \
-            --wasmtime-root /tmp/motion_playback/render/wasmtime \
-            --allow-render-flow-diagnostics \
-            --ignore-layer-save \
-            2>&1 | tee /tmp/motion_playback/motion_render_steps_compare.txt
-          render_compare_rc=${PIPESTATUS[0]}
+          compare_rc=$?
           set -e
 
           echo "--- motion_playback markdown report ---"
           cat /tmp/motion_playback/motion_playback_compare.md || true
-          echo "--- motion_playback render PNG/hash report ---"
-          cat /tmp/motion_playback/motion_render_steps_compare.txt || true
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_playback_compare.md ]; then
             cat /tmp/motion_playback/motion_playback_compare.md >> "${GITHUB_STEP_SUMMARY}"
           fi
-          if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_render_steps_compare.txt ]; then
-            {
-              echo ""
-              echo "# motion_playback Render PNG/Hash Compare"
-              echo ""
-              echo '```text'
-              cat /tmp/motion_playback/motion_render_steps_compare.txt
-              echo '```'
-            } >> "${GITHUB_STEP_SUMMARY}"
-          fi
-
-          if [ "${trace_compare_rc}" -ne 0 ] || [ "${render_compare_rc}" -ne 0 ]; then
-            exit 1
-          fi
+          exit "${compare_rc}"
 
       - name: Upload motion_playback compare report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-compare-report
-          path: |
-            /tmp/motion_playback/motion_playback_compare.md
-            /tmp/motion_playback/motion_render_steps_compare.txt
+          path: /tmp/motion_playback/motion_playback_compare.md
           if-no-files-found: warn

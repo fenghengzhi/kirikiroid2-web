@@ -9,20 +9,20 @@
 Runs libkrkr2.so (the Android kirikiroid2 binary) inside the repacked
 `krkr2-harness.apk` on a real Android arm64 device or Redroid
 container, driven from the host over `adb forward tcp:5039` +
-`am start HarnessActivity`. Provides two established assertion layers
-against the port:
+`am start HarnessActivity`. Provides a return-value probe against the
+specs and an optional local call-sequence tracer:
 
 1. **Return-value diff** — the host pokes function calls into
    [libharness.so](harness/) loaded by the APK, reads return values,
    compares against the spec's `"expected"`.
-2. **Call-sequence diff** — optional per-case Frida tracer attaches to
-   the `HarnessActivity` process, hooks a curated set of sub-function
-   offsets, and verifies the runtime event stream matches a checked-in
-   golden at `tests/differential/traces/<family>/<case_id>.trace.json`.
+2. **Call-sequence capture** — optional per-case Frida tracer attaches
+   to the `HarnessActivity` process and hooks a curated set of
+   sub-function offsets. Captures under `tests/differential/traces/`
+   are generated local files and are ignored by Git.
 
-Any divergence between the port's output and libkrkr2's output — either
-at the return-value or at a sub-call — surfaces at CI time as a PR
-failure.
+The active differential workflow does not use scalar trace goldens. It
+records fresh Android and Wasmtime `motion_playback` traces in the same
+run, exchanges them as CI artifacts, and compares them directly.
 
 For `motion_playback`, this directory also contains a libkrkr2-side
 recording path that captures Motion.Player per-frame state from natural
@@ -33,15 +33,15 @@ pixel output.
 
 ## Status
 
-| Family | Oracle path | Goldens | Notes |
+| Family | Oracle path | Repository goldens | Notes |
 |---|---|---|---|
-| `geometry_hit_test` | **✓ 10/10** | **✓ 10** | `Player_hitTest` (0x690DF0), pure C leaf |
-| `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
-| `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
-| `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
+| `geometry_hit_test` | **✓ 10/10** | — | `Player_hitTest` (0x690DF0), pure C leaf |
+| `local_transform` | **✓ 8/8** | — | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
+| `bezier_curve` | **✓ 6/6** | — | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
+| `position_interp` | **✓ 5/5** | — | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
 | `psbfile_load` | committed raw PSB or existing reference material | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. Natural value modes cover integer tags 0x04..0x09, Real tags 0x1D..0x1F, String tags 0x15/0x16, Null, Array, and Dictionary through public TJS dispatch and raw getters/classification. `--shape-boundary` additionally verifies hidden-sret raw `GetRoot`/`Transfer`, raw Dictionary strict/non-strict/alias ownership, `NativeInstanceSupport`, the full 32-slot primary dispatch vtable, the secondary native lifecycle vtable, all 19 unsupported primary slots, `IsInstanceOf`, ordered value/no-value `EnumMembers`, dispatch/owner intrusive lifetimes, and invalidation edges; `--resource-boundary` verifies copied TJS Octet versus borrowed raw Resource. Media modes cover the exact 11-slot media vtable, intrusive reference/destructor boundaries, name normalization, replacement, borrowed-stream destruction, Dictionary order, and the null-adaptor boundary. `--trace` records the native call chains. No damaged fixture is generated or checked in |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
-| `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule the per-case `reference/xp3/logo_test_oracle_<case>_15hz.xp3` fixture inside libkrkr2. Each captured frame advances exactly `1000/15` ms of simulation time; Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record `yuzulogo.mtn` and `m2logo.mtn`. The port-side verifier executes the same XP3/TJS path under Wasmtime. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
+| `motion_playback` | fresh libkrkr2 record + Wasmtime verify | — | Uses `STARTUP_FROM` to schedule the per-case `reference/xp3/logo_test_oracle_<case>_15hz.xp3` fixture inside libkrkr2. Each captured frame advances exactly `1000/15` ms of simulation time; Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record `yuzulogo.mtn` and `m2logo.mtn`. The port-side verifier executes the same XP3/TJS path under Wasmtime. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
 ## Motion playback visual oracle status
 
@@ -70,10 +70,9 @@ Current oracle-runner side status:
   JS agent hooks `Motion.Player.progress` and `Player_updateLayers`.
   Recording happens from natural playback on the GL thread; the host
   does not call Motion.Player methods from the RPC worker thread.
-- The checked-in oracle files currently contain non-empty per-frame
-  node state for both fixtures:
-  `tests/differential/traces/motion_playback/yuzulogo.oracle.json` and
-  `tests/differential/traces/motion_playback/m2logo.oracle.json`.
+- CI records non-empty per-frame node state for both fixtures on every
+  run and uploads the generated JSON files as the
+  `motion_playback-oracle-traces` artifact.
 
 What this proves today:
 
@@ -96,9 +95,9 @@ What it does not prove yet:
 - The deterministic wrapper now uses the same AffineSourceMotion playback
   path as `logo_test.xp3`, but still fixes delta timing; it does not prove
   the original wall-clock timing behaviour.
-- Normal push CI validates the Wasmtime port trace against the checked-in
-  `motion_playback` goldens. Re-recording those goldens from libkrkr2
-  remains opt-in via `run_motion_playback.py --record-oracle`.
+- Normal push CI records both the Android oracle and Wasmtime port
+  traces, then compares the two fresh artifacts directly. No
+  `motion_playback` golden is stored in the repository.
 
 Therefore, as of now, the oracle runner side is good enough to be a
 libkrkr2 Motion state oracle for these two fixtures, but not enough to
@@ -580,12 +579,11 @@ Target hashes, the exact command, per-case event counts and the refcount
 methodology are recorded in
 [FOLLOWUP_ANDROID_ARM64_RUNTIME_ORACLE_2026-08-03.md](../../../analysis/psbfile_function_audit_2026-07-25/FOLLOWUP_ANDROID_ARM64_RUNTIME_ORACLE_2026-08-03.md).
 
-### With Frida trace verification (recommended in CI)
+### With local Frida trace verification
 
 ```bash
-# --trace   : verify runtime call sequence matches golden on disk
-# --record-trace: overwrite goldens from the current run (golden produ-
-#                 cer; use only when libkrkr2 is the new source of truth)
+# --record-trace: write a local trace capture under tests/differential/traces
+# --trace       : compare against a previously recorded local capture
 python3 tests/differential/python/run_bezier_curve_adb.py \
   --spec-dir tests/differential/specs/bezier_curve --trace
 ```
@@ -622,7 +620,8 @@ tests/differential/traces/motion_playback/yuzulogo.oracle.json
 tests/differential/traces/motion_playback/m2logo.oracle.json
 ```
 
-Treat those files as libkrkr2 Motion state goldens, not as final visual
+These generated files are ignored by Git. Treat them as transient
+libkrkr2 Motion state captures, not as repository or final visual
 goldens.
 
 ## Architecture
@@ -700,9 +699,9 @@ matches the pinned `frida-python` version.
 
 ## Follow-ups
 
-- Port-side tracer — instrument the wasm build to emit the same event
-  schema, run a true libkrkr2-vs-port sequence diff (currently the
-  golden freezes libkrkr2-side only)
+- Port-side scalar tracer — instrument the wasm build to emit the same
+  event schema and compare fresh libkrkr2 and port call sequences. Scalar
+  traces are currently local-only and are not enforced by CI.
 - Visual motion oracle — capture either final framebuffer pixels or a
   complete draw-command stream for `yuzulogo.mtn` / `m2logo.mtn`,
   including texture identity, draw order, clipping, blend/stencil state,

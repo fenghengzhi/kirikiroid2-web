@@ -52,6 +52,5 @@
       }
     ]
   },
-  "expected_trace": "traces/motion_playback/m2logo.oracle.json",
   "notes": "15Hz full-playback fixture covering the Phase 2 PlayerRender drawFlag-gate fix; 25 frames includes the natural completion/cleanup boundary."
 }

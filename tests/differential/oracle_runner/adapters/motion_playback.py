@@ -17,7 +17,7 @@ Two modes:
     oracle-runner-panda-floofy-garden.md.
 
   * Disk oracle (`run_case`): compare supplied port trace frames
-    against a checked-in golden JSON. No Android device is required.
+    against a locally recorded oracle JSON. No Android device is required.
 
 Previous revisions of this file shipped a TJS snapshot script executed
 via `engine.tjs_exec_str` from the harness-rpc pthread. That approach
