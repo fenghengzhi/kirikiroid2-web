@@ -83,14 +83,12 @@
 #define OFF_TTSTR_FROM_ASCII   0xA13878
 #define OFF_TTJSVARIANT_CLEAR  0xA0F778
 
-/* TVPMainScene bootstrap helpers. Symbol names observed in libkrkr2.so:
- *   _ZN12TVPMainScene11GetInstanceEv    -> 0xA9D4D4
- *   _ZN12TVPMainScene11startupFromERKSs -> 0xA9F954
+/* TVPMainScene bootstrap helpers exported by both Android oracle builds:
+ *   _ZN12TVPMainScene11GetInstanceEv
+ *   _ZN12TVPMainScene11startupFromERKSs
  * The `Ss` parameter is GNU libstdc++/gnustl std::string, so this harness
  * must be built with the matching legacy ABI. The string is a temporary
  * const& consumed by startupFrom; ownership never crosses the .so boundary. */
-#define OFF_TVPMAINSCENE_GETINSTANCE 0xA9D4D4
-#define OFF_TVPMAINSCENE_STARTUPFROM 0xA9F954
 
 /* TVPScriptEngine global slot (0x1AE2FD0 relative to libkrkr2 base).
  * cocos2d's applicationDidFinishLaunching path (TVPMainScene::doStartup
@@ -379,6 +377,8 @@ static void handle_write(const char *args) {
  *      buffer. Registers Array/Dict/Math only. Kept for defensiveness —
  *      the APK scalar runners still use this mode before startupFrom. */
 static uint64_t g_so_base = 0;
+static void    *g_target_handle = NULL;
+static int      g_target_is_libgame = 0;
 static uint8_t  g_tjs_buf[0x68];    /* fallback static tTJS storage */
 static void    *g_tjs_ptr = NULL;   /* filled by handle_tjs_init */
 static int      g_tjs_inited = 0;
@@ -389,7 +389,7 @@ static inline void *libkrkr2_fn(uint64_t off) {
 
 /* Opaque one-pointer ttstr view used only for the iTVPStorageLister callback.
  * The callback receives a `const ttstr&`; ownership stays entirely inside
- * libkrkr2.so and the harness copies characters during the call. */
+ * the target library and the harness copies characters during the call. */
 struct opaque_ttstr {
     void *payload;
 };
@@ -542,7 +542,7 @@ static void handle_storage_list(const char *args) {
 /* Custom std::terminate handler.
  *
  * The harness must be built with NDK r17c + gnustl_static to match
- * libkrkr2.so's old GNU C++ ABI. Keep a demangle-free terminate handler
+ * libgame.so's old GNU C++ ABI. Keep a demangle-free terminate handler
  * anyway: if a future build accidentally reintroduces libc++abi, or a
  * foreign exception escapes past our catches, we want a clear process
  * death instead of a crash inside a mismatched demangler. */
@@ -557,6 +557,10 @@ static void install_crash_handlers(void) {
 }
 
 static void handle_tjs_init(void) {
+    if (g_target_is_libgame) {
+        println("ERR TJS_INIT offsets are not rebased for libgame.so");
+        return;
+    }
     if (g_tjs_inited) {
         char buf[48];
         snprintf(buf, sizeof(buf), "OK %llx", (unsigned long long)(uintptr_t)g_tjs_ptr);
@@ -907,8 +911,13 @@ static void handle_startup_from(const char *args) {
 
     try {
         typedef void *(*get_instance_fn)(void);
-        void *scene = ((get_instance_fn)libkrkr2_fn(
-            OFF_TVPMAINSCENE_GETINSTANCE))();
+        get_instance_fn get_instance = (get_instance_fn)dlsym(
+            g_target_handle, "_ZN12TVPMainScene11GetInstanceEv");
+        if (!get_instance) {
+            println("ERR TVPMainScene::GetInstance symbol not found");
+            return;
+        }
+        void *scene = get_instance();
         if (!scene) {
             println("ERR TVPMainScene::GetInstance returned null");
             return;
@@ -917,8 +926,13 @@ static void handle_startup_from(const char *args) {
         std::string path((const char *)path_buf, path_len);
         typedef bool (*startup_from_fn)(void *this_ptr,
                                         const std::string &path);
-        bool ok = ((startup_from_fn)libkrkr2_fn(
-            OFF_TVPMAINSCENE_STARTUPFROM))(scene, path);
+        startup_from_fn startup_from = (startup_from_fn)dlsym(
+            g_target_handle, "_ZN12TVPMainScene11startupFromERKSs");
+        if (!startup_from) {
+            println("ERR TVPMainScene::startupFrom symbol not found");
+            return;
+        }
+        bool ok = startup_from(scene, path);
 
         char buf[16];
         snprintf(buf, sizeof(buf), "OK %x", ok ? 1 : 0);
@@ -973,10 +987,12 @@ static int harness_bootstrap(const char *so_path) {
         if (dladdr(probe, &info)) so_base = (uint64_t)info.dli_fbase;
     }
     if (!so_base) {
-        fprintf(stderr, "harness: could not determine libkrkr2 base\n");
+        fprintf(stderr, "harness: could not determine target library base\n");
         return 1;
     }
 
+    g_target_handle = h;
+    g_target_is_libgame = strstr(so_path, "libgame.so") != NULL;
     g_so_base = so_base;   /* cached for TJS helpers */
 
     /* Announce readiness on the caller-selected output fd. */

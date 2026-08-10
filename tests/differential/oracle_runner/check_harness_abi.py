@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate that oracle libharness.so uses the legacy GNU C++ ABI.
+"""Validate that oracle libharness.so matches its target library's ABI.
 
 This is intentionally lightweight and self-contained so CI can run it on
 arm64 Linux without relying on host readelf/llvm-readelf packages.
@@ -141,26 +141,29 @@ def has_any_symbol(elf: Elf, needles: tuple[str, ...]) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--harness", required=True, type=Path)
-    parser.add_argument("--libkrkr2", required=True, type=Path)
+    parser.add_argument(
+        "--target-library", "--libkrkr2",
+        dest="target_library", required=True, type=Path,
+    )
     args = parser.parse_args()
 
     harness = Elf(args.harness)
-    libkrkr2 = Elf(args.libkrkr2)
+    target = Elf(args.target_library)
 
     if harness.machine != EM_AARCH64:
         fail(f"{harness.path} is not AArch64 (e_machine={harness.machine})")
-    if libkrkr2.machine != EM_AARCH64:
-        fail(f"{libkrkr2.path} is not AArch64 (e_machine={libkrkr2.machine})")
+    if target.machine != EM_AARCH64:
+        fail(f"{target.path} is not AArch64 (e_machine={target.machine})")
 
-    if "libstdc++.so" not in libkrkr2.needed:
-        fail("libkrkr2.so does not declare NEEDED libstdc++.so")
-    if libkrkr2.contains(b"__ndk1") or has_any_symbol(libkrkr2, ("__ndk1",)):
-        fail("libkrkr2.so contains libc++ std::__ndk1 symbols")
+    if "libstdc++.so" not in target.needed:
+        fail(f"{target.path.name} does not declare NEEDED libstdc++.so")
+    if target.contains(b"__ndk1") or has_any_symbol(target, ("__ndk1",)):
+        fail(f"{target.path.name} contains libc++ std::__ndk1 symbols")
     if not (
-        libkrkr2.contains(b"__gnu_cxx")
-        or has_any_symbol(libkrkr2, ("__gnu_cxx", "ERKSs", "St6vector"))
+        target.contains(b"__gnu_cxx")
+        or has_any_symbol(target, ("__gnu_cxx", "ERKSs", "St6vector"))
     ):
-        fail("libkrkr2.so does not show GNU libstdc++ ABI markers")
+        fail(f"{target.path.name} does not show GNU libstdc++ ABI markers")
 
     bad_harness_markers = (
         b"__ndk1",
@@ -198,7 +201,7 @@ def main() -> int:
 
     print("ABI check passed:")
     print(f"  harness: {args.harness}")
-    print(f"  libkrkr2: {args.libkrkr2}")
+    print(f"  target: {args.target_library}")
     return 0
 
 

@@ -12,7 +12,7 @@ import org.tvp.kirikiri2.KR2Activity;
 /**
  * Differential-oracle harness launched via:
  *
- *   am start -W -n org.github.krkr2/.HarnessActivity
+ *   am start -W -n org.tvp.kirikiri2_free_10309/org.github.krkr2.HarnessActivity
  *
  * Extends {@link KR2Activity} so cocos2d's full init chain runs. The RPC
  * socket is process-level and starts as soon as this Activity class is loaded,

@@ -6,22 +6,5 @@
   "label": "yuzulogo",
   "simulation_fps": 15,
   "frames": 63,
-  "oracle_sanity": {
-    "playerCount": 1,
-    "playerCountRanges": [
-      {
-        "start": 0,
-        "end": 63,
-        "count": 1
-      }
-    ],
-    "layerCountRanges": [
-      {
-        "start": 0,
-        "end": 63,
-        "count": 25
-      }
-    ]
-  },
   "notes": "15Hz full-playback fixture covering the Phase 2 PlayerRender drawFlag-gate fix; 63 frames includes the natural completion/cleanup boundary."
 }

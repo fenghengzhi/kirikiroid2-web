@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(oracle_harness_legacy NONE)
 
 # libharness.so must be built with android-ndk-r17c + gnustl_static so its
-# C++ ABI matches libkrkr2.so. This CMake file is a thin wrapper around the
+# C++ ABI matches libgame.so. This CMake file is a thin wrapper around the
 # canonical ndk-build script; it deliberately does not use the host C++
 # compiler or modern Android CMake toolchain.
 

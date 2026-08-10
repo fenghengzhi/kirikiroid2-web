@@ -17,8 +17,10 @@ env:
   LEGACY_NDK_BASENAME: "android-ndk-r17c"
   LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
   # Google Drive references are mutable; pin the exact oracle inputs each job consumes.
-  # The APK hash also pins its embedded lib/arm64-v8a/libkrkr2.so.
-  REFERENCE_APK_SHA256: "262bab07722b95d76e3e10170744d88f80141260502e3d0a7b4e005ed3090379"
+  # The APK hash also pins its embedded lib/arm64-v8a/libgame.so.
+  REFERENCE_APK_SHA256: "7df08d36726e8640cf1f78b0154d19f8a24ccb090be97b9ec7b9de2e55acba5a"
+  REFERENCE_LIBGAME_SHA256: "05e2ff4c77f1561608ad7703153d2fb09855bf223237a85dc2267fff1388564f"
+  ORACLE_APK_PACKAGE: "org.tvp.kirikiri2_free_10309"
   REFERENCE_YUZULOGO_15HZ_XP3_SHA256: "038bab92728c80e917ed55224aa8c96cc04474d112d8a0e42730d908acd7e3df"
   REFERENCE_M2LOGO_15HZ_XP3_SHA256: "704729939ceabc2d93388cdc8b980bfd79506bedf660d0911c3dd13e9f78cb94"
 
@@ -243,21 +245,24 @@ jobs:
           done
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rclone unzip
-          mkdir -p reference/apk reference/libkrkr2
+          mkdir -p reference/packages reference/libgame
           rclone copyto \
-            "gdrive:reference/apk/krkr2 1.4.4.apk" \
-            "reference/apk/krkr2 1.4.4.apk" \
+            "gdrive:reference/packages/Kirikiroid2_1.3.9.apk" \
+            "reference/packages/Kirikiroid2_1.3.9.apk" \
             --checksum \
             --drive-acknowledge-abuse
           printf '%s  %s\n' \
             "${REFERENCE_APK_SHA256}" \
-            "reference/apk/krkr2 1.4.4.apk" \
+            "reference/packages/Kirikiroid2_1.3.9.apk" \
             | sha256sum -c -
           unzip -p \
-            "reference/apk/krkr2 1.4.4.apk" \
-            "lib/arm64-v8a/libkrkr2.so" \
-            > reference/libkrkr2/libkrkr2.so
-          test -s reference/libkrkr2/libkrkr2.so
+            "reference/packages/Kirikiroid2_1.3.9.apk" \
+            "lib/arm64-v8a/libgame.so" \
+            > reference/libgame/libgame.so
+          printf '%s  %s\n' \
+            "${REFERENCE_LIBGAME_SHA256}" \
+            "reference/libgame/libgame.so" \
+            | sha256sum -c -
 
       - name: Install harness build tools
         run: |
@@ -280,7 +285,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
           # r17c is the last practical NDK line with GNU libstdc++/gnustl.
-          # libharness.so must use this ABI family to match libkrkr2.so.
+          # libharness.so must use this ABI family to match libgame.so.
           key: ${{ env.LEGACY_NDK_BASENAME }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install legacy Android NDK (build libharness only)
@@ -305,7 +310,7 @@ jobs:
           file tests/differential/oracle_runner/harness/prebuilt/libharness.so
           python3 tests/differential/oracle_runner/check_harness_abi.py \
             --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
-            --libkrkr2 reference/libkrkr2/libkrkr2.so
+            --target-library reference/libgame/libgame.so
 
       - name: Upload libharness.so artifact
         uses: actions/upload-artifact@v4
@@ -314,7 +319,7 @@ jobs:
           path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
           if-no-files-found: error
 
-  # ── libkrkr2 oracle via ADB harness + Frida call-sequence diff.
+  # ── Kirikiroid2 1.3.9 libgame oracle via ADB harness + Frida trace diff.
   #    Runs against a Redroid (Android-in-Docker) arm64 container on a
   #    native arm64 Linux host, which sidesteps the nested-virt limits
   #    of GitHub's macos-14 (HVF blocked) and KVM-less ubuntu-24.04-arm.
@@ -325,9 +330,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       # Android 12 = API 31. _64only variant drops the 32-bit system
-      # libraries; our harness APK + libkrkr2.so are arm64-v8a only,
-      # so 32-bit would just be dead weight. APK minSdkVersion=29 so
-      # API 31 installs it forward-compatibly. A12 image observed
+      # libraries; our harness APK + libgame.so are arm64-v8a only,
+      # so 32-bit would just be dead weight. A12 image observed
       # stable in CI when A10 240527 was flaky.
       REDROID_IMAGE: redroid/redroid:12.0.0_64only-240527
     steps:
@@ -354,10 +358,10 @@ jobs:
           done
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rclone unzip
-          mkdir -p reference/libkrkr2 reference/apk reference/xp3
+          mkdir -p reference/libgame reference/packages reference/xp3
           rclone copyto \
-            "gdrive:reference/apk/krkr2 1.4.4.apk" \
-            "reference/apk/krkr2 1.4.4.apk" \
+            "gdrive:reference/packages/Kirikiroid2_1.3.9.apk" \
+            "reference/packages/Kirikiroid2_1.3.9.apk" \
             --checksum \
             --drive-acknowledge-abuse
           for case in yuzulogo m2logo; do
@@ -370,7 +374,7 @@ jobs:
           {
             printf '%s  %s\n' \
               "${REFERENCE_APK_SHA256}" \
-              "reference/apk/krkr2 1.4.4.apk"
+              "reference/packages/Kirikiroid2_1.3.9.apk"
             printf '%s  %s\n' \
               "${REFERENCE_YUZULOGO_15HZ_XP3_SHA256}" \
               "reference/xp3/logo_test_oracle_yuzulogo_15hz.xp3"
@@ -379,10 +383,13 @@ jobs:
               "reference/xp3/logo_test_oracle_m2logo_15hz.xp3"
           } | sha256sum -c -
           unzip -p \
-            "reference/apk/krkr2 1.4.4.apk" \
-            "lib/arm64-v8a/libkrkr2.so" \
-            > reference/libkrkr2/libkrkr2.so
-          test -s reference/libkrkr2/libkrkr2.so
+            "reference/packages/Kirikiroid2_1.3.9.apk" \
+            "lib/arm64-v8a/libgame.so" \
+            > reference/libgame/libgame.so
+          printf '%s  %s\n' \
+            "${REFERENCE_LIBGAME_SHA256}" \
+            "reference/libgame/libgame.so" \
+            | sha256sum -c -
 
       # Redroid needs the Android binder driver. Azure kernels don't
       # ship binder in the default module set — try linux-modules-extra
@@ -473,7 +480,7 @@ jobs:
           file tests/differential/oracle_runner/harness/prebuilt/libharness.so
           python3 tests/differential/oracle_runner/check_harness_abi.py \
             --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
-            --libkrkr2 reference/libkrkr2/libkrkr2.so
+            --target-library reference/libgame/libgame.so
 
       - name: Cache Android SDK build-tools
         uses: actions/cache@v4
@@ -640,8 +647,8 @@ jobs:
 
           # Install the repacked krkr2-harness.apk; adb_engine.py drives
           # HarnessActivity over a TCP socket (adb forward). This path
-          # runs cocos2d's full init (TVPInitScriptEngine) so TJS_INIT
-          # returns the real TVPScriptEngine tTJS*.
+          # runs cocos2d's native init before STARTUP_FROM schedules the
+          # fixture's normal TVPMainScene startup chain.
           adb -s "${ANDROID_SERIAL}" install -r -t \
                    tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
 
@@ -669,7 +676,7 @@ jobs:
           for attempt in $(seq 1 "${attempts}"); do
             echo "::group::motion_playback oracle record attempt ${attempt}/${attempts}"
             rm -f tests/differential/traces/motion_playback/*.oracle.json
-            adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+            adb -s "${ANDROID_SERIAL}" shell "am force-stop ${ORACLE_APK_PACKAGE}" || true
             adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
             adb -s "${ANDROID_SERIAL}" logcat -c || true
 
@@ -686,7 +693,7 @@ jobs:
               for case in yuzulogo m2logo; do
                 xp3="reference/xp3/logo_test_oracle_${case}_15hz.xp3"
                 echo "--- recording ${case} from ${xp3} ---"
-                adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+                adb -s "${ANDROID_SERIAL}" shell "am force-stop ${ORACLE_APK_PACKAGE}" || true
                 adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
                 adb -s "${ANDROID_SERIAL}" logcat -c || true
                 python3 tests/differential/python/run_motion_playback.py \
@@ -711,12 +718,12 @@ jobs:
             rm -f tests/differential/traces/motion_playback/*.oracle.json
             {
               echo "--- attempt ${attempt} diagnostics ---"
-              adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
+              adb -s "${ANDROID_SERIAL}" shell "pidof ${ORACLE_APK_PACKAGE} || true"
               adb -s "${ANDROID_SERIAL}" forward --list || true
               adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
-              adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 'org.github.krkr2|mResumed|mFocused' || true" || true
+              adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 '${ORACLE_APK_PACKAGE}|mResumed|mFocused' || true" || true
               adb -s "${ANDROID_SERIAL}" logcat -d -v time 2>/dev/null \
-                | grep -E 'HarnessRpc|AndroidRuntime|org.github.krkr2|krkr2|harness|Cocos2dx|libc|DEBUG' \
+                | grep -E "HarnessRpc|AndroidRuntime|${ORACLE_APK_PACKAGE}|krkr2|harness|Cocos2dx|libc|DEBUG" \
                 | tail -300 || true
               echo "--- recent raw logcat tail ---"
               adb -s "${ANDROID_SERIAL}" logcat -d -t 120 || true
@@ -733,12 +740,12 @@ jobs:
               echo "--- ${f} ---"
               cat "${f}" || true
             done
-            adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
+            adb -s "${ANDROID_SERIAL}" shell "pidof ${ORACLE_APK_PACKAGE} || true"
             adb -s "${ANDROID_SERIAL}" forward --list || true
             adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
-            adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 'org.github.krkr2|mResumed|mFocused' || true" || true
+            adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 '${ORACLE_APK_PACKAGE}|mResumed|mFocused' || true" || true
             adb -s "${ANDROID_SERIAL}" logcat -d -v time 2>/dev/null \
-              | grep -E 'HarnessRpc|AndroidRuntime|org.github.krkr2|krkr2|harness|Cocos2dx|libc|DEBUG' \
+              | grep -E "HarnessRpc|AndroidRuntime|${ORACLE_APK_PACKAGE}|krkr2|harness|Cocos2dx|libc|DEBUG" \
               | tail -300 || true
             echo "--- recent raw logcat tail ---"
             adb -s "${ANDROID_SERIAL}" logcat -d -t 120 || true

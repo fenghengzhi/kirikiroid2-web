@@ -1,12 +1,10 @@
 # ADB + Frida Oracle Runner
 
-> **Historical oracle only.** The checked-in native offsets target a removed
-> Android `libkrkr2.so` build. They are not valid for the four files under
-> `reference/binaries/` and must not be cited as evidence when restoring the
-> current source. Rebase a test family only after mapping its complete hook
-> surface against one explicitly selected current binary.
+> **Mixed status.** The active `trace_flatten` motion oracle is rebased to
+> Kirikiroid2 1.3.9 Android arm64-v8a `libgame.so`. Other checked-in native
+> offsets are historical and remain disabled until independently rebased.
 
-Runs libkrkr2.so (the Android kirikiroid2 binary) inside the repacked
+Runs Kirikiroid2 1.3.9 `libgame.so` inside the repacked
 `krkr2-harness.apk` on a real Android arm64 device or Redroid
 container, driven from the host over `adb forward tcp:5039` +
 `am start HarnessActivity`. Provides a return-value probe against the
@@ -24,7 +22,7 @@ The active differential workflow does not use scalar trace goldens. It
 records fresh Android and Wasmtime `motion_playback` traces in the same
 run, exchanges them as CI artifacts, and compares them directly.
 
-For `motion_playback`, this directory also contains a libkrkr2-side
+For `motion_playback`, this directory also contains a libgame-side
 recording path that captures Motion.Player per-frame state from natural
 playback on the cocos2d GL thread. That path is useful as a state oracle,
 but it is not yet a final visual oracle: it does not capture the
@@ -41,18 +39,18 @@ pixel output.
 | `position_interp` | **✓ 5/5** | — | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
 | `psbfile_load` | committed raw PSB or existing reference material | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. Natural value modes cover integer tags 0x04..0x09, Real tags 0x1D..0x1F, String tags 0x15/0x16, Null, Array, and Dictionary through public TJS dispatch and raw getters/classification. `--shape-boundary` additionally verifies hidden-sret raw `GetRoot`/`Transfer`, raw Dictionary strict/non-strict/alias ownership, `NativeInstanceSupport`, the full 32-slot primary dispatch vtable, the secondary native lifecycle vtable, all 19 unsupported primary slots, `IsInstanceOf`, ordered value/no-value `EnumMembers`, dispatch/owner intrusive lifetimes, and invalidation edges; `--resource-boundary` verifies copied TJS Octet versus borrowed raw Resource. Media modes cover the exact 11-slot media vtable, intrusive reference/destructor boundaries, name normalization, replacement, borrowed-stream destruction, Dictionary order, and the null-adaptor boundary. `--trace` records the native call chains. No damaged fixture is generated or checked in |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
-| `motion_playback` | fresh libkrkr2 record + Wasmtime verify | — | Uses `STARTUP_FROM` to schedule the per-case `reference/xp3/logo_test_oracle_<case>_15hz.xp3` fixture inside libkrkr2. Each captured frame advances exactly `1000/15` ms of simulation time; Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record `yuzulogo.mtn` and `m2logo.mtn`. The port-side verifier executes the same XP3/TJS path under Wasmtime. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
+| `motion_playback` | fresh 1.3.9 libgame record + Wasmtime verify | — | Uses `STARTUP_FROM` to schedule the per-case `reference/xp3/logo_test_oracle_<case>_15hz.xp3` fixture inside libgame. Each captured frame advances exactly `1000/15` ms of simulation time; Frida hooks `Motion.Player.progress` / the phase-3 node evaluator to record `yuzulogo.mtn` and `m2logo.mtn`. The port-side verifier executes the same XP3/TJS path under Wasmtime. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
 ## Motion playback visual oracle status
 
 Target goal: use `tests/differential` to prove that the current port's
 final visual output while playing `reference/xp3/logo_test/yuzulogo.mtn`
-and `reference/xp3/logo_test/m2logo.mtn` matches libkrkr2.so.
+and `reference/xp3/logo_test/m2logo.mtn` matches 1.3.9 `libgame.so`.
 
 Current oracle-runner side status:
 
 - The runner can launch the real repacked Android APK and execute
-  libkrkr2 on the same cocos2d/Java activity path used by the original
+  libgame on the same cocos2d/Java activity path used by the original
   app.
 - `libharness.so` exposes `STARTUP_FROM <utf8_hex_path>`, constructs a
   real gnustl `std::string`, and calls
@@ -76,7 +74,7 @@ Current oracle-runner side status:
 
 What this proves today:
 
-- It can produce a libkrkr2 baseline for Motion node evaluation:
+- It can produce a libgame baseline for Motion node evaluation:
   per-frame node count, node type, visibility/active flags, flip flags,
   accumulated position, scale, angle, opacity, and a limited blend-mode
   proxy.
@@ -100,7 +98,7 @@ What it does not prove yet:
   `motion_playback` golden is stored in the repository.
 
 Therefore, as of now, the oracle runner side is good enough to be a
-libkrkr2 Motion state oracle for these two fixtures, but not enough to
+libgame Motion state oracle for these two fixtures, but not enough to
 claim final visual output equivalence. Reaching that goal requires
 adding either framebuffer/pixel capture or a
 render-command oracle that covers texture identity, draw order, clipping,
@@ -112,7 +110,7 @@ The Android Frida tracers and the macOS LLDB tracers are comparable only
 as stage-specific semantic projections, not as proof that the two
 runtimes share the same physical object layout.
 
-- Android/Frida is the oracle side. It attaches to `libkrkr2.so`, sets
+- Android/Frida is the oracle side. It attaches to `libgame.so`, sets
   breakpoints or interceptors by binary address/offset, and reads fields
   from raw process memory using the libkrkr2 layout recovered from IDA.
 - macOS/LLDB is the port side. It launches the full native engine,
@@ -128,12 +126,9 @@ runtimes share the same physical object layout.
   side uses a fallback hook or a derived field, the stage is diagnostic
   only until the timing and projection are made explicit.
 
-For the 6-stage motion playback diagnostics, this means `static_parse`,
-`init_motion`, `variable_binding`, `frame_selection`,
-`sub_motion_decision`, and `trace_flatten` must each define their own
-sampling boundary. A passing diff means the two tracers observed
-equivalent stage outputs for the fixture; it must not be read as evidence
-that the port has reproduced libkrkr2's in-memory layout byte-for-byte.
+Only `trace_flatten` is enabled for the 1.3.9 Android oracle. The older staged
+and render diagnostics still require independent offset rebasing and fail
+closed when requested.
 
 `trace_flatten` uses the `trace_flatten-semantic-v1` projection sampled at
 `progressCompat.phase3-end.pre-cleanup`. Its comparable layer fields are:
@@ -150,14 +145,14 @@ but they are not semantic `trace_flatten` diff fields.
 
 ## Prerequisites
 
-**libkrkr2.so + supporting libs** — private `reference` git submodule:
+**Kirikiroid2 1.3.9 APK** — local/Google Drive reference input:
 
 ```bash
-git submodule update --init reference    # requires PRIVATE_SUBMODULE_PAT
-# Provides:
-#   reference/libkrkr2/libkrkr2.so
-#   reference/lib/libSDL2.so
-#   reference/lib/libffmpeg.so
+# APK used for repacking; CI downloads this path from Google Drive.
+reference/packages/Kirikiroid2_1.3.9.apk
+
+# Its Android arm64 libgame.so matches this reference binary byte-for-byte.
+reference/binaries/Kirikiroid2_1.3.9_Android_arm64-v8a.so
 ```
 
 **Android device / Redroid** — API 24+ arm64-v8a. The ADB runners need
@@ -198,9 +193,6 @@ mv /tmp/frida-server tools/bin/android/frida-server
 ```bash
 export PATH=$ANDROID_SDK_ROOT/platform-tools:$PATH
 adb root && adb wait-for-device
-adb push reference/libkrkr2/libkrkr2.so   /data/local/tmp/
-adb push reference/lib/libSDL2.so         /data/local/tmp/
-adb push reference/lib/libffmpeg.so       /data/local/tmp/
 adb push tools/bin/android/frida-server   /data/local/tmp/
 adb shell "chmod 755 /data/local/tmp/frida-server"
 adb shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"

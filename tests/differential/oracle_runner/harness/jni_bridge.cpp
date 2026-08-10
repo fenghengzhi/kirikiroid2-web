@@ -12,5 +12,5 @@ extern "C" int harness_rpc_main_fd(const char *so_path, int fd);
 
 extern "C" JNIEXPORT jint JNICALL
 Java_org_github_krkr2_HarnessActivity_runRpcServeFd(JNIEnv *, jclass, jint fd) {
-    return harness_rpc_main_fd("libkrkr2.so", static_cast<int>(fd));
+    return harness_rpc_main_fd("libgame.so", static_cast<int>(fd));
 }

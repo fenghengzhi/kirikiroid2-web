@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build libharness.so with the legacy GNU libstdc++/gnustl ABI used by
-# libkrkr2.so. Requires android-ndk-r17c via KRKR2_LEGACY_NDK.
+# libgame.so. Requires android-ndk-r17c via KRKR2_LEGACY_NDK.
 
 set -euo pipefail
 
@@ -44,8 +44,18 @@ mkdir -p "$HERE/prebuilt" "$LIBS_DIR" "$OBJ_DIR"
 
 cp "$LIBS_DIR/arm64-v8a/libharness.so" "$HERE/prebuilt/libharness.so"
 
+TARGET_LIBRARY="${KRKR2_TARGET_LIBRARY:-$REPO_ROOT/reference/libgame/libgame.so}"
+if [[ ! -f "$TARGET_LIBRARY" &&
+      -f "$REPO_ROOT/reference/binaries/Kirikiroid2_1.3.9_Android_arm64-v8a.so" ]]; then
+    TARGET_LIBRARY="$REPO_ROOT/reference/binaries/Kirikiroid2_1.3.9_Android_arm64-v8a.so"
+fi
+if [[ ! -f "$TARGET_LIBRARY" &&
+      -f "$REPO_ROOT/reference/libkrkr2/libkrkr2.so" ]]; then
+    TARGET_LIBRARY="$REPO_ROOT/reference/libkrkr2/libkrkr2.so"
+fi
+
 python3 "$HERE/../check_harness_abi.py" \
     --harness "$HERE/prebuilt/libharness.so" \
-    --libkrkr2 "$REPO_ROOT/reference/libkrkr2/libkrkr2.so"
+    --target-library "$TARGET_LIBRARY"
 
 echo "Output: $HERE/prebuilt/libharness.so"

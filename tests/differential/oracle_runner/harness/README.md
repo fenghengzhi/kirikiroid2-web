@@ -33,6 +33,9 @@ STARTUP_FROM <utf8_hex_path>
 QUIT
 ```
 
+For the active 1.3.9 `libgame.so` lane, `STARTUP_FROM` is supported and the
+legacy offset-based `TJS_*` commands fail closed until separately rebased.
+
 Responses (harness → host):
 ```
 OK <retval_hex>          # int/uint/bool/ptr return, or TJS_INIT/TJS_GLOBAL VA
@@ -55,13 +58,13 @@ arguments remain in X0..X7. The harness copies the returned bytes to `out_hex`;
 the empty destructor deliberately does not interpret or release pointer bits.
 The adapter that requested the call owns every resource referenced by the
 copied result. Intrusive holders must be released exactly once; STL objects
-must be destroyed by an ABI-matched destructor inside `libkrkr2.so`, never by
+must be destroyed by an ABI-matched destructor inside `libgame.so`, never by
 the harness C++ runtime.
 
 `STORAGE_LIST` invokes a supplied `iTVPStorageMedia::GetListAt` entry with a
 small vtable/layout-compatible lister surrogate compiled into the ABI-matched
 harness. It copies each callback's `ttstr` to UTF-8 during the call and returns
-the ordered names; it never retains or transfers a libkrkr2-owned C++ object.
+the ordered names; it never retains or transfers a libgame-owned C++ object.
 Each name is prefixed by a little-endian `u32` byte length, so embedded U+0000
 and isolated UTF-16 surrogates remain representable (UTF-8 `surrogatepass`, or
 WTF-8, on the host). The aggregate length-prefixed binary payload is capped at
@@ -96,7 +99,7 @@ consumed by `harness-apk/build.sh`, which repacks it into
 Boundary rule: STL object ownership never crosses the `.so` boundary.
 `STARTUP_FROM` constructs a temporary gnustl `std::string` inside
 `libharness.so` and passes it by `const&` to
-`TVPMainScene::startupFrom`; `libkrkr2.so` must only read it during the
+`TVPMainScene::startupFrom`; `libgame.so` must only read it during the
 call.
 
 ## Running
@@ -105,12 +108,12 @@ Everything goes through `AdbHarnessEngine` in
 [../adb_engine.py](../adb_engine.py). The engine:
 
 1. `adb forward tcp:5039 tcp:5039`
-2. `am start -W -n org.github.krkr2/.HarnessActivity`
+2. `am start -W -n org.tvp.kirikiri2_free_10309/org.github.krkr2.HarnessActivity`
 3. Retries TCP connect until `HarnessActivity`'s `ServerSocket` binds.
 4. Reads the `READY` line and starts issuing RPC commands.
 
 See [../README.md](../README.md) for end-to-end provisioning
-(`adb install krkr2-harness.apk`, pushing libkrkr2/libSDL2/libffmpeg)
+(`adb install krkr2-harness.apk`; the target library stays inside the APK)
 and how the scalar `run_*_adb.py` drivers plus the `motion_playback`
 recorder sit on top.
 
@@ -124,7 +127,7 @@ observe the target function's internal call graph.
 The Frida tracer (see [../README.md](../README.md) and
 [../frida_tracer.py](../frida_tracer.py)) attaches to the
 `HarnessActivity` process from the host and installs
-`Interceptor.attach` hooks on a curated list of libkrkr2.so offsets.
+`Interceptor.attach` hooks on the rebased `libgame.so` trace offsets.
 The two layers don't know about each other at runtime — Frida just
 happens to be inside the harness's address space when the host sends
 the `CALL` that triggers the target function.

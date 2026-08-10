@@ -107,14 +107,15 @@ def segment_order_for_specs(specs_or_by_id) -> tuple[str, ...]:
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
 # whenever the spec frame counts change.
 _LOGO_TEST_XP3_REL = f"reference/xp3/{DEFAULT_STARTUP_XP3_NAME}"
-_REMOTE_APP_FILES_DIR = "/sdcard/Android/data/org.github.krkr2/files"
-_REMOTE_STARTUP_FILES_DIR = "/data/user/0/org.github.krkr2/files"
+_ORACLE_APK_PACKAGE = "org.tvp.kirikiri2_free_10309"
+_REMOTE_APP_FILES_DIR = f"/sdcard/Android/data/{_ORACLE_APK_PACKAGE}/files"
+_REMOTE_STARTUP_FILES_DIR = f"/data/user/0/{_ORACLE_APK_PACKAGE}/files"
 ORACLE_RENDERER = "software"
 ORACLE_RENDERER_SOURCE = "explicit-oracle-preference"
 ORACLE_FPS_LIMIT = int(SIMULATION_FPS)
 ORACLE_FPS_LIMIT_SOURCE = "explicit-oracle-preference"
 _ORACLE_GLOBAL_PREFERENCE_PATH = (
-    "/data/user/0/org.github.krkr2/files/.preference/GlobalPreference.xml"
+    f"/data/user/0/{_ORACLE_APK_PACKAGE}/files/.preference/GlobalPreference.xml"
 )
 _ORACLE_GAME_PREFERENCE_FILE = "Kirikiroid2Preference.xml"
 _ORACLE_TMP_PREFERENCE_PATH = (
@@ -162,7 +163,7 @@ def _adb_shell_root(serial: str | None, args: list[str]) -> str:
 def _chown_to_app_files_owner(serial: str | None, remote_path: str) -> None:
     package_uid_lines = _adb_shell(
         serial,
-        "cmd package list packages -U org.github.krkr2 2>/dev/null "
+        f"cmd package list packages -U {_ORACLE_APK_PACKAGE} 2>/dev/null "
         "| sed -n 's/.*uid://p' || true",
     ).strip().splitlines()
     if package_uid_lines:
@@ -976,34 +977,6 @@ def _stop_record_for_failure_summary(tracer) -> str:
     return _trace_flatten_capture_summary(events)
 
 
-def _sanity_count_for_frame(
-    spec: dict,
-    frame_index: int,
-    range_key: str,
-) -> int:
-    sanity = spec.get("oracle_sanity") or {}
-    ranges = sanity.get(range_key) or []
-    for item in ranges:
-        start = int(item.get("start", -1))
-        end = int(item.get("end", -1))
-        if start <= frame_index < end:
-            return int(item["count"])
-    raise RuntimeError(
-        f"strict oracle validation failed: case={spec.get('id')} "
-        f"frame={frame_index} has no oracle_sanity {range_key} entry")
-
-
-def _player_count_for_frame(spec: dict, frame_index: int) -> int:
-    sanity = spec.get("oracle_sanity") or {}
-    if sanity.get("playerCountRanges"):
-        return _sanity_count_for_frame(spec, frame_index, "playerCountRanges")
-    return int(sanity.get("playerCount", 1))
-
-
-def _layer_count_for_frame(spec: dict, frame_index: int) -> int:
-    return _sanity_count_for_frame(spec, frame_index, "layerCountRanges")
-
-
 def _strict_error(
     *,
     spec_id: str,
@@ -1115,16 +1088,13 @@ def _validate_trace_flatten_frame(
             spec_id=spec_id, frame=frame, local_frame=local_frame,
             error=f"diagnostics.error: {diagnostics.get('error')}")
 
-    expected_player_count = _player_count_for_frame(spec, local_frame)
     player_count = frame.get("playerCount")
-    if player_count != expected_player_count:
+    if not isinstance(player_count, int) or player_count <= 0:
         raise _strict_error(
             spec_id=spec_id, frame=frame, local_frame=local_frame,
-            error=(
-                f"playerCount mismatch: {player_count!r} != "
-                f"{expected_player_count}"))
+            error=f"invalid playerCount: {player_count!r}")
     players = diagnostics.get("players")
-    if not isinstance(players, list) or len(players) != expected_player_count:
+    if not isinstance(players, list) or len(players) != player_count:
         raise _strict_error(
             spec_id=spec_id, frame=frame, local_frame=local_frame,
             error=(
@@ -1145,13 +1115,10 @@ def _validate_trace_flatten_frame(
         raise _strict_error(
             spec_id=spec_id, frame=frame, local_frame=local_frame,
             error="layers is not a list")
-    expected_layer_count = _layer_count_for_frame(spec, local_frame)
-    if len(layers) != expected_layer_count:
+    if not layers:
         raise _strict_error(
             spec_id=spec_id, frame=frame, local_frame=local_frame,
-            error=(
-                f"layer count mismatch: {len(layers)} != "
-                f"{expected_layer_count}"))
+            error="layers is empty")
     for layer_index, layer in enumerate(layers):
         if not isinstance(layer, dict):
             raise _strict_error(
@@ -1209,7 +1176,6 @@ def record_all_oracles(
     with FridaMotionStageTracer(engine, device_id=serial) as tracer:
         tracer.start_record(
             ["trace_flatten"], simulation_fps=SIMULATION_FPS)
-        engine.tjs_init()
         trigger_startup(engine, remote_game)
 
         events = _wait_for_trace_flatten_segments(

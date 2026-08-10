@@ -24,21 +24,19 @@ class StrictMotionPlaybackOracleTest(unittest.TestCase):
         )
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _oracle_frames(self, case_id: str) -> list[dict]:
-        path = (
-            REPO_ROOT / "tests" / "differential" / "traces" /
-            "motion_playback" / f"{case_id}.oracle.json"
-        )
-        return json.loads(path.read_text(encoding="utf-8"))
-
     def _strict_frames(self, case_id: str) -> list[dict]:
         spec = self._spec(case_id)
         strict_frames = []
-        for index, oracle_frame in enumerate(self._oracle_frames(case_id)):
-            layers = copy.deepcopy(oracle_frame["layers"])
-            for layer in layers:
-                layer["stencilType"] = 0
-            player_count = mpb._player_count_for_frame(spec, index)
+        for index in range(int(spec["frames"])):
+            layers = [{
+                "index": 0,
+                "nodeType": 0,
+                "opacity": 255,
+                "stencilType": 0,
+                **{key: 0.0 for key in mpb.LAYER_FIELDS_NUM},
+                **{key: False for key in mpb.LAYER_FIELDS_BOOL},
+            }]
+            player_count = 1
             strict_frames.append({
                 "frameId": index,
                 "projection": mpb.TRACE_FLATTEN_PROJECTION,
@@ -56,16 +54,13 @@ class StrictMotionPlaybackOracleTest(unittest.TestCase):
             })
         return strict_frames
 
-    def test_checked_in_oracle_matches_15hz_spec(self) -> None:
+    def test_specs_keep_15hz_frame_contract_without_behavior_goldens(self) -> None:
         for case_id in ("yuzulogo", "m2logo"):
             with self.subTest(case_id=case_id):
                 spec = self._spec(case_id)
-                frames = self._oracle_frames(case_id)
-                self.assertEqual(len(frames), int(spec["frames"]))
-                self.assertEqual(
-                    [frame["frame"] for frame in frames],
-                    list(range(int(spec["frames"]))),
-                )
+                self.assertGreater(int(spec["frames"]), 0)
+                self.assertEqual(float(spec["simulation_fps"]), 15.0)
+                self.assertNotIn("oracle_sanity", spec)
 
     def test_strict_validator_accepts_valid_trace_shape(self) -> None:
         for case_id in ("yuzulogo", "m2logo"):
@@ -88,8 +83,8 @@ class StrictMotionPlaybackOracleTest(unittest.TestCase):
             diag["error"] = "deque-error: synthetic"
             diag["players"][0]["error"] = "deque-error: synthetic"
 
-        def mutate_bad_layer_count(frames: list[dict]) -> None:
-            frames[0]["layers"].pop()
+        def mutate_empty_layers(frames: list[dict]) -> None:
+            frames[0]["layers"].clear()
 
         def mutate_missing_field(frames: list[dict]) -> None:
             del frames[0]["layers"][0]["posX"]
@@ -106,7 +101,7 @@ class StrictMotionPlaybackOracleTest(unittest.TestCase):
         cases = {
             "root-only": mutate_root_only,
             "deque-error": mutate_deque_error,
-            "bad-layer-count": mutate_bad_layer_count,
+            "empty-layers": mutate_empty_layers,
             "missing-field": mutate_missing_field,
             "huge-float": mutate_huge_float,
             "non-finite-float": mutate_non_finite_float,

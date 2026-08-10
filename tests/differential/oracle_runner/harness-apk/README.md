@@ -1,12 +1,12 @@
-# Harness APK (repacked krkr2 1.4.4)
+# Harness APK (repacked Kirikiroid2 1.3.9)
 
-`krkr2-harness.apk` is the upstream `reference/apk/krkr2 1.4.4.apk` with:
+`krkr2-harness.apk` is `reference/packages/Kirikiroid2_1.3.9.apk` with:
 
 1. A new `org.github.krkr2.HarnessActivity` class (extends `KR2Activity`)
    shipped as `classes2.dex`. Binds a TCP socket on `127.0.0.1:5039` from
    Activity creation and hands each accepted connection's fd to
    `libharness.so::harness_rpc_main_fd`.
-2. `libharness.so` dropped into `lib/arm64-v8a/` alongside `libkrkr2.so`.
+2. `libharness.so` dropped into `lib/arm64-v8a/` alongside `libgame.so`.
 3. A `<activity>` entry in `AndroidManifest.xml` wiring HarnessActivity
    to an exported intent.
 4. Re-signed with the test keystore at `keystore/harness-test.jks`.
@@ -47,15 +47,14 @@ Uses `apktool d` → compile `HarnessActivity.java` → `d8` → splice as
 ```bash
 adb install -r -t prebuilt/krkr2-harness.apk
 adb forward tcp:5039 tcp:5039
-adb shell 'am force-stop org.github.krkr2'
-adb shell 'am start -W -n org.github.krkr2/.HarnessActivity'
+adb shell 'am force-stop org.tvp.kirikiri2_free_10309'
+adb shell 'am start -W -n org.tvp.kirikiri2_free_10309/org.github.krkr2.HarnessActivity'
 
 # Logcat should show:
 #   HarnessRpc: listening on 127.0.0.1:5039
 
-# Single TJS_INIT probe:
-printf 'TJS_INIT\nQUIT\n' | nc 127.0.0.1 5039
-# Expect: READY <so_base> 50000000 ; OK <ttjs_ptr> ; OK_VOID
+# The active 1.3.9 motion lane uses STARTUP_FROM. Legacy TJS_* offset RPCs
+# fail closed until they are independently rebased to libgame.so.
 ```
 
 The Python driver does all of this automatically via `AdbHarnessEngine`

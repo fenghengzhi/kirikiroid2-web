@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild krkr2-harness.apk: decompile reference/apk/krkr2 1.4.4.apk,
+# Rebuild krkr2-harness.apk from Kirikiroid2 1.3.9,
 # inject our HarnessActivity class + manifest entry + libharness.so, then
 # resign with the checked-in test keystore.
 #
@@ -17,7 +17,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$HERE/../../../.." && pwd)
 
-ORIGINAL_APK="${ORIGINAL_APK:-$REPO_ROOT/reference/apk/krkr2 1.4.4.apk}"
+ORIGINAL_APK="${ORIGINAL_APK:-$REPO_ROOT/reference/packages/Kirikiroid2_1.3.9.apk}"
 LIBHARNESS_SO="${LIBHARNESS_SO:-$HERE/../harness/prebuilt/libharness.so}"
 
 # Toolchain discovery

@@ -110,11 +110,11 @@ class MotionTimingTest(unittest.TestCase):
             "frida_motion_stage_agent.js"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF = 0x8DF8F4",
+            "TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF = 0x8DECD4",
             agent_source,
         )
         self.assertIn(
-            "TVP_GET_ROUGH_TICK_COUNT32_OFF = 0xA2BF90",
+            "TVP_GET_ROUGH_TICK_COUNT32_OFF = 0xA2A4DC",
             agent_source,
         )
         self.assertIn("this.returnAddress.equals(", agent_source)

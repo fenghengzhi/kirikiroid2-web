@@ -1,20 +1,21 @@
-// Frida agent for motion_playback staged Android oracle diagnostics.
-//
-// This is deliberately separate from frida_motion_agent.js. The existing
-// agent records the final per-frame layer oracle; this one records a broader
-// diagnostic stream split into six stages so engine divergences can be
-// localized before changing port code.
+// Frida agent for the motion_playback Android oracle.  differential.yml uses
+// only the trace_flatten projection; the older staged/render diagnostics stay
+// in this file for reference but are not exposed until their offsets are
+// independently rebased to Kirikiroid2 1.3.9.
 
 'use strict';
 
-const PLAYER_PROGRESS_COMPAT_OFF = 0x6D2A98;
+// Kirikiroid2 1.3.9 Android arm64-v8a (libgame.so) offsets.  The remaining
+// staged-diagnostic offsets below belong to the retired 1.4.4 lane and are
+// deliberately not installed by the trace_flatten-only CI path.
+const PLAYER_PROGRESS_COMPAT_OFF = 0x6CFE78;
 const PLAYER_INIT_NON_EMOTE_OFF  = 0x6B365C;
 const PLAYER_PARSE_PARAM_OFF     = 0x6B1718;
 const PLAYER_PARSE_PARAM_LIST_OFF = 0x6B202C;
 const PLAYER_BIND_PARAM_OFF      = 0x6C4668;
 const PLAYER_EVALUATE_TIMELINE_OFF = 0x699AE4;
 const PLAYER_SUB_MOTION_OFF      = 0x6BE0C0;
-const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;
+const PLAYER_PHASE3_LAST_OFF     = 0x6BD908;
 const PLAYER_DRAW_COMPAT_OFF     = 0x6D5FB8;
 const PLAYER_DRAW_D3D_OFF        = 0x6D5B90;
 const PLAYER_DRAW_SLA_OFF        = 0x6D5658;
@@ -35,12 +36,12 @@ const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
 const DRAW_DEVICE_UPLOAD_LAYER_TO_TEXTURE_OFF = 0x850528;
 const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
 const DEBUG_MESSAGE_OFF          = 0xA18FBC;
-// TVPContinuousEventDispatch @0x8DF8AC calls TVPGetRoughTickCount32
-// @0xA2BF90 at 0x8DF8F0, then consumes the returned tick at 0x8DF8F4.
+// TVPContinuousEventDispatch calls TVPGetRoughTickCount32 @0xA2A4DC at
+// 0x8DECD0, then consumes the returned tick at 0x8DECD4.
 // Restrict the differential clock override to that one call edge: timers,
 // input, storage and worker-thread clocks must continue to see real time.
-const TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF = 0x8DF8F4;
-const TVP_GET_ROUGH_TICK_COUNT32_OFF = 0xA2BF90;
+const TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF = 0x8DECD4;
+const TVP_GET_ROUGH_TICK_COUNT32_OFF = 0xA2A4DC;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
 const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
 const BITMAP_NATIVE_IMPL_OFF = 88;
@@ -205,9 +206,9 @@ const GL_NO_ERROR = 0;
 
 function ensureBase() {
     if (base !== null) return base;
-    base = Module.findBaseAddress('libkrkr2.so');
+    base = Module.findBaseAddress('libgame.so');
     if (base === null) {
-        throw new Error('libkrkr2.so not loaded in target process');
+        throw new Error('libgame.so not loaded in target process');
     }
     return base;
 }
@@ -221,7 +222,7 @@ function attachAt(offset, name, callbacks) {
         Interceptor.attach(ensureBase().add(offset), callbacks);
     } catch (e) {
         throw new Error(
-            'failed to hook ' + name + ' at libkrkr2.so+' +
+            'failed to hook ' + name + ' at libgame.so+' +
             hexOff(offset) + ': ' + e
         );
     }
@@ -3022,6 +3023,105 @@ function leaveAccurateSlaRenderExecute(ctx, retval) {
     }
 }
 
+function installTraceFlattenHooks() {
+    attachAt(PLAYER_PROGRESS_COMPAT_OFF, 'Player_progressCompat', {
+        onEnter(args) {
+            inCompat = true;
+            samplesInFrame = [];
+            capturedObjthis = args[3];
+            currentFrameId = frameCounter;
+        },
+        onLeave() {
+            const objthis = capturedObjthis;
+            const samples = samplesInFrame;
+            const completedFrameId = currentFrameId;
+            const completedTopPlayer =
+                samples.length > 0 ? samples[0].player : capturedObjthis;
+            inCompat = false;
+            capturedObjthis = null;
+            currentFrameId = null;
+            lastCompletedFrameId = completedFrameId;
+            lastCompletedTopPlayer = completedTopPlayer;
+            lastRenderLayerObject = null;
+            lastDrawTargetObject = null;
+            lastSlaRenderTargetObject = null;
+            lastSlaRenderNativeLayer = null;
+
+            if (!recording || !stageEnabled(STAGE_TRACE_FLATTEN)) {
+                samplesInFrame = [];
+                return;
+            }
+
+            const flatLayers = [];
+            const diagnosticPlayers = [];
+            let layoutTag = 'pre-cleanup';
+            let walkError = null;
+            for (const sample of samples) {
+                const layerStart = flatLayers.length;
+                for (const l of sample.layers) {
+                    const out = Object.assign({}, l);
+                    out.index = flatLayers.length;
+                    flatLayers.push(out);
+                }
+                diagnosticPlayers.push({
+                    ptr: sample.player.toString(),
+                    layout: sample.layout || null,
+                    layerStart: layerStart,
+                    layerCount: sample.layers.length,
+                    error: sample.error || null,
+                });
+                if (sample.layout && sample.layout !== 'deque') {
+                    layoutTag = sample.layout;
+                }
+                walkError = walkError || sample.error;
+            }
+            emit(STAGE_TRACE_FLATTEN, 'frame', {
+                projection: TRACE_FLATTEN_PROJECTION,
+                samplePoint: TRACE_FLATTEN_SAMPLE_POINT,
+                frameId: completedFrameId,
+                playerCount: samples.length,
+                layers: flatLayers,
+                diagnostics: {
+                    objthis: objthis ? objthis.toString() : null,
+                    topPlayer: samples.length > 0
+                        ? samples[0].player.toString() : null,
+                    layout: layoutTag,
+                    players: diagnosticPlayers,
+                    error: walkError,
+                },
+            });
+            frameCounter++;
+            samplesInFrame = [];
+        },
+    });
+
+    attachAt(PLAYER_PHASE3_LAST_OFF, 'Player_phase3_last', {
+        onEnter(args) {
+            this.player = args[0];
+        },
+        onLeave() {
+            if (!inCompat || !recording) return;
+            const player = this.player;
+            try {
+                const w = walkNodes(player, { strict: true });
+                samplesInFrame.push({
+                    player: player,
+                    layout: w.layout,
+                    layers: w.layers,
+                    error: w.error || null,
+                });
+            } catch (e) {
+                samplesInFrame.push({
+                    player: player,
+                    layout: 'sample-error',
+                    layers: [],
+                    error: String(e),
+                });
+            }
+        },
+    });
+}
+
 function installHook() {
     if (hooked) return;
 
@@ -3056,6 +3156,14 @@ function installHook() {
         },
     });
     ensureBase();
+
+    // differential.yml currently records only trace_flatten.  Stop here so
+    // no retired 1.4.4 diagnostic/render offsets are attached to libgame.so.
+    if (enabledStages.size === 1 && stageEnabled(STAGE_TRACE_FLATTEN)) {
+        installTraceFlattenHooks();
+        hooked = true;
+        return;
+    }
 
     attachAt(DEBUG_MESSAGE_OFF, 'Debug_message', {
         onEnter(args) {
@@ -4016,47 +4124,31 @@ function installHook() {
 
 rpc.exports = {
     setup() {
-        installHook();
         return {
             base: ensureBase().toString(),
-            stages: ALL_STAGES,
-            renderStages: RENDER_STAGES,
+            stages: [STAGE_TRACE_FLATTEN],
+            renderStages: [],
             nodeStride: NODE_STRIDE,
             parameterEntryStride: PARAM_ENTRY_STRIDE,
             offsets: {
                 progressCompat: PLAYER_PROGRESS_COMPAT_OFF,
-                initNonEmote: PLAYER_INIT_NON_EMOTE_OFF,
-                parseParameter: PLAYER_PARSE_PARAM_OFF,
-                parseParameterList: PLAYER_PARSE_PARAM_LIST_OFF,
-                bindParameter: PLAYER_BIND_PARAM_OFF,
-                evaluateTimeline: PLAYER_EVALUATE_TIMELINE_OFF,
-                subMotionDecision: PLAYER_SUB_MOTION_OFF,
                 phase3Last: PLAYER_PHASE3_LAST_OFF,
-                drawCompat: PLAYER_DRAW_COMPAT_OFF,
-                drawD3D: PLAYER_DRAW_D3D_OFF,
-                drawSLA: PLAYER_DRAW_SLA_OFF,
-                slaResolveTarget: PLAYER_SLA_RESOLVE_TARGET_OFF,
-                renderPrepare: PLAYER_RENDER_PREPARE_OFF,
-                applyTranslate: PLAYER_APPLY_TRANSLATE_OFF,
-                buildRenderItems: PLAYER_BUILD_ITEMS_OFF,
-                buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
-                accurateSlaRender: PLAYER_ACCURATE_SLA_RENDER_OFF,
-                renderExecute: PLAYER_RENDER_EXECUTE_OFF,
-                updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
-                layerFillRect: LAYER_FILL_RECT_OFF,
-                layerSaveLayerImage: LAYER_SAVE_LAYER_IMAGE_OFF,
-                tvpSaveAsPng: TVP_SAVE_AS_PNG_OFF,
-                bitmapGetScanLine: BITMAP_GET_SCANLINE_OFF,
-                debugMessage: DEBUG_MESSAGE_OFF,
                 continuousEventTickReturn:
                     TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF,
                 getRoughTickCount32: TVP_GET_ROUGH_TICK_COUNT32_OFF,
-                layerClassId: LAYER_CLASS_ID_OFF,
             },
         };
     },
     startRecord(stageNames, options) {
         const requested = Array.isArray(stageNames) ? stageNames : ALL_STAGES;
+        const unsupported = requested.filter(
+            (stage) => stage !== STAGE_TRACE_FLATTEN);
+        if (unsupported.length > 0) {
+            throw new Error(
+                'Kirikiroid2 1.3.9 oracle supports only trace_flatten; ' +
+                'unrebased stages requested: ' + unsupported.join(', ')
+            );
+        }
         enabledStages = new Set(requested);
         enabledStages.add(STAGE_TRACE_FLATTEN);
         const requestedSimulationFps = Number(
@@ -4113,6 +4205,7 @@ rpc.exports = {
         activeSaveLayerImageContexts = [];
         activePngSaveContexts = [];
         activeRenderExecuteContexts = [];
+        installHook();
         recording = true;
         return true;
     },

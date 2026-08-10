@@ -8,8 +8,7 @@ a simple line-oriented RPC over a TCP socket forwarded by
 Prerequisites (done by operator + `setup_device()`):
   - Emulator or device connected via adb (`emulator-5554` by default).
   - Rooted (`adb root`). AVD google_apis / Redroid images are rooted.
-  - `/data/local/tmp/libkrkr2.so`, `libSDL2.so`, `libffmpeg.so` pushed
-    (setup_device pushes them).
+  - Kirikiroid2 1.3.9 `libgame.so` present inside the repacked APK.
   - `krkr2-harness.apk` built via `harness-apk/build.sh` and installed
     with `adb install`. This is the operator's one-time step.
 
@@ -186,8 +185,8 @@ def setup_device(
         )
 
 
-APK_PACKAGE = "org.github.krkr2"
-APK_ACTIVITY = f"{APK_PACKAGE}/.HarnessActivity"
+APK_PACKAGE = "org.tvp.kirikiri2_free_10309"
+APK_ACTIVITY = f"{APK_PACKAGE}/org.github.krkr2.HarnessActivity"
 APK_RPC_PORT = 5039
 
 
@@ -196,7 +195,7 @@ class AdbHarnessEngine:
 
     HarnessActivity extends ``Cocos2dxActivity`` and opens a ``ServerSocket``
     on port 5039 as soon as its class loads.  ``READY`` therefore proves only
-    that libkrkr2's base and the RPC heap are available.  Full TJS and its NCB
+    that libgame's base and the RPC heap are available.  Full TJS and its NCB
     classes are initialized later by ``startup_from()``; callers that need
     them must trigger startup and wait for the relevant native global first.
     The host connects through ``adb forward tcp:5039 tcp:5039``.
@@ -207,7 +206,7 @@ class AdbHarnessEngine:
         adb: str | None = None,
         serial: str | None = None,
         remote_dir: str | None = None,
-        so_name: str = "libkrkr2.so",
+        so_name: str = "libgame.so",
         apk_package: str = APK_PACKAGE,
         apk_activity: str = APK_ACTIVITY,
         apk_port: int = APK_RPC_PORT,
