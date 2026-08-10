@@ -12,9 +12,9 @@ diff --git a/library.mak b/library.mak
 -	$(RANLIB) $@
 +	$(RM) $@
 +ifneq ($(findstring emar,$(AR)),)
-+	$(file >$@.rsp,$^)
-+	$(AR) $(ARFLAGS) $(AR_O) @$@.rsp
-+	$(RM) $@.rsp
++	printf '%s\n' $^ > "$@.rsp"
++	$(AR) $(ARFLAGS) $(AR_O) "@$@.rsp"
++	$(RM) "$@.rsp"
 +else
 +	$(AR) $(ARFLAGS) $(AR_O) $^
 +endif
