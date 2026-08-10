@@ -154,15 +154,18 @@ elseif(WEB)
     # krkr2_vlfs_read_all 桥）：打成 store（不压缩）模式 assets.zip，
     # shell.html 启动时 fetch 为 Blob 注册进 VLFS，条目即 Blob 切片，
     # 不再像 --preload-file 那样全量驻留 MEMFS。
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     file(GLOB_RECURSE KRKR2_UI_ASSET_FILES ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio/*)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
-        COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
-        COMMAND ${CMAKE_COMMAND}
-            -DOUTPUT_FILE=${CMAKE_CURRENT_BINARY_DIR}/assets.zip
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateStoredZip.cmake
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateStoredZip.py
+            ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
+            ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio
-        DEPENDS ${KRKR2_UI_ASSET_FILES}
+        DEPENDS
+            ${KRKR2_UI_ASSET_FILES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateStoredZip.py
         COMMENT "Packing UI assets (stored zip) for VirtualLazyFS"
         VERBATIM
     )
