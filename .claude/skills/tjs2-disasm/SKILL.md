@@ -17,49 +17,59 @@ description: 将 KiriKiri2 游戏归档中的已编译 TJS2 字节码文件（.t
 
 ## 前置条件
 
-需要先构建 `tjsdump` 工具（原生 macOS/Linux 二进制文件，不是 Emscripten 版本）：
+需要先构建原生 `tjsdump` 工具（不是 Emscripten 版本）。`tools/CMakeLists.txt` 的产物位置按主机区分：
+
+| 主机 | Release 产物 |
+|------|--------------|
+| macOS | `tools/bin/mac/rel/tjsdump` |
+| Linux | `tools/bin/linux/rel/tjsdump` |
+| Windows | `tools/bin/win/rel/tjsdump.exe` |
+
+当前仓库只提供 macOS native preset。macOS Release 示例：
 
 ```bash
-export VCPKG_ROOT=/Users/bytedance/vcpkg
-cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison
+test -n "$VCPKG_ROOT"  # 应由当前机器配置提供，不要写死个人目录
+cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON
 cmake --build out/macos/release --target tjsdump
 ```
 
-二进制文件位置：`tools/bin/mac/rel/tjsdump`
+Linux/Windows 当前没有仓库内置 native preset；不得照抄或编造 preset 名。先提供经过验证的 native CMake 配置，再构建 `tjsdump` target。
+
+下文用 `<tjsdump>`、`<xp3>` 和 `<temp-dir>` 表示当前主机二进制及临时目录，执行前必须替换为真实路径。
 
 ## 用法
 
 ### 基本反汇编
 
 ```bash
-tools/bin/mac/rel/tjsdump /path/to/script.tjs
+<tjsdump> /path/to/script.tjs
 ```
 
 ### 先从 XP3 解包，再反汇编
 
 ```bash
 # 从 xp3 归档中解包所有文件
-tools/bin/mac/rel/xp3 -o /tmp/extracted game.xp3
+<xp3> -o <temp-dir>/extracted game.xp3
 
 # 反汇编特定脚本
-tools/bin/mac/rel/tjsdump /tmp/extracted/game/system/MainWindow.tjs
+<tjsdump> <temp-dir>/extracted/game/system/MainWindow.tjs
 ```
 
 ### 在反汇编输出中搜索特定字符串
 
 ```bash
 # 在 MainWindow.tjs 中查找所有 "d3dMode" 的引用
-tools/bin/mac/rel/tjsdump /path/to/MainWindow.tjs | grep "d3dMode"
+<tjsdump> /path/to/MainWindow.tjs | grep "d3dMode"
 
 # 转储到文件以便详细分析
-tools/bin/mac/rel/tjsdump /path/to/MainWindow.tjs > /tmp/mainwindow_disasm.txt
+<tjsdump> /path/to/MainWindow.tjs > <temp-dir>/mainwindow_disasm.txt
 ```
 
 ### 查找特定函数
 
 ```bash
 # 查找 initD3D 函数定义及其函数体
-tools/bin/mac/rel/tjsdump /path/to/MainWindow.tjs | sed -n '/^(function) initD3D/,/^([a-z]/p'
+<tjsdump> /path/to/MainWindow.tjs | sed -n '/^(function) initD3D/,/^([a-z]/p'
 ```
 
 ## 读取输出
@@ -118,7 +128,7 @@ tjsdump MainWindow.tjs | grep -n "isD3D" | head -20
 ### 查找脚本在哪里被加载
 ```bash
 # 在所有脚本中搜索 "D3D.tjs" 的引用
-for f in /tmp/extracted/**/*.tjs; do
+for f in <temp-dir>/extracted/**/*.tjs; do
   result=$(tjsdump "$f" 2>&1 | grep "D3D.tjs" | head -1)
   [ -n "$result" ] && echo "=== $(basename $f) ===" && echo "$result"
 done

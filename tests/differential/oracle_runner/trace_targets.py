@@ -1,5 +1,11 @@
 """Per-family target address catalog for the Frida call tracer.
 
+LEGACY TOOLING NOTICE: these offsets describe the historical, now-removed
+Android ``libkrkr2.so`` oracle.  They are not addresses in the four current
+``reference/binaries`` files and must not be treated as source-restoration
+evidence.  A family may be rebased only after its complete hook set is mapped
+against one explicitly selected current binary.
+
 Offsets are load-base relative (applied on device as
 `Module.findBaseAddress('libkrkr2.so').add(off)`).
 
@@ -74,7 +80,7 @@ PSBFILE_INTEGER_TARGETS = PSBFILE_LOAD_TARGETS + [
     0x59B48C,   # NCB root property native invoker
     0x597854,   # PSBValueDispatch::PropGet (Dictionary)
     0x5976C4,   # PSBValueDispatch::PropGetByNum (Array)
-    0x59673C,   # PSBValueDispatch::CreateVariant_guess
+    0x59673C,   # PSBValueDispatch::CreateVariant
     0xA0FF60,   # tTJSVariant::operator=(tjs_int64)
     0x599438,   # PSBRawNode::GetInt
     0x5992E8,   # PSBRawNode::GetDouble
@@ -91,7 +97,7 @@ PSBFILE_REAL_TARGETS = PSBFILE_LOAD_TARGETS + [
     0x59B48C,   # NCB root property native invoker
     0x597854,   # PSBValueDispatch::PropGet (Dictionary)
     0x5976C4,   # PSBValueDispatch::PropGetByNum (Array)
-    0x59673C,   # PSBValueDispatch::CreateVariant_guess
+    0x59673C,   # PSBValueDispatch::CreateVariant
     0xA0FF94,   # tTJSVariant Real assignment
     0x5992E8,   # PSBRawNode::GetDouble
 ]
@@ -108,7 +114,7 @@ PSBFILE_STRING_TARGETS = PSBFILE_LOAD_TARGETS + [
     0x59B48C,   # NCB root property native invoker
     0x597854,   # PSBValueDispatch::PropGet (Dictionary)
     0x5976C4,   # PSBValueDispatch::PropGetByNum (Array)
-    0x59673C,   # PSBValueDispatch::CreateVariant_guess
+    0x59673C,   # PSBValueDispatch::CreateVariant
     0xA0FEB4,   # tTJSVariant UTF-8 String assignment
     0x598B58,   # PSBRawNode::GetString
     0xA0F778,   # tTJSVariant destructor
@@ -126,7 +132,7 @@ PSBFILE_RESOURCE_TARGETS = PSBFILE_LOAD_TARGETS + [
     0x59B28C,   # NCB root property getter wrapper
     0x59B48C,   # NCB root property native invoker
     0x597854,   # PSBValueDispatch::PropGet (Dictionary)
-    0x59673C,   # PSBValueDispatch::CreateVariant_guess
+    0x59673C,   # PSBValueDispatch::CreateVariant
     0x5996E4,   # PSBRawNode::GetResource
     0xA0E0F4,   # allocate/copy tTJSVariantOctet
     0xA0FB64,   # tTJSVariant::CopyRef
@@ -196,7 +202,7 @@ PSBFILE_SHAPE_TARGETS = PSBFILE_LOAD_TARGETS + [
     0x5975E0,   # PSBValueDispatch::GetCount
     0x596F0C,   # PSBValueDispatch dispatch Invalidate
     0x596EF0,   # PSBValueDispatch::IsValid
-    0x59673C,   # PSBValueDispatch::CreateVariant_guess
+    0x59673C,   # PSBValueDispatch::CreateVariant
     0x597AC0,   # PSBValueDispatch::AddRef
     0x597A40,   # PSBValueDispatch::Release
     0x599554,   # PSBRawNode::GetTypeCategory
@@ -427,7 +433,7 @@ ARG_COUNTS: dict[int, tuple[int, int]] = {
     0x5975E0: (5, 0),
     0x596F0C: (5, 0),
     0x596EF0: (5, 0),
-    # CreateVariant_guess(this, result, rawNode), Variant::operator=(int64)
+    # CreateVariant(this, result, rawNode), Variant::operator=(int64)
     0x59673C: (3, 0),
     0xA0FF60: (2, 0),
     0xA0FF94: (1, 1),

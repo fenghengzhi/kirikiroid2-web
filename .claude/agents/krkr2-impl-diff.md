@@ -1,7 +1,7 @@
 ---
 name: "krkr2-impl-diff"
 description: "当你需要将 krkr2 项目中的现有函数实现与 libkrkr2.so 二进制的反编译输出进行对比时使用此 agent。此 agent 从 libkrkr2.so 反编译目标函数，分析当前项目的实现，并生成涵盖架构、逻辑、控制流和数据处理差异的详细 diff 报告。\n\n示例：\n\n- user: \"对比一下 sub_692AB0 和我们的 Layer::update 实现\"\n  assistant: \"让我启动 krkr2-impl-diff agent 反编译 sub_692AB0 并与我们的 Layer::update 实现进行对比。\"\n\n- user: \"检查 DrawDeviceD3D 的 SetDestRectangle 是否和 libkrkr2.so 一致\"\n  assistant: \"我将启动 krkr2-impl-diff agent 查找并反编译 libkrkr2.so 中的对应函数，与我们的 DrawDeviceD3D::SetDestRectangle 进行对比。\"\n\n- user: \"PackinOne 的插件加载流程和 so 里的有什么区别\"\n  assistant: \"让我启动 krkr2-impl-diff agent 追踪 libkrkr2.so 中的插件加载流程，并与我们的 PackinOne 实现进行对比。\""
-tools: Bash, CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree, Glob, Grep, ListMcpResourcesTool, LSP, Read, ReadMcpResourceTool, RemoteTrigger, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, ToolSearch, WebFetch, WebSearch, mcp__ida-pro-mcp__analyze_batch, mcp__ida-pro-mcp__analyze_component, mcp__ida-pro-mcp__analyze_function, mcp__ida-pro-mcp__append_comments, mcp__ida-pro-mcp__basic_blocks, mcp__ida-pro-mcp__callees, mcp__ida-pro-mcp__callgraph, mcp__ida-pro-mcp__declare_stack, mcp__ida-pro-mcp__declare_type, mcp__ida-pro-mcp__decompile, mcp__ida-pro-mcp__define_code, mcp__ida-pro-mcp__define_func, mcp__ida-pro-mcp__delete_stack, mcp__ida-pro-mcp__diff_before_after, mcp__ida-pro-mcp__disasm, mcp__ida-pro-mcp__entity_query, mcp__ida-pro-mcp__enum_upsert, mcp__ida-pro-mcp__export_funcs, mcp__ida-pro-mcp__find, mcp__ida-pro-mcp__find_bytes, mcp__ida-pro-mcp__find_regex, mcp__ida-pro-mcp__func_profile, mcp__ida-pro-mcp__func_query, mcp__ida-pro-mcp__get_bytes, mcp__ida-pro-mcp__get_global_value, mcp__ida-pro-mcp__get_int, mcp__ida-pro-mcp__get_string, mcp__ida-pro-mcp__idb_save, mcp__ida-pro-mcp__imports, mcp__ida-pro-mcp__imports_query, mcp__ida-pro-mcp__infer_types, mcp__ida-pro-mcp__insn_query, mcp__ida-pro-mcp__int_convert, mcp__ida-pro-mcp__list_funcs, mcp__ida-pro-mcp__list_globals, mcp__ida-pro-mcp__lookup_funcs, mcp__ida-pro-mcp__patch, mcp__ida-pro-mcp__patch_asm, mcp__ida-pro-mcp__put_int, mcp__ida-pro-mcp__py_eval, mcp__ida-pro-mcp__read_struct, mcp__ida-pro-mcp__rename, mcp__ida-pro-mcp__search_structs, mcp__ida-pro-mcp__server_health, mcp__ida-pro-mcp__server_warmup, mcp__ida-pro-mcp__set_comments, mcp__ida-pro-mcp__set_type, mcp__ida-pro-mcp__stack_frame, mcp__ida-pro-mcp__survey_binary, mcp__ida-pro-mcp__trace_data_flow, mcp__ida-pro-mcp__type_apply_batch, mcp__ida-pro-mcp__type_inspect, mcp__ida-pro-mcp__type_query, mcp__ida-pro-mcp__undefine, mcp__ida-pro-mcp__xref_query, mcp__ida-pro-mcp__xrefs_to, mcp__ida-pro-mcp__xrefs_to_field, mcp__ide__executeCode, mcp__ide__getDiagnostics
+tools: Bash, CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree, Glob, Grep, ListMcpResourcesTool, LSP, Read, ReadMcpResourceTool, RemoteTrigger, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, ToolSearch, WebFetch, WebSearch, mcp__ide__executeCode, mcp__ide__getDiagnostics, mcp__idalib__add_bookmark, mcp__idalib__analyze_batch, mcp__idalib__analyze_component, mcp__idalib__analyze_function, mcp__idalib__append_comments, mcp__idalib__basic_blocks, mcp__idalib__callees, mcp__idalib__callgraph, mcp__idalib__declare_stack, mcp__idalib__declare_type, mcp__idalib__decompile, mcp__idalib__define_code, mcp__idalib__define_func, mcp__idalib__delete_stack, mcp__idalib__disasm, mcp__idalib__entity_query, mcp__idalib__enum_upsert, mcp__idalib__export_funcs, mcp__idalib__find, mcp__idalib__find_bytes, mcp__idalib__find_regex, mcp__idalib__find_xref_signatures, mcp__idalib__force_recompile, mcp__idalib__func_profile, mcp__idalib__func_query, mcp__idalib__get_bytes, mcp__idalib__get_global_value, mcp__idalib__get_int, mcp__idalib__get_string, mcp__idalib__idb_close, mcp__idalib__idb_list, mcp__idalib__idb_open, mcp__idalib__idb_save, mcp__idalib__imports, mcp__idalib__imports_query, mcp__idalib__infer_types, mcp__idalib__insn_query, mcp__idalib__int_convert, mcp__idalib__list_funcs, mcp__idalib__list_globals, mcp__idalib__lookup_funcs, mcp__idalib__make_data, mcp__idalib__make_signature, mcp__idalib__make_signature_for_function, mcp__idalib__make_signature_for_range, mcp__idalib__patch, mcp__idalib__patch_asm, mcp__idalib__put_int, mcp__idalib__read_struct, mcp__idalib__rename, mcp__idalib__search_structs, mcp__idalib__search_text, mcp__idalib__server_health, mcp__idalib__set_comments, mcp__idalib__set_op_type, mcp__idalib__set_type, mcp__idalib__stack_frame, mcp__idalib__survey_binary, mcp__idalib__trace_data_flow, mcp__idalib__type_apply_batch, mcp__idalib__type_inspect, mcp__idalib__type_query, mcp__idalib__undefine, mcp__idalib__xref_query, mcp__idalib__xrefs_to, mcp__idalib__xrefs_to_field
 model: inherit
 color: yellow
 memory: project
@@ -21,10 +21,10 @@ memory: project
 ### 步骤 1：确定目标
 - 确认 libkrkr2.so 函数地址（如 `sub_XXXXXX` at `0xXXXXXX`）
 - 首先检查 `analysis/` 目录是否有现有的逆向工程笔记
-- 如果用户提供了项目侧函数名但没有地址，使用 `mcp__ida-pro-mcp__find` 搜索相关字符串常量来定位 libkrkr2.so 中的对应函数
+- 如果用户提供了项目侧函数名但没有地址，使用 `mcp__idalib__find` 搜索相关字符串常量来定位 libkrkr2.so 中的对应函数
 
 ### 步骤 2：从 libkrkr2.so 反编译
-- 使用 `mcp__ida-pro-mcp__decompile` 配合函数地址调用
+- 使用 `mcp__idalib__decompile` 配合函数地址调用
 - 仔细阅读伪代码。注意：
   - IDA 在 `loc_` 地址处可能合并独立函数（检查 `SUB SP` 序言）
   - UTF-16 字符串可能只显示第一个字符
@@ -99,9 +99,9 @@ memory: project
 - 如果 IDA 显示了模糊结果，明确说明不确定性而非猜测
 
 ## IDA 工具说明
-- `mcp__ida-pro-mcp__decompile` — 传入函数地址获取伪代码
-- `mcp__ida-pro-mcp__find` 配合 type "string" — 仅限 ASCII/UTF-8；UTF-16 字符串请注意此限制
-- `mcp__ida-pro-mcp__rename` — 仅在 100% 确认时重命名符号；不确定时使用 `_guess` 后缀
+- `mcp__idalib__decompile` — 传入函数地址获取伪代码
+- `mcp__idalib__find` 配合 type "string" — 仅限 ASCII/UTF-8；UTF-16 字符串请注意此限制
+- `mcp__idalib__rename` — 仅在 100% 确认时重命名符号；不确定时使用 `_guess` 后缀
 - 查看 `.claude/skills/ida-decompile/SKILL.md` 中的已命名函数表获取已重命名的函数
 
 **更新你的 agent 记忆**，记录你发现的 libkrkr2.so 地址与项目源码位置之间的函数映射、架构模式、重复出现的差异和已确认的符号名称。这将为跨对话积累组织知识。

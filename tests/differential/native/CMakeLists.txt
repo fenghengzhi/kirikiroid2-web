@@ -44,7 +44,7 @@ add_library(motion_playback_native_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/PrivateMotionGLL.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/D3DAdaptor.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/main.cpp
+    ${KRKR2PLUGIN_PATH}/psbfile/PSBFile.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBRawFile.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBMedia.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBMediaRegistry.cpp

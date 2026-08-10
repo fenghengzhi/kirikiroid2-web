@@ -108,7 +108,7 @@ namespace motion {
                         // elsewhere in the clip evaluation pipeline.
 
                         // Resolve motion and play (0x6BE3B4..0x6BE46C)
-                        // Aligned to libkrkr2.so sub_6BE0C0 + sub_697D34:
+                        // Aligned to the child-motion path plus splitTtstr_guess:
                         // split src by "/" into segments.
                         // - 1 segment: setChara(segment[0]), then Player_play(slot+28 icon)
                         // - otherwise: setChara(segment[1]), then Player_play(segment[2])
@@ -119,7 +119,7 @@ namespace motion {
                         // chara="m2cheeseware_logo", motion="icon25".
                         {
                             const std::vector<ttstr> segments =
-                                detail::splitTtstrLike_0x697D34(
+                                detail::splitTtstr_guess(
                                     src, static_cast<tjs_char>('/'));
 
                             if (segments.size() == 1) {

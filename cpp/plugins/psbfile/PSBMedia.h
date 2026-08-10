@@ -1,6 +1,3 @@
-//
-// Created by LiDon on 2025/9/11.
-//
 #pragma once
 
 #include "PSBRawFile.h"
@@ -9,12 +6,17 @@
 namespace PSB {
     class PSBMedia : public iTVPStorageMedia {
     public:
+        // The constructor is inlined into all four pre-register callbacks.
+        // They establish the same state: ref=1, void _file, empty _container.
         PSBMedia() { _ref = 1; }
 
+        // All four complete destructors destroy _container before _file.
         ~PSBMedia() override = default;
 
+        // All four vtables use a plain non-atomic post-increment.
         void AddRef() override { _ref++; }
 
+        // All four vtables delete at one; otherwise they post-decrement.
         void Release() override {
             if(_ref == 1)
                 delete this;
@@ -22,6 +24,8 @@ namespace PSB {
                 _ref--;
         }
 
+        // Raw bytes in all four IDBs confirm UTF-16LE "psb" despite IDA's
+        // truncated one-character rendering in the iOS databases.
         void GetName(ttstr &name) override { name = TJS_W("psb"); }
 
         void NormalizeDomainName(ttstr &name) override;

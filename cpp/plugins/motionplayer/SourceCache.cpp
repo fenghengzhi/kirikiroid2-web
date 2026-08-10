@@ -250,11 +250,16 @@ namespace {
         }
     }
 
-    void decodeObjSourceRL8Like_0x6DA454(
+    void decodeObjSourceRL8_guess(
         std::uint8_t *destination, const std::uint8_t *source,
         std::uint32_t sourceSize) {
-        // sub_6DA454 @0x6DA778 sign-extends the shared 32-bit size and
-        // @0x6DA780 forms sourceEnd before the signed <1 gate.
+        // Four-reference mapping:
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6D7834 (inline),
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_599A34 (inline),
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F5510 called by sub_10012686C,
+        // Kirikiroid2_1.3.9_iOS_armv7!sub_F1F6A called by sub_125D4C. All form
+        // sourceEnd from the signed low 32-bit size before the signed <1 gate.
+        // The exact source identifier is stripped.
         const tjs_int signedSourceSize = signedW32(sourceSize);
         const std::uint8_t *const sourceEnd = source + signedSourceSize;
         if(signedSourceSize < 1) {
@@ -275,10 +280,15 @@ namespace {
         } while(source < sourceEnd);
     }
 
-    void decodeObjSourceRL32Like_0x6DA454(
+    void decodeObjSourceRL32_guess(
         std::uint8_t *destination, const std::uint8_t *source,
         std::uint32_t sourceSize) {
-        // The no-palette branch reaches the same signed gate at 0x6DA90C.
+        // Four-reference mapping:
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6D7834 (inline),
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_571DA4 called by
+        // sub_599A34, Kirikiroid2_1.3.9_iOS_arm64!sub_1000F5474 called by
+        // sub_10012686C, Kirikiroid2_1.3.9_iOS_armv7!sub_F1F10 called by
+        // sub_125D4C. The no-palette branch uses the same signed size gate.
         const tjs_int signedSourceSize = signedW32(sourceSize);
         const std::uint8_t *const sourceEnd = source + signedSourceSize;
         if(signedSourceSize < 1) {
@@ -317,7 +327,7 @@ namespace {
         return layer;
     }
 
-    tTJSVariant createLayerVariantLike_0x6A78F4_0x6A7BA8(
+    tTJSVariant createLayerVariant_guess(
         const tTJSVariant &owner, const tTJSVariant &parent) {
         iTJSDispatch2 *global = TVPGetScriptDispatch();
         iTJSDispatch2 *created = nullptr;
@@ -354,8 +364,8 @@ namespace motion {
     }
 
     tTJSVariant ObjSource::getClip() const {
-        // ObjSource_getClip @0x69D35C: category-gate and try-get only `clip`;
-        // once present, all four child reads are strict raw-node operations.
+        // All four clip wrappers category-gate and try-get only `clip`; once
+        // present, every child read is a strict raw-node operation.
         PSB::PSBRawNode clip;
         if(_source.GetTypeCategory() != 7 ||
            !_source.GetDictionaryValue("clip", clip)) {
@@ -378,9 +388,13 @@ namespace motion {
         return tTJSVariant(dictionary.GetDispatch(), dictionary.GetDispatch());
     }
 
-    void ObjSource::ensureTextureLike_0x6DA454() {
-        // ObjSource_ensureTexture @0x6DA454 returns immediately once qword[2]
-        // owns a texture. Every following read is a strict raw-node read.
+    void ObjSource::ensureTexture_guess() {
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6D7834,
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_599A34,
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_10012686C, and
+        // Kirikiroid2_1.3.9_iOS_armv7!sub_125D4C all return once the lazy
+        // texture is non-null. Every following read is a strict raw-node read;
+        // the original source identifier is stripped.
         if(_texture) {
             return;
         }
@@ -397,15 +411,15 @@ namespace motion {
                 _source.GetDictionaryValueStrict("compress").GetString(),
                 "RL") == 0;
         }
-        // sub_6DA454 @ 0x6DA5A4/0x6DA608/0x6DA724 passes the same
-        // uninitialized uint32 stack slot to every resource lookup.
+        // All four pass the same uninitialized uint32 stack slot to every
+        // resource lookup.
         std::uint32_t resourceSize;
         const std::uint8_t *pixelData = nullptr;
         std::uint8_t *decoded = nullptr;
         const std::uint8_t *sourcePixels = nullptr;
         if(compressed) {
-            // 0x6DA708 checks `pal` here to select the RL element width. The
-            // common palette branch checks it again at 0x6DA5E8.
+            // Each reference checks `pal` here to select the RL element width;
+            // the common palette branch checks it again later.
             const bool compressedHasPalette =
                 _source.ContainsDictionaryKey("pal");
             pixelData = _source.GetDictionaryValueStrict("pixel")
@@ -415,10 +429,10 @@ namespace motion {
             decoded = static_cast<std::uint8_t *>(
                 TJSAlignedAlloc(decodedBytes, 4));
             if(compressedHasPalette) {
-                decodeObjSourceRL8Like_0x6DA454(
+                decodeObjSourceRL8_guess(
                     decoded, pixelData, resourceSize);
             } else {
-                decodeObjSourceRL32Like_0x6DA454(
+                decodeObjSourceRL32_guess(
                     decoded, pixelData, resourceSize);
                 TVPReverseRGB(
                     reinterpret_cast<tjs_uint32 *>(decoded),
@@ -438,8 +452,8 @@ namespace motion {
             const auto *paletteData =
                 _source.GetDictionaryValueStrict("pal")
                     .GetResource(resourceSize);
-            // 0x6DA648..0x6DA6B4 uses signed division by four for both the
-            // vector element count and TVPReverseRGB length.
+            // All four use signed division by four for both the vector element
+            // count and TVPReverseRGB length.
             const tjs_int paletteCount =
                 signedW32(resourceSize) /
                 static_cast<tjs_int>(sizeof(tjs_uint32));
@@ -490,11 +504,16 @@ namespace motion {
     }
 
     void ObjSource::drawLayer(tTJSVariant target) {
-        // ObjSource_drawLayer @0x69D6D8 gates only on the raw source category.
+        // The current drawLayer wrappers are
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_69AAB8,
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_5754E4,
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F930C, and
+        // Kirikiroid2_1.3.9_iOS_armv7!sub_F63C0. Each gates only on raw source
+        // category 7, then materialises, assigns and sizes the texture.
         if(_source.GetTypeCategory() != 7) {
             return;
         }
-        ensureTextureLike_0x6DA454();
+        ensureTexture_guess();
         iTJSDispatch2 *targetObject = target.AsObjectNoAddRef();
         tTJSNI_BaseLayer *layer = nullptr;
         if(targetObject && TJS_FAILED(targetObject->NativeInstanceSupport(
@@ -511,15 +530,15 @@ namespace motion {
     SourceCache::SourceCache(tTJSVariant owner, tjs_int cacheSize) :
         _owner(owner),
         _cacheLimitBytes(static_cast<std::uint32_t>(cacheSize)) {
-        // SourceCache_ctor @0x6A78F4 performs a strict Object conversion,
-        // reads primaryLayer, then asks the global dispatch to CreateNew the
-        // Layer member. It has no native-layer fallback or null recovery gate.
+        // The current four constructors perform a strict Object conversion,
+        // read primaryLayer, then ask the global dispatch to CreateNew the
+        // Layer member. There is no native-layer fallback or null recovery.
         ncbPropAccessor ownerAccessor{tTJSVariant(owner)};
         _primaryLayer = ownerAccessor.GetValue(
             TJS_W("primaryLayer"), ncbTypedefs::Tag<tTJSVariant>(), 0,
             &detail::primaryLayerMemberHint_guess);
         tTJSVariant createdLayer =
-            createLayerVariantLike_0x6A78F4_0x6A7BA8(_owner, _primaryLayer);
+            createLayerVariant_guess(_owner, _primaryLayer);
         _bufLayer = createdLayer;
     }
 
@@ -529,13 +548,12 @@ namespace motion {
 
     tTJSVariant SourceCache::loadSource(iTJSDispatch2 *source,
                                         iTJSDispatch2 *descriptor) {
-        // SourceCache_loadSource @0x6A7BA8 receives two borrowed dispatches.
-        // ncbPropAccessor supplies the temporary AddRef/Release lifetime seen in
-        // the binary while the cache entry itself never retains `source`.
+        // Current callbacks 6A4F88/57ACC8/1001009AC/FDB50 receive two borrowed
+        // dispatches. ncbPropAccessor supplies temporary AddRef/Release while
+        // the cache entry itself never retains `source`.
         ncbPropAccessor descriptorAccessor(descriptor);
-        // 0x6A7C04..0x6A7C10 constructs this one complete candidate before
-        // reading the descriptor. key/layer/src and byteWeight are initialized;
-        // blendMode and colors deliberately are not.
+        // Construct one complete candidate before reading the descriptor.
+        // key/layer/src and byteWeight initialize; blendMode/colors do not.
         Entry entry;
 
         entry.key = descriptorAccessor.GetValue(
@@ -555,7 +573,7 @@ namespace motion {
                     colorAccessor.getIntValue(index, 0);
             }
         } else {
-            // Only slot zero is written on this branch in 0x6A7E40..44.
+            // Only slot zero is written on this branch.
             entry.colors[0] = (entry.blendMode & 0xF0) != 0
                 ? static_cast<tjs_int>(0xFF808080u)
                 : static_cast<tjs_int>(0xFFFFFFFFu);
@@ -571,25 +589,24 @@ namespace motion {
                 }
 
                 copyPackedColors(it->colors, entry.colors);
-                bakeSourceLike_0x6A6BE0(source, *it);
-                // 0x6A80D8..0x6A8140 is std::list::push_front(copy) followed
-                // by erase(old), not splice: key/Layer/src all AddRef before
-                // the old node's src -> Layer -> key destruction chain.
+                bakeSource_guess(source, *it);
+                // This is push_front(copy) followed by erase(old), not splice:
+                // key/Layer/src AddRef before the old node is destroyed.
                 _entries.push_front(*it);
                 _entries.erase(it);
                 return result;
             }
         }
 
-        trimCacheBeforeInsertLike_0x6A6B08();
+        trimCacheBeforeInsert_guess();
         {
             tTJSVariant createdLayer =
-                createLayerVariantLike_0x6A78F4_0x6A7BA8(
+                createLayerVariant_guess(
                     _owner, _primaryLayer);
             entry.layer = createdLayer;
             result = entry.layer;
         }
-        bakeSourceLike_0x6A6BE0(source, entry);
+        bakeSource_guess(source, entry);
         _currentCacheBytes += static_cast<std::uint32_t>(entry.byteWeight);
         _entries.push_front(entry);
         return result;
@@ -699,23 +716,25 @@ namespace motion {
             loadRenderSourceLayerFromItemLike_0x6C1B70(player, item));
     }
 
-    iTVPTexture2D *SourceCache::loadRenderSourceTextureForItemLike_0x6F1060(
+    iTVPTexture2D *SourceCache::loadRenderSourceTextureForItem_guess(
         Player &player,
         detail::PreparedRenderItem &item) {
         auto &source = *item.sourceState;
-        // sub_6F1060 @0x6F1094 observes the persistent descriptor first.
+        // Four-reference getter mapping: Android arm64 sub_6EE440, Android
+        // armv7 sub_5AC518, iOS arm64 sub_10014019C, iOS armv7 sub_1414C0.
+        // It observes the persistent descriptor first.
         if(source.texture) {
             return source.texture;
         }
 
         bool atlasLoaded;
         {
-            // 0x6F112C..0x6F1160 materializes a temporary ttstr from the
-            // Player-owned motion-context Variant, calls the shared helper,
-            // then destroys the temporary before testing its result/texture.
+            // Materialize a temporary ttstr from the Player-owned motion-context
+            // Variant, call the shared helper, then destroy the temporary before
+            // testing its result/texture.
             const ttstr moduleKey =
                 static_cast<ttstr>(player._findMotionContextVariant);
-            atlasLoaded = Player::loadKrkrAtlasSourceLike_0x695DE8(
+            atlasLoaded = Player::loadKrkrAtlasSource_guess(
                 source, player.nativeRM(), moduleKey);
         }
         if(atlasLoaded && source.texture) {
@@ -723,8 +742,8 @@ namespace motion {
         }
 
         // The helper may have cleared source.object before failing.  Pass the
-        // post-call object onward without consulting source.path; 0x6F1174 ->
-        // sub_6C1B70 receives only that object plus the prepared descriptor.
+        // post-call object onward without consulting source.path; the fallback
+        // receives only that object plus the prepared descriptor.
         return loadRenderSourceTextureFromItemLike_0x6C1B70(player, item);
     }
 
@@ -761,8 +780,7 @@ namespace motion {
         return _entries.size();
     }
 
-    void SourceCache::bakeSourceLike_0x6A6BE0(iTJSDispatch2 *source,
-                                              Entry &entry) {
+    void SourceCache::bakeSource_guess(iTJSDispatch2 *source, Entry &entry) {
         {
             ncbPropAccessor sourceAccessor(source);
             sourceAccessor.FuncCall(0, TJS_W("drawLayer"),
@@ -818,7 +836,7 @@ namespace motion {
         }
     }
 
-    void SourceCache::trimCacheBeforeInsertLike_0x6A6B08() {
+    void SourceCache::trimCacheBeforeInsert_guess() {
         if(_currentCacheBytes <= _cacheLimitBytes) {
             return;
         }
@@ -851,8 +869,9 @@ namespace motion {
             return {};
         }
 
-        // Player_findSource @0x6948E8 passes Player+1012 and the requested
-        // source path directly to ResourceManager_findSource @0x6AAB3C.
+        // Player::findSourceForNode_guess passes the retained motion-context
+        // key and requested path directly to the current ResourceManager
+        // findSource callbacks 6A7F1C/57BDE0/100102594/FF890.
         tTJSVariant raw = player->nativeRM()->findSource(
             static_cast<ttstr>(player->_findMotionContextVariant), name);
         if(raw.Type() != tvtVoid) {
@@ -862,7 +881,7 @@ namespace motion {
 
         // External graphic fallback uses the storage normalizer only. The
         // former decoded-tree source-candidate cache was removed because the
-        // Android chain resolves through Player+1012/RM directly.
+        // four-reference chain resolves through the retained context and RM.
         const ttstr placed = TVPGetPlacedPath(name);
         if(!placed.IsEmpty() && TVPIsExistentStorage(placed)) {
             resolvedKey = detail::narrow(placed);

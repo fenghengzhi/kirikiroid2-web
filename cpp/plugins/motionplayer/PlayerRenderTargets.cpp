@@ -1147,7 +1147,7 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets(mainList);
         // sub_6D5C68 @0x6D5E08..0x6D5EA0 passes a type-erased source getter
         // whose invoke boundary is sub_6F67CC: it returns the persistent
-        // descriptor's current texture without the atlas retry in 0x6F1060.
+        // descriptor's current texture without the atlas retry.
         const D3DSourceTextureGetterLike_0x6ADFBC sourceTextureGetter =
             [](detail::PreparedRenderItem &item) {
                 return item.sourceState->texture;
@@ -1192,11 +1192,12 @@ namespace motion {
         }
 
         // D3DAdaptor_renderFromPlayer @0x6ADE64..0x6ADF00 constructs the
-        // other type-erased getter, whose invoke boundary is sub_6F1060.
+        // other type-erased getter, whose invoke boundary is the four-reference
+        // runtime getter documented by loadRenderSourceTextureForItem_guess.
         const D3DSourceTextureGetterLike_0x6ADFBC sourceTextureGetter =
             [this](detail::PreparedRenderItem &item) {
                 return _sourceCacheNative
-                    ->loadRenderSourceTextureForItemLike_0x6F1060(
+                    ->loadRenderSourceTextureForItem_guess(
                         *this, item);
             };
         return renderItemsToD3DTextureLike_0x6ADFBC(

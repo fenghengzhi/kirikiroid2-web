@@ -158,7 +158,9 @@ elseif(WEB)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
         COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
-        COMMAND zip -0 -r -q -X ${CMAKE_CURRENT_BINARY_DIR}/assets.zip .
+        COMMAND ${CMAKE_COMMAND}
+            -DOUTPUT_FILE=${CMAKE_CURRENT_BINARY_DIR}/assets.zip
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CreateStoredZip.cmake
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio
         DEPENDS ${KRKR2_UI_ASSET_FILES}
         COMMENT "Packing UI assets (stored zip) for VirtualLazyFS"

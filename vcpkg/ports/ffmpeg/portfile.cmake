@@ -7,6 +7,7 @@ vcpkg_from_github(
         0001-android-ffmpeg.patch
         0001-operand-shr-error.patch
         0001-fixed-mac.patch
+        0002-emscripten-ar-response-file.patch
 )
 
 if(SOURCE_PATH MATCHES " ")

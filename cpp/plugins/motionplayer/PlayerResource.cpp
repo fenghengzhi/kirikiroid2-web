@@ -37,18 +37,18 @@ namespace motion {
                 static_cast<tjs_uint>(left) - static_cast<tjs_uint>(right));
         }
 
-        bool findWinSourceGroupLike_0x6948E8(
+        bool findWinSourceGroup_guess(
             detail::LoadedResourceRecord &loadedResource,
             const std::string &group, PSB::PSBRawNode &groupNode) {
             const PSB::PSBRawNode root(loadedResource.file);
             const PSB::PSBRawNode sourceRoot =
                 root.GetDictionaryValueStrict("source");
-            // 0x694AEC..0x694B44 uses the non-throwing group lookup and
-            // transfers control to the spec-1/fallback route on a miss.
+            // The four-reference find-source family uses the non-throwing
+            // group lookup and transfers to the spec-1/fallback route on miss.
             return sourceRoot.GetDictionaryValue(group.c_str(), groupNode);
         }
 
-        iTVPTexture2D *loadWinAtlasTextureLike_0x6948E8(
+        iTVPTexture2D *loadWinAtlasTexture_guess(
             const PSB::PSBRawNode &groupNode,
             detail::LoadedResourceRecord &loadedResource,
             const std::string &group) {
@@ -60,8 +60,8 @@ namespace motion {
 
             const PSB::PSBRawNode textureNode =
                 groupNode.GetDictionaryValueStrict("texture");
-            // 0x694C8C..0x694D14 performs these two conversions and discards
-            // both results; width/height below do not fall back to them.
+            // These two conversions are performed and discarded; width/height
+            // below do not fall back to them.
             (void)textureNode.GetDictionaryValueStrict("truncated_width")
                 .GetInt();
             (void)textureNode.GetDictionaryValueStrict("truncated_height")
@@ -72,20 +72,23 @@ namespace motion {
                                    .GetInt();
             const char *type =
                 textureNode.GetDictionaryValueStrict("type").GetString();
-            // 0x694E08 passes an uninitialized 32-bit stack slot.  A null
+            // The caller passes an uninitialized 32-bit size slot. A null
             // resource chunk leaves it untouched in
-            // PSBRawNode_GetResource_guess @ 0x5996E4.
+            // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_599AC4,
+            // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD9D8,
+            // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EDF78, and
+            // Kirikiroid2_1.3.9_iOS_armv7!sub_EA1F0.
             std::uint32_t sourceSize;
             const std::uint8_t *sourcePixels =
                 textureNode.GetDictionaryValueStrict("pixel")
                     .GetResource(sourceSize);
-            // 0x694E18..0x694E3C releases that strict-lookup temporary before
-            // sourceSize/pixels are consumed; textureNode keeps the raw owner
-            // and borrowed chunk storage alive through the upload.
+            // The strict-lookup temporary is released before sourceSize/pixels
+            // are consumed; textureNode keeps the raw owner and borrowed chunk
+            // storage alive through the upload.
 
-            // 0x694E44..0x694E54 performs both operations in W registers,
-            // then calls TJSAlignedAlloc(bytes, 4).  Keep the wrap before the
-            // allocator rather than widening through host size_t.
+            // Both operations use 32-bit registers before TJSAlignedAlloc.
+            // Keep the wrap before the allocator instead of widening through
+            // host size_t.
             const tjs_uint pitch = static_cast<tjs_uint>(width) << 2;
             const tjs_uint destinationSize =
                 pitch * static_cast<tjs_uint>(height);
@@ -99,15 +102,15 @@ namespace motion {
                     signedSourceSize / 4);
             } else {
                 if(std::strcmp(type, "A8L8") != 0) {
-                    // 0x694E84..0x694E94 frees before constructing the
-                    // unsupported-format exception argument.
+                    // Free before constructing the unsupported-format
+                    // exception argument.
                     TJS::TJSAlignedDealloc(bgra);
                     TVPThrowExceptionMessage(
                         TJS_W("MotionPlayer.findSource: Unsupported texture format '%1'"),
                         ttstr(type));
                 }
-                // 0x694EFC..0x694F30 reads [alpha,luminance] and writes
-                // [luminance,luminance,luminance,alpha].  Its signed W32
+                // This path reads [alpha,luminance] and writes
+                // [luminance,luminance,luminance,alpha]. Its signed W32
                 // comparison deliberately performs one final out-of-range
                 // byte read for a positive odd resource length.
                 tjs_uint64 sourceOffset = 0;
@@ -133,57 +136,64 @@ namespace motion {
                 bgra, signedW32(pitch),
                 static_cast<tjs_uint>(width), static_cast<tjs_uint>(height),
                 TVPTextureFormat::RGBA, RENDER_CREATE_TEXTURE_FLAG_STATIC);
-            // 0x694F60..0x694F64 frees before map insertion.  The Android
-            // path has no texture-null guard and will still insert/replace the
-            // slot before its unconditional construction-reference Release.
+            // Free before map insertion. There is no texture-null guard: the
+            // slot is still inserted/replaced before the unconditional
+            // construction-reference Release.
             TJS::TJSAlignedDealloc(bgra);
             auto [cached, inserted] =
                 loadedResource.winSourceTextures.try_emplace(groupKey);
             (void)inserted;
             cached->second.setTexture(texture);
-            // 0x694FAC retains the map value; 0x694FBC releases the texture's
-            // construction reference, leaving the nested map as sole owner.
+            // The map value retains the texture; releasing its construction
+            // reference leaves the nested map as sole owner.
             texture->Release();
             return cached->second.texture;
         }
 
-        struct KrkrAtlasRecordLike_0x695DE8;
+        struct KrkrAtlasRecord_guess;
 
-        // sub_695DE8 stores a rect subobject at record+0x10, passes that
-        // subobject to ImagePacker, and recovers the containing record through
-        // the explicit pointer immediately following the rect.  The tail
-        // scalars are deliberately left uninitialized until the second pass.
-        struct KrkrAtlasRectLike_0x695DE8 : ImagePacker::rect_xywhf {
-            KrkrAtlasRecordLike_0x695DE8 *record;
+        // The four atlas functions store the rect immediately after the raw
+        // node (offset 0x10 on 64-bit, 0x08 on 32-bit), pass that subobject to
+        // ImagePacker, and recover the record through the explicit pointer
+        // following rect_xywhf. Tail scalars remain uninitialized until pass 2.
+        struct KrkrAtlasRect_guess : ImagePacker::rect_xywhf {
+            KrkrAtlasRecord_guess *record;
             int contentWidth;
             int contentHeight;
             std::uint8_t *bgra;
 
-            KrkrAtlasRectLike_0x695DE8(
+            KrkrAtlasRect_guess(
                 int x, int y, int width, int height) :
                 ImagePacker::rect_xywhf(x, y, width, height) {}
         };
 
-        // sub_698074 @ 0x698074 walks a contiguous value vector, destroys the
-        // sole sourceKey string and releases iconNode, but never reads/frees
-        // rect.bgra.  A user-declared default destructor also keeps vector
-        // growth copy-shaped instead of introducing a noexcept move path.
-        struct KrkrAtlasRecordLike_0x695DE8 {
+        // Cleanup walks a contiguous value vector, destroys sourceKey and
+        // releases iconNode, but never reads/frees rect.bgra. A user-declared
+        // default destructor keeps vector growth copy-shaped.
+        struct KrkrAtlasRecord_guess {
             PSB::PSBRawNode iconNode;
-            KrkrAtlasRectLike_0x695DE8 rect;
+            KrkrAtlasRect_guess rect;
             std::string sourceKey;
 
-            KrkrAtlasRecordLike_0x695DE8(
+            KrkrAtlasRecord_guess(
                 const PSB::PSBRawNode &node, int width, int height,
                 std::string key) :
                 iconNode(node),
                 rect(0, 0, addW32(width, 1), addW32(height, 1)),
                 sourceKey(std::move(key)) {}
 
-            ~KrkrAtlasRecordLike_0x695DE8() = default;
+            ~KrkrAtlasRecord_guess() = default;
         };
 
-        void decodeKrkrRL8Like_0x696E40(
+        // Atlas-path four-reference mapping:
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6931C8 (inline),
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_570F54 (inline),
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F5510 called by sub_1000F4098,
+        // and Kirikiroid2_1.3.9_iOS_armv7!sub_F1F6A called by sub_F0BE4.
+        // The standalone iOS helpers are shared with ObjSource materialization;
+        // this evidence chain is rooted in the four atlas callers. The original
+        // source name is stripped, hence `_guess`.
+        void decodePsbRL8_guess(
             std::uint8_t *destination, const std::uint8_t *source,
             std::uint32_t sourceSize) {
             const tjs_int signedSourceSize = signedW32(sourceSize);
@@ -207,7 +217,15 @@ namespace motion {
             } while(source < sourceEnd);
         }
 
-        void decodeKrkrRL32Like_0x696D00(
+        // Atlas-path four-reference mapping:
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6931C8 (inline),
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_571DA4 called by
+        // sub_570F54, Kirikiroid2_1.3.9_iOS_arm64!sub_1000F5474 called by
+        // sub_1000F4098, and Kirikiroid2_1.3.9_iOS_armv7!sub_F1F10 called by
+        // sub_F0BE4. The standalone helpers are shared with ObjSource
+        // materialization; this evidence chain is rooted in the atlas callers.
+        // The original source name is stripped.
+        void decodePsbRL32_guess(
             std::uint8_t *destination, const std::uint8_t *source,
             std::uint32_t sourceSize) {
             const tjs_int signedSourceSize = signedW32(sourceSize);
@@ -236,20 +254,19 @@ namespace motion {
             } while(source < sourceEnd);
         }
 
-        void decodeKrkrAtlasRecordLike_0x695DE8(
+        void decodeKrkrAtlasRecord_guess(
             PSB::PSBRawNode &persistentNode,
-            KrkrAtlasRecordLike_0x695DE8 &record) {
+            KrkrAtlasRecord_guess &record) {
             auto &rect = record.rect;
-            // 0x696F90 constructs this per-record lookup result while the
-            // function-wide persistent node remains live.  0x696F94 checks
-            // "pal" on that previous persistent value before 0x696FC0 copies
-            // the current record node into it; this one-record-lagged gate is
-            // intentional Android data flow, not a compiler scheduling artifact.
+            // A per-record lookup result is constructed while the function-wide
+            // persistent node remains live. "pal" is tested on that previous
+            // value before the current record node is copied into it; this
+            // one-record-lagged gate occurs in all four references.
             PSB::PSBRawNode scratch;
             const bool hasPalette =
                 persistentNode.ContainsDictionaryKey("pal");
-            // 0x696FA8 sign-extends both dimensions and multiplies in X21.
-            // Allocation sizes then deliberately truncate that product to W.
+            // Both dimensions are sign-extended for the logical product, while
+            // allocation sizes deliberately truncate that product to 32 bits.
             const tjs_int64 pixelCount =
                 static_cast<tjs_int64>(rect.contentWidth) *
                 static_cast<tjs_int64>(rect.contentHeight);
@@ -271,11 +288,11 @@ namespace motion {
                     const std::uint8_t *pixelData =
                         persistentNode.GetDictionaryValueStrict("pixel")
                             .GetResource(resourceSize);
-                    decodeKrkrRL8Like_0x696E40(
+                    decodePsbRL8_guess(
                         indexes, pixelData, resourceSize);
                 } else {
-                    // 0x6970A8 copies the PSB resource length rather than the
-                    // destination pixel count.
+                    // Copy the PSB resource length rather than the destination
+                    // pixel count.
                     const std::uint8_t *pixelData =
                         persistentNode.GetDictionaryValueStrict("pixel")
                             .GetResource(resourceSize);
@@ -312,7 +329,7 @@ namespace motion {
                     const std::uint8_t *pixelData =
                         persistentNode.GetDictionaryValueStrict("pixel")
                             .GetResource(resourceSize);
-                    decodeKrkrRL32Like_0x696D00(
+                    decodePsbRL32_guess(
                         rect.bgra, pixelData, resourceSize);
                     TVPReverseRGB(
                         reinterpret_cast<tjs_uint32 *>(rect.bgra),
@@ -330,8 +347,8 @@ namespace motion {
             }
 
             bool anyAlpha = false;
-            // 0x69720C first gates on signed low-W21, but 0x69722C compares
-            // the scan index against the full signed X21 product.
+            // Gate on the signed low 32 bits, but compare the scan index against
+            // the full signed product.
             if(pixelCountS32 > 0) {
                 tjs_int64 index = 0;
                 do {
@@ -344,9 +361,9 @@ namespace motion {
                 } while(index < pixelCount);
             }
             if(!anyAlpha) {
-                // 0x697210..0x697248: an entirely transparent image drops its
-                // pixel buffer and replaces the padded rectangle with 2x2.
-                // contentWidth/contentHeight at record+0x28 are not rewritten.
+                // An entirely transparent image drops its pixel buffer and
+                // replaces the padded rectangle with 2x2. Stored content width
+                // and height are not rewritten.
                 TJS::TJSAlignedDealloc(rect.bgra);
                 rect.bgra = nullptr;
                 rect.w = 2;
@@ -354,16 +371,14 @@ namespace motion {
             }
         }
 
-        bool buildKrkrAtlasGroupLike_0x695DE8(
+        bool buildKrkrAtlasGroup_guess(
             detail::LoadedResourceRecord &loadedResource,
             const std::string &requestedGroup,
             const std::string &requestedIcon) {
             const PSB::PSBRawNode root(loadedResource.file);
-            // sub_695DE8 initializes one raw-node scratch at 0x6960D4 and
-            // keeps it alive across the requested-icon probe, source
-            // enumeration, and packed-record loop. Later assignments
-            // deliberately release its previous owner before installing the
-            // next node.
+            // One raw-node scratch remains alive across the requested-icon
+            // probe, source enumeration, and packed-record loop. Assignments
+            // release its previous owner before installing the next node.
             PSB::PSBRawNode iconNode;
             const PSB::PSBRawNode sourceRoot =
                 root.GetDictionaryValueStrict("source");
@@ -378,20 +393,20 @@ namespace motion {
                 requestedIconFound = requestedIconRoot.GetDictionaryValue(
                     requestedIcon.c_str(), iconNode);
             }
-            // 0x69612C..0x696154 releases the temporary icon root before it
-            // tests the lookup result and enters the failure cleanup path.
+            // Release the temporary icon root before testing the lookup result
+            // and entering the failure cleanup path.
             if(!requestedIconFound) {
                 return false;
             }
 
-            // 0x69659C..0x696704 appends 0x40-byte records by value.  Growth
-            // copies each raw owner/string, then destroys the old range; there
-            // is no per-record heap allocation or unique_ptr owner layer.
-            std::vector<KrkrAtlasRecordLike_0x695DE8> records;
-            // sub_695DE8 @0x69616C constructs this outer key vector after
-            // `records`, then keeps it alive across record decoding, packing
-            // and atlas upload.  Its strings are released only at
-            // 0x696C80..0x697340, immediately before the record vector.
+            // Records are appended by value. Observed ABI strides are 0x40
+            // (Android arm64), 0x2C (Android armv7), 0x50 (iOS arm64), and
+            // 0x34 (iOS armv7). Growth copies each raw owner/string, then
+            // destroys the old range; there is no per-record heap owner layer.
+            std::vector<KrkrAtlasRecord_guess> records;
+            // This outer key vector is constructed after `records` and remains
+            // alive across record decoding, packing, and atlas upload. Its
+            // strings are released immediately before the record vector.
             const std::vector<std::string> groupKeys =
                 sourceRoot.GetDictionaryKeys();
             for(const auto &group : groupKeys) {
@@ -421,29 +436,34 @@ namespace motion {
                 record.rect.contentWidth = subtractW32(record.rect.w, 1);
                 record.rect.contentHeight = subtractW32(record.rect.h, 1);
                 recordPointers.push_back(&record.rect);
-                decodeKrkrAtlasRecordLike_0x695DE8(iconNode, record);
+                decodeKrkrAtlasRecord_guess(iconNode, record);
             }
 
             std::vector<ImagePacker::bin> bins;
             const int maxSide = static_cast<int>(TVPMaxTextureSize);
-            // sub_A6E50C @ 0xA6E50C returns a bool in W0, but 0x6968B4
-            // immediately calls the zero-argument render-backend getter and
-            // never tests it.  A pack failure therefore proceeds to the same
-            // unchecked cache lookup below.
+            // The four atlas callers ignore ImagePacker::pack's boolean result:
+            // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6931C8@0x693C94
+            // calls the same binary's sub_A6DA58@0xA6DA58;
+            // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_570F54@0x5717A8
+            // calls the same binary's sub_79436C@0x79436C;
+            // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F4098@0x1000F4C30 calls the
+            // same binary's sub_100054E20@0x100054E20; and
+            // Kirikiroid2_1.3.9_iOS_armv7!sub_F0BE4@0xF15FA calls the same
+            // binary's sub_53EB8@0x53EB8.
+            // A failure therefore leaves no packed cache entry and reaches the
+            // same unchecked second lookup below.
             (void)ImagePacker::pack(
                 recordPointers.data(), static_cast<int>(recordPointers.size()),
                 maxSide, bins);
 
             for(auto &bin : bins) {
-                // ImagePacker::pack @ 0xA6E50C appends one 0x0 bin for an
-                // empty record set.  sub_695DE8 @ 0x6968C0..0x696C20 still
-                // creates that empty texture and releases its construction
-                // reference; do not skip the zero-size lifecycle here.
+                // ImagePacker::pack appends one 0x0 bin for an empty record
+                // set. The atlas function still creates that empty texture and
+                // releases its construction reference.
                 const tjs_uint atlasStride =
                     static_cast<tjs_uint>(bin.size.w) << 2;
-                // 0x6968D4 creates an owned empty page. Each record below
-                // writes metadata, uploads its own packed sub-rect, and frees
-                // its BGRA buffer before advancing to the next record.
+                // Each record writes metadata, uploads its own packed sub-rect,
+                // and frees its BGRA buffer before advancing.
                 auto *texture = TVPGetRenderManager()->CreateTexture2D(
                     nullptr, signedW32(atlasStride),
                     static_cast<unsigned int>(bin.size.w),
@@ -452,28 +472,27 @@ namespace motion {
                     RENDER_CREATE_TEXTURE_FLAG_STATIC);
                 for(auto *baseRect : bin.rects) {
                     auto *rect =
-                        static_cast<KrkrAtlasRectLike_0x695DE8 *>(baseRect);
+                        static_cast<KrkrAtlasRect_guess *>(baseRect);
                     auto *record = rect->record;
                     detail::PackedSourceAtlasEntry entry;
                     entry.setTexture(texture);
-                    // 0x696914..0x696960 copy-assigns the record node into the
-                    // persistent scratch before any metadata reads.
+                    // Copy-assign the record node into the persistent scratch
+                    // before any metadata reads.
                     iconNode = record->iconNode;
                     entry.originX =
                         iconNode.GetDictionaryValueStrict("originX").GetInt();
                     entry.originY =
                         iconNode.GetDictionaryValueStrict("originY").GetInt();
-                    // 0x696A54..0x696A7C stores atlas x/y followed by the
-                    // inclusive right/bottom in the four-int descriptor.
+                    // Store atlas x/y followed by inclusive right/bottom in the
+                    // four-int descriptor.
                     entry.textureRect = {
                         rect->x,
                         rect->y,
                         subtractW32(addW32(rect->x, rect->w), 1),
                         subtractW32(addW32(rect->y, rect->h), 1),
                     };
-                    // 0x696A84..0x696A90 passes this same raw-node storage as
-                    // both source and out.  A hit descends iconNode in place;
-                    // a miss leaves it unchanged until the next assignment.
+                    // Pass the same raw-node storage as source and out. A hit
+                    // descends iconNode in place; a miss leaves it unchanged.
                     if(iconNode.GetDictionaryValue("clip", iconNode)) {
                         entry.clip = {
                             iconNode.GetDictionaryValueStrict("left").GetDouble(),
@@ -485,9 +504,8 @@ namespace motion {
                     loadedResource.krkrSourceEntries.insert_or_assign(
                         detail::widen(record->sourceKey), std::move(entry));
                     if(rect->bgra != nullptr) {
-                        // 0x696BE0..0x696C0C uses content width for pitch,
-                        // passes the packed descriptor as a tTVPRect, then
-                        // frees record+0x30 without clearing the field.
+                        // Use content width for pitch, pass the packed descriptor
+                        // as a tTVPRect, then free bgra without clearing it.
                         texture->Update(
                             rect->bgra, TVPTextureFormat::RGBA,
                             signedW32(
@@ -500,29 +518,34 @@ namespace motion {
                         TJS::TJSAlignedDealloc(rect->bgra);
                     }
                 }
-                // Each cached icon entry took its own AddRef above.  Release
-                // the page-construction reference like 0x696C20.
+                // Each cached icon entry took its own AddRef; release the
+                // page-construction reference.
                 texture->Release();
             }
             return true;
         }
     } // namespace
 
-    bool Player::loadKrkrAtlasSourceLike_0x695DE8(
+    bool Player::loadKrkrAtlasSource_guess(
         detail::MotionNode::SourceState &source,
         ResourceManager *resourceManager,
         const ttstr &moduleKey) {
-        // sub_695DE8 @0x695DE8 owns the complete path->module->atlas route and
-        // is shared by Player_findSource and the render-time texture getter.
-        const auto pieces = detail::splitTtstrLike_0x697D34(
+        // Four-reference mapping:
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6931C8,
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_570F54,
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F4098, and
+        // Kirikiroid2_1.3.9_iOS_armv7!sub_F0BE4. This owns the complete
+        // path->module->atlas route shared by find-source and the render-time
+        // texture getter.
+        const auto pieces = detail::splitTtstr_guess(
             detail::widen(source.path), TJS_W('/'));
         if(pieces.empty() || pieces[0] != TJS_W("src")) {
             return false;
         }
 
-        // 0x695F04..0x695F8C performs the ResourceManager/map lookup only
-        // after the "src" prefix gate. Do not add a null guard that would
-        // change the malformed native-dispatch boundary.
+        // Perform the ResourceManager/map lookup only after the "src" prefix
+        // gate. Do not add a null guard that changes the malformed dispatch
+        // boundary.
         const auto loadedIt = resourceManager->_loadedModules.find(moduleKey);
         if(loadedIt == resourceManager->_loadedModules.end()) {
             source.valid = false;
@@ -530,24 +553,23 @@ namespace motion {
         }
         auto &loadedResource = loadedIt->second;
 
-        // 0x695F9C clears only the object variant.  Every other descriptor
-        // field remains live until a later success/failure write reaches it.
+        // Clear only the object variant. Every other descriptor field remains
+        // live until a later success/failure write reaches it.
         source.object.Clear();
         const ttstr sourceKey = detail::widen(source.path);
         auto sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
         if(sourceIt == loadedResource.krkrSourceEntries.end()) {
-            // 0x6960B4..0x6960D0 consumes pieces[1]/pieces[2] without a size
-            // check after the sole first-segment test above.
-            if(!buildKrkrAtlasGroupLike_0x695DE8(
+            // Consume pieces[1]/pieces[2] without a size check after the sole
+            // first-segment test above.
+            if(!buildKrkrAtlasGroup_guess(
                    loadedResource, detail::narrow(pieces[1]),
                    detail::narrow(pieces[2]))) {
                 return false;
             }
             sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
-            // 0x696274..0x696290 converts a missing second lookup to a null
-            // record pointer and then immediately dereferences record+0x18.
-            // Do not add an end guard: pack failure/empty output is a native
-            // invalid-access boundary, not a recoverable false result.
+            // A missing second lookup becomes a null record pointer and is
+            // immediately dereferenced. Do not add an end guard: pack failure
+            // or empty output is a native invalid-access boundary.
         }
 
         const auto &packed = sourceIt->second;
@@ -568,7 +590,7 @@ namespace motion {
         return true;
     }
 
-    void Player::findSourceForNodeLike_0x6948E8(detail::MotionNode &node) {
+    void Player::findSourceForNode_guess(detail::MotionNode &node) {
         auto &dst = node.source;
         ResourceManager *resourceManager = nativeRM();
         const ttstr motionContext =
@@ -590,20 +612,21 @@ namespace motion {
 
         if(!rawSource.empty() && rawSource != "blank") {
             if(sourceSpec == 2) {
-                // 0x6949E4 clears only the object Variant on the Win route.
+                // The Win route clears only the object Variant.
                 // The remaining fields intentionally retain their prior bytes
                 // until the exact branch below overwrites them.
                 dst.object.Clear();
                 if(!loadedResource) {
-                    // 0x694B94 belongs only to the outer module-map miss.
+                    // This invalid write belongs only to the outer module-map
+                    // miss.
                     dst.valid = false;
                 } else {
                     PSB::PSBRawNode groupNode;
-                    if(findWinSourceGroupLike_0x6948E8(
+                    if(findWinSourceGroup_guess(
                            *loadedResource, rawSource, groupNode)) {
-                        // 0x694C74..0x694FC0 completes the cache/load before
-                        // 0x694FFC strictly navigates icon/<rawIcon>.
-                        dst.texture = loadWinAtlasTextureLike_0x6948E8(
+                        // Complete cache/load before strictly navigating
+                        // icon/<rawIcon>.
+                        dst.texture = loadWinAtlasTexture_guess(
                             groupNode, *loadedResource, rawSource);
                         const PSB::PSBRawNode iconNode =
                             groupNode.GetDictionaryValueStrict("icon")
@@ -635,7 +658,7 @@ namespace motion {
                             top + static_cast<int>(dst.height)
                         };
                         detail::logoChainTraceLogf(
-                            tracePath, "player.findSource", "0x6948E8",
+                            tracePath, "player.findSource", "four-ref",
                             _clampedEvalTime,
                             "spec=win group={} icon={} valid=1 atlas={} "
                             "size={}x{} rect=[{},{},{},{}]",
@@ -647,15 +670,16 @@ namespace motion {
                     }
                 }
             } else if(sourceSpec == 1) {
-                // 0x694BA4..0x694BCC stores the raw src owner only on the
-                // KRKR route; spec=2 never synthesizes or overwrites path.
+                // Store the raw src owner only on the KRKR route; spec=2 never
+                // synthesizes or overwrites path.
                 dst.path = rawSource;
-                if(_d3dDrawMode && loadKrkrAtlasSourceLike_0x695DE8(
+                if(_d3dDrawMode && loadKrkrAtlasSource_guess(
                        dst, resourceManager, motionContext)) {
-                    // 0x694C0C repeats the success byte written by 0x695DE8.
+                    // The caller repeats the success byte written by the atlas
+                    // resolver.
                     dst.valid = true;
                     detail::logoChainTraceLogf(
-                        tracePath, "player.findSource", "0x6948E8",
+                        tracePath, "player.findSource", "four-ref",
                         _clampedEvalTime,
                         "spec=krkr-atlas path={} valid=1 atlas={} "
                         "size={}x{} rect=[{},{},{},{}]",
@@ -668,10 +692,9 @@ namespace motion {
             }
         }
 
-        // LABEL_142 / 0x6952E0 first nulls texture, then builds exactly
-        // src + "/" + icon for the dispatch fallback.  When src is empty but
-        // icon is not, the leading slash remains; an empty path also reaches
-        // findSource.
+        // The fallback first nulls texture, then builds exactly src + "/" +
+        // icon. When src is empty but icon is not, the leading slash remains;
+        // an empty path also reaches findSource.
         dst.texture = nullptr;
         std::string fallbackPath = rawSource;
         if(!rawIcon.empty()) {
@@ -714,17 +737,22 @@ namespace motion {
         dst.textureRect = { 0, 0, static_cast<int>(dst.width),
                             static_cast<int>(dst.height) };
         detail::logoChainTraceLogf(
-            tracePath, "player.findSource", "0x6948E8",
+            tracePath, "player.findSource", "four-ref",
             _clampedEvalTime, "spec={} path={} valid=1 blank={} size={}x{}",
             sourceSpec, fallbackPath, dst.blank ? 1 : 0, dst.width,
             dst.height);
     }
 
     bool Player::isExistMotion(ttstr name) {
-        // Player_isExistMotion @0x6D07F4 calls the Player+992 ResourceManager
-        // dispatch with (+1012 project key,
-        // "motion/<Player+968>/<name>"). It does not probe storage paths or
-        // populate a Player-local cache.
+        // Current callbacks are
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6CDBD4@0x6CDBD4,
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_5942F4@0x5942F4,
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_10011F558@0x10011F558, and
+        // Kirikiroid2_1.3.9_iOS_armv7!sub_11E054@0x11E054.
+        // All four call the retained ResourceManager dispatch with
+        // {_findMotionContextVariant, "motion/<stealthChara>/<name>"}, convert
+        // its result to bool, and neither probe storage nor populate a
+        // Player-local cache.
         iTJSDispatch2 *rm = _resourceManager.Type() == tvtObject
             ? _resourceManager.AsObjectNoAddRef()
             : nullptr;

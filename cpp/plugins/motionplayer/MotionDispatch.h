@@ -69,12 +69,13 @@ namespace motion::detail {
     extern tjs_uint32 affineCopyMemberHint_guess;  // 0x1AB8460, "affineCopy"
     extern tjs_uint32 bufLayerMemberHint_guess;    // 0x1AB8468, "bufLayer"
 
-    // sub_697D34 @0x697D34. The input is a source-level ttstr value copied
-    // into a mutable remainder; each separator-delimited prefix is pushed as
-    // an independently owning ttstr and the final remainder is always pushed
-    // (including an empty one). ResourceManager_findSource/findMotion and
-    // Player_initEmoteMotion share this exact helper in libkrkr2.so.
-    inline std::vector<ttstr> splitTtstrLike_0x697D34(
+    // Four-reference mapping: Android arm64 sub_695114, Android armv7
+    // sub_571C50, iOS arm64 sub_1000F52D0, iOS armv7 sub_F1D20. The input is
+    // copied into a mutable remainder; each separator-delimited prefix is
+    // pushed as an independently owning ttstr and the final remainder is
+    // always pushed, including an empty one. The original source name is
+    // stripped, hence `_guess`.
+    inline std::vector<ttstr> splitTtstr_guess(
         ttstr remainder, const ttstr &separator) {
         std::vector<ttstr> pieces;
         for(;;) {
@@ -92,9 +93,9 @@ namespace motion::detail {
         return pieces;
     }
 
-    inline std::vector<ttstr> splitTtstrLike_0x697D34(
+    inline std::vector<ttstr> splitTtstr_guess(
         ttstr remainder, tjs_char separator) {
-        return splitTtstrLike_0x697D34(
+        return splitTtstr_guess(
             std::move(remainder), ttstr(separator));
     }
 

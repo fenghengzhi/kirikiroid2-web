@@ -20,11 +20,13 @@ namespace PSB {
 
         std::uint8_t *tryDecodeMdf_guess(const std::uint8_t *source,
                                          std::uint32_t &size) {
-            // Android PSBFile::Load @0x5982B0..0x59841C and LoadStorage
-            // @0x5985E0..0x5986B8 contain complete inline clones of this
-            // algorithm. iOS arm64 independently retains one shared helper
-            // with exactly the Load/LoadStorage callers. The original identifier
-            // is not retained.
+            // Android arm64 inlines this into both callers; the other three
+            // references retain an equivalent shared helper. Their allocation
+            // helpers return a 16-byte-aligned interior pointer,
+            // yet every failure path passes that pointer directly to
+            // operator delete[]. Preserve this allocator mismatch as an
+            // observed boundary behavior. The original identifier is not
+            // retained.
             if(size < 0x0bu ||
                detail::ReadUnaligned_guess<std::uint32_t>(source) !=
                    MDF_SIGNATURE) {
@@ -52,8 +54,8 @@ namespace PSB {
     bool detail::FindNameIndex_guess(const std::uint8_t *names,
                                      const char *name,
                                      std::uint32_t &nameIndex) {
-        // sub_59641C @ 0x59641C walks the first two consecutive packed arrays
-        // as a double-array trie and returns the encoded terminal name index.
+        // All four references walk the first two consecutive packed arrays as
+        // a double-array trie and return the terminal index.
         const PsbArray_guess charset(names);
         const PsbArray_guess namesData(names + charset.nBytes);
         const auto *cursor = reinterpret_cast<const std::uint8_t *>(name);
@@ -82,9 +84,9 @@ namespace PSB {
     bool detail::FindDictionaryValueOffset_guess(
         const std::uint8_t *dictionary, std::uint32_t nameIndex,
         std::uint32_t &valueOffset) {
-        // sub_59659C @ 0x59659C uses a lower<upper loop.  Even the equal
-        // branch joins the post-loop lower>=upper failure gate at
-        // 0x596674..0x596678 before decoding the parallel offset table.
+        // All four references use the same lower<upper binary search. Even the
+        // equal branch joins the lower>=upper failure gate before decoding the
+        // parallel offset table.
         const PsbArray_guess keys(dictionary);
         std::uint32_t lower = 0;
         std::uint32_t upper = keys.nElementCount;
@@ -112,10 +114,9 @@ namespace PSB {
     void detail::DecodeName_guess(std::string &name,
                                   const PSBRawOwner *owner,
                                   std::uint32_t nameIndex) {
-        // sub_597B1C @ 0x597B1C follows parent links into a byte vector,
-        // reverses that vector, then calls std::string::assign(const char *,
-        // size_t) @ 0x597E10; the empty path supplies the vector's null begin
-        // pointer and a zero length through the same overload.
+        // All four references follow parent links into a byte vector, reverse
+        // it, then call string::assign(data, size). The empty path supplies a
+        // null begin pointer and zero length.
         const std::uint8_t *names = owner->GetHeader()->names;
         const PsbArray_guess charset(names);
         const std::uint8_t *namesDataCode = names + charset.nBytes;
@@ -136,10 +137,10 @@ namespace PSB {
 
     PSBRawOwner::PSBRawOwner(std::uint8_t *data, std::size_t size) :
         data_(data), size_(size) {
-        // sub_598AAC @ 0x598AAC leaves the reference count at zero and builds
-        // the inline header view in the constructor itself.  In particular,
-        // it does not call the later refresh helper and leaves the header
-        // fields untouched when data is null.
+        // Android arm64 preserves this constructor boundary; the other three
+        // inline the same sequence into Adopt. All four leave refcount at zero,
+        // build the inline header view when data is non-null, and otherwise
+        // leave its fields untouched.
         if(data_ != nullptr) {
             header_ = &headerStorage_;
             headerStorage_.signature =
@@ -168,12 +169,12 @@ namespace PSB {
     }
 
     PSBRawOwner::~PSBRawOwner() {
-        // sub_598B3C @ 0x598B3C releases the raw PSB allocation through the
-        // matching aligned allocator family.
+        // Every reference releases only the raw allocation.
         TJSAlignedDealloc(data_);
     }
 
     bool PSBRawOwner::Refresh(bool validateOffsets) {
+        // The qualified four-reference function map is recorded in the audit.
         header_ = &headerStorage_;
         headerStorage_.signature =
             detail::ReadUnaligned_guess<std::uint32_t>(data_);
@@ -211,15 +212,24 @@ namespace PSB {
         if(!validateOffsets) {
             return true;
         }
-        return size_ > offsetEncrypt && size_ >= offsetNames &&
-            size_ >= offsetStrings && size_ >= offsetStringsData &&
-            size_ >= offsetChunkOffsets && size_ >= offsetChunkLengths &&
-            size_ >= offsetChunkData && size_ > offsetEntries;
+        // Every target uses signed pointer-width comparisons here. Keep the
+        // offsets unsigned for the zero-extended pointer additions above, but
+        // convert them explicitly for validation: on wasm32, comparing
+        // intptr_t directly with uint32_t would otherwise become unsigned.
+        return size_ > static_cast<std::intptr_t>(offsetEncrypt) &&
+            size_ >= static_cast<std::intptr_t>(offsetNames) &&
+            size_ >= static_cast<std::intptr_t>(offsetStrings) &&
+            size_ >= static_cast<std::intptr_t>(offsetStringsData) &&
+            size_ >= static_cast<std::intptr_t>(offsetChunkOffsets) &&
+            size_ >= static_cast<std::intptr_t>(offsetChunkLengths) &&
+            size_ >= static_cast<std::intptr_t>(offsetChunkData) &&
+            size_ > static_cast<std::intptr_t>(offsetEntries);
     }
 
     bool PSBRawNode::GetDictionaryValue(const char *key,
                                         PSBRawNode &value) const {
-        // sub_598D58 @ 0x598D58 calls the two real packed helpers directly.
+        // All four references use the same non-throwing lookup and replacement
+        // order.
         std::uint32_t nameIndex;
         std::uint32_t valueOffset;
         if(!detail::FindNameIndex_guess(GetOwner()->GetHeader()->names,
@@ -229,26 +239,26 @@ namespace PSB {
             return false;
         }
         const std::uint8_t *child = node_ + 1 + valueOffset;
-        // sub_598D58 @ 0x598D58 releases the destination before retaining the
-        // source owner. Same-lineage iOS @0x1000EDB54..0x1000EDB70 calls the
-        // shared PSBFile assignment after capturing child, then writes node.
-        // Do not normalize this into a retain-first temporary or add a self
-        // guard: the aliased-output boundary is part of the original flow.
+        // All four capture child, release the destination owner, retain the
+        // source owner, then write the child node. Do not normalize this into
+        // a retain-first temporary or add a self guard: the aliased-output
+        // boundary is part of the original flow.
         value.file_ = file_;
         value.node_ = child;
         return true;
     }
 
     bool PSBRawNode::IsValid_guess() const {
-        // sub_598E44 @ 0x598E44 short-circuits before reading the node slot
-        // when the owner is null.  The binary exposes no source-level name.
+        // Only the Android links retain this standalone, unreferenced boundary;
+        // both short-circuit before reading node when owner is null. The iOS
+        // links emit no independent function for it. No source name survives.
         return GetOwner() != nullptr && node_ != nullptr;
     }
 
     PSBRawNode
     PSBRawNode::GetDictionaryValueStrict(const char *key) const {
-        // sub_598C58 @ 0x598C58 returns a newly retained node and throws when
-        // either the name trie or the dictionary lookup misses.
+        // Every reference returns a newly retained node and throws when either
+        // lookup misses.
         std::uint32_t nameIndex;
         std::uint32_t valueOffset;
         if(!detail::FindNameIndex_guess(GetOwner()->GetHeader()->names,
@@ -258,18 +268,18 @@ namespace PSB {
             TVPThrowExceptionMessage(
                 TJS_W("psb: undefined object key '%1' is referenced."),
                 ttstr(key));
-            // sub_598C58 @ 0x598D08 zeroes the returned owner/node pair if
-            // the exception helper ever returns instead of unwinding.
+            // All four zero the returned owner/node pair if the exception
+            // helper ever returns instead of unwinding.
             return {};
         }
         return PSBRawNode(file_, node_ + 1 + valueOffset);
     }
 
     bool PSBRawNode::ContainsDictionaryKey(const char *key) const {
-        // sub_5995D8 @ 0x5995D8 contains the complete category-specialized
-        // classifier residual. Same-lineage iOS arm64 @0x1000EDF14 retains the
-        // shared classifier call. The temporary raw node is
-        // constructed before that gate and destroyed on every exit.
+        // In all four references the temporary raw node is constructed before
+        // the category-7 gate and
+        // destroyed on every exit. Android inlines the category classifier;
+        // iOS retains the shared helper call.
         PSBRawNode value;
         if(detail::GetTypeCategory_guess(GetType()) != 7) {
             return false;
@@ -278,22 +288,21 @@ namespace PSB {
     }
 
     std::vector<std::string> PSBRawNode::GetDictionaryKeys() const {
-        // sub_598E64 @ 0x598E64.
+        // All four references preserve the same vector construction and
+        // temporary-string reuse.
         std::vector<std::string> result;
-        // sub_598E64 @ 0x598EA0..0x598F48 contains the complete
-        // category-specialized classifier residual. Same-lineage iOS arm64
-        // @0x1000EDBBC retains the shared classifier call.
+        // Android inlines the complete category classifier; iOS retains its
+        // shared helper call. Both forms continue only for category 7.
         if(detail::GetTypeCategory_guess(GetType()) != 7) {
             return result;
         }
-        // 0x598EF8..0x598F04 constructs this reusable string only after the
-        // Dictionary tag gate; non-container and unknown-tag paths never own
-        // it, which also changes their exception cleanup layer.
+        // Every target constructs this reusable string only after the
+        // Dictionary gate; rejected paths never own it.
         std::string key;
         const std::uint8_t *packed = node_ + 1;
         // Android arm64 scalarizes the keys view and eliminates the unused
-        // offsets view. iOS arm64 independently retains both constructor
-        // calls and the same dead second view.
+        // offsets view; the other forms preserve enough constructor state to
+        // prove the same dead second view in the shared source.
         const detail::PsbArray_guess keys(packed);
         const detail::PsbArray_guess offsets(packed + keys.nBytes);
         (void)offsets;
@@ -307,23 +316,20 @@ namespace PSB {
     }
 
     int PSBRawNode::GetTypeCategory() const {
-        // sub_599554 @ 0x599554 is this wrapper plus the complete classifier;
-        // all dispatch/raw/media source consumers, including IsInstanceOf at
-        // 0x596E24, call the shared helper in PSBPackedInternal.h.
+        // Android inlines the classifier; iOS keeps a one-call wrapper. The
+        // resulting category map is identical in all four references.
         return detail::GetTypeCategory_guess(GetType());
     }
 
     tjs_int PSBRawNode::GetInt() const {
-        // sub_599438 @ 0x599438 is the outer tag dispatcher. Its nested
-        // 0x599484/0x5994AC jump tables inline the integer decoders. Tag 0x0b
-        // is a distinct low-word-only load @ 0x599544; unlike GetDouble, it
-        // must not read the remaining three encoded bytes.
+        // Android arm64 inlines both integer decoders; the others retain
+        // helper calls. Tag 0x0b returns only the low signed-32 ABI value in
+        // this wrapper, unlike GetDouble's full integer64 conversion.
         // LDRSB/LDURSH/FCVTZS write W0 on negative/numeric paths; 18 direct
         // consumers read W0 (four via signed SCVTF D0,W0) and two discard it.
         // This closes the return semantics as signed 32-bit even though some
         // wide-tag paths incidentally leave additional bits in X0.
-        // iOS arm64 retains calls to the narrow/wide decoders while keeping
-        // 0x0b and float/double conversion in this wrapper.
+        // All four keep float/double-to-int conversion in this wrapper.
         switch(GetType()) {
             case 0x02:
                 return 1;
@@ -358,17 +364,14 @@ namespace PSB {
     }
 
     tjs_real PSBRawNode::GetDouble() const {
-        // sub_5992E8 @ 0x5992E8 is this wrapper plus the complete inlined raw
-        // double decoder. iOS arm64 independently preserves the source-level
-        // raw-double helper call and its integer-decoder calls.
+        // Android arm64 inlines the raw-number decoder; the other three retain
+        // a thin wrapper and shared decoder with identical tag semantics.
         return detail::DecodeNumberAsDouble_guess(node_);
     }
 
     const char *PSBRawNode::GetString() const {
-        // sub_598B58 @ 0x598B58 contains the complete category-4-specialized
-        // classifier residual. Same-lineage iOS arm64 @0x1000ED968 retains the
-        // shared classifier call before constructing the
-        // packed strings-offset view.
+        // Android inlines the category-4 classifier; iOS retains its helper.
+        // The packed string-index path is otherwise identical in all four.
         if(detail::GetTypeCategory_guess(GetType()) != 4) {
             return nullptr;
         }
@@ -397,8 +400,8 @@ namespace PSB {
     }
 
     const std::uint8_t *PSBRawNode::GetResource(std::uint32_t &size) const {
-        // PSBRawNode_GetResource_guess @ 0x5996E4 leaves size untouched when
-        // chunkData is null and only recognizes the resource-index tag family.
+        // All four leave size untouched when chunkData is null. They decode
+        // only tags 0x19..0x1c; another tag keeps index zero.
         const PSBRawHeader *header = GetOwner()->GetHeader();
         if(header->chunkData == nullptr) {
             return nullptr;
@@ -428,23 +431,22 @@ namespace PSB {
     }
 
     PSBFile PSBFile::Transfer_guess() {
-        // sub_598A64 @ 0x598A64 visibly copies the owner into the hidden
-        // return slot, preserves the incoming-zero deletion edge, then clears
-        // the source.  This Rule-of-Three expression reconstructs that exact
-        // shape. iOS arm64 retains copy/AddRef followed by shared Release and
-        // source-null. Exact special-member tokens and
-        // the helper's name/member/free identity remain stripped; hence _guess.
+        // Each reference copies into the hidden return slot, performs the
+        // AddRef/Release pair,
+        // then clears the source. Android arm64 folds the pair to its
+        // incoming-zero deletion edge. Exact special-member tokens remain
+        // stripped; hence _guess.
         PSBFile result(*this);
         *this = PSBFile();
         return result;
     }
 
     bool PSBFile::Load(tTJSVariant value) {
-        // sub_598268 @ 0x598268 is the typed NCB method registered as "load".
+        // All four references implement the same string/octet-only dispatcher.
         if(value.Type() == tvtString) {
-            // 0x598340..0x59834C first obtains the source VariantString's
-            // tjs_char pointer, then constructs a fresh ttstr allocation from
-            // that pointer.  Do not share/AddRef the source VariantString.
+            // Each reference obtains the source VariantString's tjs_char
+            // pointer, constructs a fresh ttstr allocation, then destroys the
+            // temporary. Do not share/AddRef the source VariantString.
             const ttstr path(value.GetString());
             if(!LoadStorage(path)) {
                 TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"),
@@ -455,8 +457,8 @@ namespace PSB {
         if(value.Type() != tvtOctet) {
             TVPThrowExceptionMessage(
                 TJS_W("invalid argument for PSBFile.load()"));
-            // sub_598268 @ 0x5983A4..0x5983B0 returns true if the exception
-            // helper unexpectedly returns; it never falls into octet access.
+            // All four return true if the exception helper unexpectedly
+            // returns; none falls through into octet access.
             return true;
         }
 
@@ -472,17 +474,17 @@ namespace PSB {
         if(!Adopt(data, size, {})) {
             delete[] data;
             TVPThrowExceptionMessage(TJS_W("octet: invalid psb file."));
-            // sub_598268 @ 0x598338 returns false if the exception helper
-            // unexpectedly returns.
+            // All four return false if the exception helper unexpectedly
+            // returns.
             return false;
         }
         return true;
     }
 
     bool PSBFile::LoadStorage(const ttstr &name, const OwnerFilter &filter) {
-        // sub_598538 @ 0x598538 reads into one owned allocation.  A successful
-        // mdf decode replaces (and frees) that allocation; a rejected decode
-        // keeps the original allocation as the PSB candidate.
+        // In every reference a successful MDF decode replaces and frees the
+        // source allocation; a rejected decode keeps the source as the PSB
+        // candidate.
         std::unique_ptr<TJS::tTJSBinaryStream> stream(
             TVPCreateStream(TVPGetPlacedPath(name), TJS_BS_READ));
         if(stream == nullptr || stream->GetSize() < 9) {
@@ -492,31 +494,30 @@ namespace PSB {
         const auto size = static_cast<std::uint32_t>(stream->GetSize());
         auto *data =
             static_cast<std::uint8_t *>(TJSAlignedAlloc(size, 4));
-        // sub_598538 @ 0x5985CC..0x5985DC and its exception landing pad
-        // 0x5986D0..0x5986E8 keep this allocation as a raw pointer.  If the
-        // read throws, only the stream is destroyed and data is leaked.
+        // The four DWARF/SJLJ cleanup paths destroy the stream (and any
+        // temporary string) but do not reclaim this raw pointer if reading
+        // throws.
         stream->ReadBuffer(data, size);
 
         std::uint32_t dataSize = size;
         auto *uncompressed = tryDecodeMdf_guess(data, dataSize);
-        // sub_598538 @ 0x5986A4..0x5986B4 updates the decoded size first, but
-        // only releases/replaces the source when the returned pointer is
-        // non-null.
+        // All four update the decoded size first, but release/replace the
+        // source only when the returned pointer is non-null.
         if(uncompressed != nullptr) {
             TJSAlignedDealloc(data);
             data = uncompressed;
         }
 
-        // The original storage path does not reclaim data when sub_598708
-        // rejects it; preserve that boundary leak instead of folding this path
-        // into the octet cleanup below.
+        // All four storage paths also leave data allocated when Adopt rejects
+        // it; preserve that boundary leak rather than folding it into the
+        // octet cleanup path.
         return Adopt(data, dataSize, filter);
     }
 
     bool PSBFile::Adopt(std::uint8_t *data, std::size_t size,
                         const OwnerFilter &filter) {
-        // sub_598708 @ 0x598744..0x5987FC owns this validation/allocation
-        // sequence; there is no separate owner factory entry.
+        // All four references use the same validation, temporary-holder
+        // replacement and optional-filter order.
         if(size < MIN_PSB_SIZE ||
            detail::ReadUnaligned_guess<std::uint32_t>(data) != PSB_SIGNATURE) {
             return false;
@@ -525,8 +526,8 @@ namespace PSB {
             PSBFile replacement;
             replacement.owner_ = new PSBRawOwner(data, size);
             replacement.owner_->AddRef();
-            // sub_598708 @ 0x5987FC..0x598844 copy-assigns this temporary
-            // holder and then destroys it.  The AddRef/Release pair cancels;
+            // All four copy-assign this temporary holder and then destroy it.
+            // The AddRef/Release pair cancels;
             // its optimized remnant is the old-owner path's incoming-zero
             // deletion gate, while the old-owner-null sibling folds it away.
             *this = replacement;
@@ -540,8 +541,9 @@ namespace PSB {
     }
 
     PSBRawNode PSBFile::GetRoot() const {
-        // sub_598A3C @ 0x598A3C dereferences owner/header without a null
-        // guard.  Only the typed root getter sub_5981F8 guards an empty file.
+        // Every reference reads entries without a null guard and returns a
+        // retained raw node.
+        // Only the script-visible root getter checks an empty file.
         return { *this, owner_->GetHeader()->entries };
     }
 } // namespace PSB

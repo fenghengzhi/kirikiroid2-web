@@ -12,9 +12,10 @@ namespace PSB {
     class PSBRawOwner;
 
     namespace detail {
-        // The Android binary repeats these expressions inline in collection
-        // consumers.  It cannot distinguish hand-written expressions from a
-        // header-inline helper, hence the explicit _guess suffix.
+        // The reference compilers repeat these expressions inline in several
+        // collection consumers. They cannot distinguish hand-written
+        // expressions from a header-inline helper, hence the explicit _guess
+        // suffix.
         template <typename T>
         T ReadUnaligned_guess(const std::uint8_t *data) {
             T result;
@@ -22,17 +23,10 @@ namespace PSB {
             return result;
         }
 
-        // PSBRawNode_GetTypeCategory_guess @ 0x599554 is this tag classifier
-        // after Android -O3 inlines it into the public raw-node wrapper.
-        // PSBValueDispatch_CreateVariant_guess @ 0x59673C contains the same
-        // category partition after its call is inlined and folded into the
-        // outer switch. IsInstanceOf @ 0x596E24, EnumMembers @ 0x596F50,
-        // GetCount @ 0x5975E0, PropGet @ 0x597854,
-        // PropGetByNum @ 0x5976C4, GetString @ 0x598B58,
-        // GetDictionaryKeys @ 0x598E64, ContainsDictionaryKey @ 0x5995D8 and
-        // PSBMedia::GetListAt @ 0x5999F4 keep category-specialized inline residuals;
-        // their same-lineage iOS counterparts retain calls to this shared
-        // classifier.
+        // Both Android raw-node wrappers inline this complete classifier;
+        // both iOS wrappers call a shared implementation. GetString,
+        // GetDictionaryKeys and ContainsDictionaryKey independently preserve
+        // the same category-specialized gates across all four targets.
         // The exact original name is stripped, hence the _guess suffix.
         inline int GetTypeCategory_guess(std::uint8_t tag) {
             switch(tag) {
@@ -100,10 +94,10 @@ namespace PSB {
             return -1;
         }
 
-        // Android arm64 GetInt/GetDouble/CreateVariant contain complete
-        // inlined copies of these two scalar decoders. iOS arm64 independently
-        // preserves the same shared decoder boundaries and caller topology. Their
-        // names/member-free tokens remain stripped.
+        // Android arm64 GetInt/GetDouble contain complete inlined copies of
+        // these scalar decoders. The other targets preserve helper boundaries
+        // in some or all callers. Exact per-binary mappings live in the audit;
+        // their source identifiers/member-free tokens remain stripped.
         inline tjs_int DecodeInteger32_guess(const std::uint8_t *node) {
             switch(node[0]) {
                 case 0x05:
@@ -138,6 +132,10 @@ namespace PSB {
                              ReadUnaligned_guess<std::int16_t>(node + 5)))
                          << 32));
                 case 0x0b:
+                    // This is deliberately not a signed 56-bit decode. All
+                    // four references load byte 7 with an unsigned byte load,
+                    // combine it with the unsigned halfword at +5, and leave
+                    // the upper eight result bits clear.
                     return static_cast<tjs_int64>(
                         ReadUnaligned_guess<std::uint32_t>(node + 1) |
                         (static_cast<std::uint64_t>(
@@ -151,10 +149,44 @@ namespace PSB {
             }
         }
 
-        // PSBRawNode_GetDouble_guess @ 0x5992E8 is a complete Android inline
-        // copy of this raw-node decoder. iOS arm64 preserves a shared
-        // dispatcher calling the two integer decoders; no exact source
-        // identifier survives.
+        // Both iOS CreateVariant implementations retain this complete decoder
+        // after the category-classifier call. Both Android builds propagate
+        // the category and fold its numeric arms away, leaving only the
+        // reachable 0x02/0x03/error residual.
+        inline bool DecodeNumberAsBoolean_guess(const std::uint8_t *node) {
+            switch(node[0]) {
+                case 0x02:
+                    return true;
+                case 0x03:
+                    return false;
+                case 0x04:
+                case 0x05:
+                case 0x06:
+                case 0x07:
+                case 0x08:
+                    return DecodeInteger32_guess(node) != 0;
+                case 0x09:
+                case 0x0a:
+                case 0x0b:
+                case 0x0c:
+                    return DecodeInteger64_guess(node) != 0;
+                case 0x1d:
+                    return false;
+                case 0x1e:
+                    return ReadUnaligned_guess<float>(node + 1) != 0.0f;
+                case 0x1f:
+                    return ReadUnaligned_guess<double>(node + 1) != 0.0;
+                default:
+                    TVPThrowExceptionMessage(
+                        TJS_W("psb: can't convert value to bool."));
+            }
+            return false;
+        }
+
+        // Android arm64 preserves a complete inline copy. The other three
+        // GetDouble wrappers call an out-of-line decoder with the same
+        // dispatcher and integer-decoder calls. No exact source identifier
+        // survives.
         inline tjs_real DecodeNumberAsDouble_guess(
             const std::uint8_t *node) {
             switch(node[0]) {
@@ -206,9 +238,9 @@ namespace PSB {
 
         inline std::uint32_t
         ReadPackedValue_guess(const std::uint8_t *data, std::uint8_t tag) {
-            // sub_59641C @ 0x596498 and sub_59659C @ 0x5966E4 accept
-            // (tag - 0x0d) <= 4.  Tag 0x11 deliberately follows AArch64's
-            // register-shift modulo rule.
+            // The four FindName/FindDictionary/DecodeName implementations
+            // accept (tag - 0x0d) <= 4. Tag 0x11 deliberately follows the
+            // target register-shift modulo rule and keeps the low byte.
             if(static_cast<std::uint32_t>(tag) - 0x0du > 4u) {
                 return 0;
             }
@@ -218,11 +250,11 @@ namespace PSB {
                 (0xffffffffu >> shift);
         }
 
-        // Android arm64 @0x59641C/@0x59659C/@0x597B1C proves the count, width,
-        // data base and next-table displacement scalars but SROA hides their
-        // object. iOS arm64 independently preserves a four-field constructor
-        // and fixes the semantic order to nBytes/count/width/data. Only the
-        // type/field/operator/member-free-inline tokens remain guessed.
+        // Fresh four-binary decompilation of FindNameIndex,
+        // FindDictionaryValueOffset and DecodeName proves the count, width,
+        // data base and next-table displacement scalars. The semantic field
+        // order is nBytes/count/width/data; only the original identifier and
+        // the member-vs-free-inline source boundary remain guessed.
         struct PsbArray_guess {
             std::uint32_t nBytes;
             std::uint32_t nElementCount;
@@ -235,19 +267,19 @@ namespace PSB {
                 nElementCount = ReadPackedCount_guess(code);
                 nSizeOf = static_cast<std::uint32_t>(code[l]) - 0x0cu;
                 pCode = code + l + 1;
-                // The Android consumers form the complete relative
-                // displacement in W before adding it to the original table
-                // base with UXTW.  Do not derive the end from pCode.
+                // All four consumers advance from the original table base by
+                // count * width + headerBytes. Do not derive the end from
+                // pCode.
                 nBytes = nElementCount * nSizeOf +
                     static_cast<std::uint32_t>(l + 1);
             }
 
             [[nodiscard]] std::uint32_t
             operator[](std::uint32_t index) const {
-                // Android accepts widths 1..5. Width 5 deliberately follows
-                // AArch64's register-shift modulo rule and keeps the low byte;
-                // invalid widths return zero without forming the value
-                // address. The index product remains W32 before UXTW.
+                // All four targets accept widths 1..5. Width 5 deliberately
+                // follows the target register-shift modulo rule and keeps the
+                // low byte; invalid widths return zero without forming the
+                // value address. Index arithmetic is uint32_t in every ABI.
                 if(nSizeOf - 1u >= 5u) {
                     return 0;
                 }
@@ -258,17 +290,18 @@ namespace PSB {
             }
         };
 
-        // These three out-of-line boundaries are independently present in
-        // libkrkr2.so and shared by dispatch and raw-node consumers.
+        // These three out-of-line boundaries are shared by dispatch and
+        // raw-node consumers in the four reference binaries. Their mappings
+        // are recorded at the definitions in PSBRawFile.cpp.
         [[nodiscard]] bool
         FindNameIndex_guess(const std::uint8_t *names, const char *name,
-                            std::uint32_t &nameIndex); // 0x59641C
+                            std::uint32_t &nameIndex);
 
         [[nodiscard]] bool FindDictionaryValueOffset_guess(
             const std::uint8_t *dictionary, std::uint32_t nameIndex,
-            std::uint32_t &valueOffset); // 0x59659C
+            std::uint32_t &valueOffset);
 
         void DecodeName_guess(std::string &name, const PSBRawOwner *owner,
-                              std::uint32_t nameIndex); // 0x597B1C
+                              std::uint32_t nameIndex);
     } // namespace detail
 } // namespace PSB

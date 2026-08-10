@@ -1,5 +1,11 @@
 """Android libkrkr2 oracle adapter for PSBFile raw and MDF load paths.
 
+LEGACY TOOLING NOTICE: every native offset in this module belongs to the
+historical, now-removed Android ``libkrkr2.so`` oracle.  The offsets are not
+valid for the four current ``reference/binaries`` files and must not be used
+as source-restoration evidence.  Re-enable or rebase this adapter only after
+the complete call surface has been mapped against the selected current binary.
+
 The input is supplied by the operator.  This adapter deliberately does not
 construct or check in a damaged PSB/MDF fixture: it only forwards an existing
 ``PSB\0`` or ``mdf\0`` file through PSBFile's native implementation.
@@ -1764,7 +1770,7 @@ def run_integer_boundary_case(
 
     The public TJS expression exercises PSBFile factory/load/root, Dictionary
     PropGet, Array PropGetByNum and
-    PSBValueDispatch::CreateVariant_guess.  A second load builds only the
+    PSBValueDispatch::CreateVariant.  A second load builds only the
     two-pointer Android PSBRawNode view needed to invoke the
     original raw GetInt/GetDouble entries at the same pinned file offset.
     """

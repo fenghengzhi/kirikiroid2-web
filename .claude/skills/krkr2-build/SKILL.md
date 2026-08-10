@@ -14,7 +14,7 @@ export VCPKG_ROOT=/path/to/vcpkg
 source /path/to/emsdk/emsdk_env.sh
 ```
 
-依赖工具：Emscripten SDK、vcpkg、ninja、cmake 3.31.1+、bison 3.8.2+、python3。
+依赖工具：Emscripten SDK、vcpkg、ninja、cmake 3.31.1+、bison 3.8.2+、Python 3。Windows 通常调用 `python`，POSIX 环境通常调用 `python3`；以当前机器实际可执行文件为准。
 
 ## 首次构建前：预编译 Emscripten 端口
 
@@ -30,7 +30,7 @@ embuilder build sdl2 sdl2_ttf sdl2-mt sdl2_ttf-mt
 
 ## 构建命令
 
-产物文件：`index.html`、`index.js`、`index.wasm`、`index.data`、`index.worker.js`。
+主要产物：`index.html`、`index.js`、`index.wasm`、`index.worker.js`、`vlfs.js`、`assets.zip`。`--preload-file` 生成的 `index.data` 已移除；UI 与游戏资源通过 VirtualLazyFS 按需读取。
 
 ### Debug 构建（默认，无 Asan）
 

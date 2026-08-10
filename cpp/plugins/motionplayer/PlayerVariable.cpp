@@ -36,14 +36,14 @@ namespace {
         return parts;
     }
 
-    // libkrkr2.so sub_697D34 @0x697D34: split the scope string into "::"-
-    // separated segments, pushing each as a tTJSVariant<string> into the
-    // chainSegments vector. The binary loops sub_A0CBEC (find first "::") +
-    // sub_A0CA58 (substring) until no separator remains, then pushes the tail.
+    // The four-reference split helper is Android arm64 sub_695114, Android
+    // armv7 sub_571C50, iOS arm64 sub_1000F52D0, and iOS armv7 sub_F1D20.
+    // This narrow-string bridge splits scope into "::" segments and stores the
+    // equivalent ttstr values used by chainSegments.
     // Port: returns the segment strings as ttstr (the wcscmp dedup in sub_6B9650
     // reads only the string value). Empty scope -> single empty-string segment
     // (matches the binary: the find fails immediately, the tail = whole string).
-    std::vector<ttstr> splitScopeSegmentsLike_0x697D34(const std::string &scope) {
+    std::vector<ttstr> splitScopeSegments_guess(const std::string &scope) {
         std::vector<ttstr> segments;
         std::string::size_type pos = 0;
         for(;;) {
@@ -400,7 +400,7 @@ namespace motion {
     //     node = HM1.find(joinedKey)                       (sub_6F51BC @0x6c4818)
     //     if (!node) { node = HM1.upsert(joinedKey);       (0x6F52AC @0x6c4850)
     //                  node.key = joinedKey;
-    //                  node.chainDispatches = sub_697D34(scope,"\\"); // DEFERRED
+    //                  node.chainDispatches = split(scope,"\\"); // DEFERRED
     //                  node.weight = 1.0 }                  (0x3FF.. @0x6c4964)
     //     node.writeVal = a4;                              (0x6c4968)
     //     sub_6B9650(node);  // rebuild HM1 heapResult       // PORTED (Stage 2)
@@ -420,7 +420,7 @@ namespace motion {
     // id==full||id==suffix on the own player (the suffix match belonged to the
     // descendant path, not the own tail). The HM1 cascade is additive structure
     // (separate _evalCascadeMap, no feedback into HM2). NOW PORTED (Stage 2): the
-    // chainSegments build (sub_697D34 -> splitScopeSegmentsLike_0x697D34), the
+    // chainSegments build (splitScopeSegments_guess), the
     // heapResult rebuild (sub_6B9650 @0x6c4974 ->
     // rebuildEvalCascadeHeapResultLike_0x6B9650), and the heapResult-driven child
     // ramp (0x6c4978: each type3/4 node's child Player +408 map keyed by suffix).
@@ -468,7 +468,7 @@ namespace motion {
             // Player_HM1_upsert_evalCascade @0x6F52AC.
             auto found = _evalCascadeMap.find(cascadeKey);
             if(found == _evalCascadeMap.end()) {
-                // First insert (0x6c4850): seed key, chainSegments (sub_697D34),
+                // First insert: seed key, chainSegments,
                 // weight=1.0 (0x6c4964).
                 auto inserted = _evalCascadeMap.emplace(
                     std::piecewise_construct,
@@ -477,10 +477,10 @@ namespace motion {
                 found = inserted.first;
                 found->second.keyCopy = cascadeKey;
                 // chainSegments = scope split into "::"-segments (binary
-                // sub_697D34 @0x6c48bc: splits v96=scope by "::"). Built once on
-                // first insert and frozen — the dedup reference for sub_6B9650.
+                // split scope by "::". Built once on first insert and frozen —
+                // the dedup reference for sub_6B9650.
                 found->second.chainSegments =
-                    splitScopeSegmentsLike_0x697D34(scope);
+                    splitScopeSegments_guess(scope);
                 found->second.weight = 1.0; // binary node+40 = 1.0
             }
             // node.writeVal = a4 on every bind (binary 0x6c4968, unconditional
@@ -594,7 +594,7 @@ namespace motion {
         if(sep != std::string::npos) {
             // HM1 block (0x6C46BC..0x6C4968): _evalCascadeMap[joined].writeVal.
             // weight seeded 1.0 on first insert (0x6C4964). chainDispatches build
-            // (sub_697D34) + RenderItem/animator passes DEFERRED (no getVariable
+            // split helper + RenderItem/animator passes DEFERRED (no getVariable
             // consumer — the cascade only reads writeVal).
             const ttstr joined = detail::widen(
                 narrowKey.substr(0, sep) + "::" + narrowKey.substr(sep + sepLen));

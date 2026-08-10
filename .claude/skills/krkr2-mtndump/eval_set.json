@@ -8,7 +8,7 @@
     "should_trigger": true
   },
   {
-    "query": "我想做一个 differential test，把 libkrkr2.so 那边和 Web port 的 motion psb 解码输出对比一下 pixel-perfect，用同一个 .psb 两边分别跑看能不能 diff 出来。有没有离线工具能导出这些贴图",
+    "query": "我想做一个 regression test，把基线分支和当前分支的 motion psb 解码输出对比一下，用同一个 .psb 分别跑两个版本的工具再 diff。有没有离线工具能导出这些贴图",
     "should_trigger": true
   },
   {
@@ -52,11 +52,11 @@
     "should_trigger": false
   },
   {
-    "query": "libkrkr2.so 里 sub_6948E8 这个函数是干嘛的？能反编译看看它怎么在 PSB 树里找 source 条目的吗",
+    "query": "帮我联合反编译 reference/binaries 下四个参考二进制，定位它们在 PSB 树里查找 source 条目的对应函数",
     "should_trigger": false
   },
   {
-    "query": "EmotePlayer::setScale 这个方法我们本地的实现跟 libkrkr2.so 对不上，需要按原版重新实现一下",
+    "query": "EmotePlayer::setScale 这个方法需要与 reference/binaries 下四个参考二进制的联合证据对齐",
     "should_trigger": false
   },
   {
@@ -76,7 +76,7 @@
     "should_trigger": false
   },
   {
-    "query": "我们 psbfile 插件的 PSBFile::loadPSBFile 里 RL 解压部分好像和 Android 原版有偏差，能不能帮我对比一下看差异在哪",
+    "query": "我们 psbfile 插件的 PSBFile::loadPSBFile 里 RL 解压部分可能与四个参考二进制的共同实现有偏差，能不能联合对比一下",
     "should_trigger": false
   }
 ]

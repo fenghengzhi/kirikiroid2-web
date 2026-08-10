@@ -1,5 +1,6 @@
 //
-// Created to verify motionplayer/emoteplayer behavior aligned to libkrkr2.so.
+// Verifies motionplayer/emoteplayer behavior against the four current
+// reference binaries.
 //
 
 #include <catch2/catch_test_macros.hpp>
@@ -1262,7 +1263,7 @@ TEST_CASE("software texture updates packed atlas sub-rects in place") {
         0x01020304u, 0x11121314u, 0xDEADBEEFu,
         0x21222324u, 0x31323334u, 0xBAADF00Du,
     };
-    // sub_695DE8 @ 0x696BE0..0x696C0C passes the packed atlas x/y as
+    // The four current KRKR atlas implementations pass packed atlas x/y as
     // tTVPRect left/top while the source pointer starts at its own (0,0).
     texture->Update(pixelsWithRowPadding.data(), TVPTextureFormat::RGBA,
                     3 * 4,
@@ -1304,9 +1305,10 @@ TEST_CASE("KRKR D3D source path builds and uploads the production atlas") {
     REQUIRE(player.playMotionLike_0x6B2284(
         TJS_W("下半身変形基礎"), motion::PlayFlagForce));
 
-    // The KRKR atlas miss in sub_695DE8 enumerates and decodes every source
-    // icon before publishing the requested entry.  This fixture contains 42
-    // fully-transparent icons and 72 mixed-alpha icons, so one ordinary source
+    // A KRKR atlas cache miss enumerates and decodes every source icon before
+    // publishing the requested entry in all four references. This fixture
+    // contains 42 fully-transparent icons and 72 mixed-alpha icons, so one
+    // ordinary source
     // resolution executes both the transparent early-free path and the packed
     // sub-rect Update/free path without manufacturing test data.
     player.progressMsLike_0x6D2A54(16.0);

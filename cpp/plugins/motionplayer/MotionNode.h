@@ -387,7 +387,7 @@ namespace motion::detail {
         // Bounding box output (Player_calcBounds, 0x6C3D04)
         float bounds[4] = { 1.0f, 1.0f, -1.0f, -1.0f }; // node+1888..1900
 
-        // Motion_Player_findSource @0x6948E8 writes this persistent node-level
+        // Player::findSourceForNode_guess writes this persistent node-level
         // descriptor. The texture pointer is non-owning: the loaded module's
         // group-atlas cache owns it, so MotionNode destruction/copy never
         // Release/AddRef it (MotionNode_destroy @0x6F4C8C, copy @0x6F468C).

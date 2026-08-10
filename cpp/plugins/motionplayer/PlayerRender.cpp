@@ -44,7 +44,7 @@ namespace motion {
         if(!resourceManager) {
             return {};
         }
-        // Motion_Player_findSource @0x6948E8 copies Player+1012 as argument 0
+        // Player::findSourceForNode_guess copies Player+1012 as argument 0
         // and the requested source path as argument 1. Player_playImpl
         // @0x6B2284 writes findMotion result[1] into +1012; RM_findMotion
         // @0x6A9ED4 builds result[1] from the matched module-map node key.

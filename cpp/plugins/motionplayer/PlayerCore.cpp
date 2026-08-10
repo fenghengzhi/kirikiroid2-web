@@ -656,12 +656,12 @@ namespace motion {
         _emoteMotionIndex = selected;
 
         // 0x6B2FE8..0x6B30A8: motionList[selected] is converted to ttstr,
-        // split by the common sub_697D34 helper, and element 2 is consumed
+        // split by the common splitTtstr_guess helper, and element 2 is consumed
         // without a size check.
         const ttstr path(detail::motionPropGetByNum(
             _emoteMotionListVariant, selected));
         const std::vector<ttstr> parts =
-            detail::splitTtstrLike_0x697D34(path, TJS_W('/'));
+            detail::splitTtstr_guess(path, TJS_W('/'));
         const ttstr secondaryMotion = parts[2];
 
         // 0x6B30C0..0x6B3264: loadMotion receives the live stealthChara

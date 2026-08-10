@@ -19,8 +19,14 @@
 extern tTJS *TVPScriptEngine;
 extern void TVPGetListAt(const ttstr &name, iTVPStorageLister *lister);
 
+// Transfer special-member mapping:
+// Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_598E44,
+// Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD350,
+// Kirikiroid2_1.3.9_iOS_arm64!sub_1000ED8E4, and
+// Kirikiroid2_1.3.9_iOS_armv7!sub_E9BE2 all retain an unwind-capable source
+// boundary rather than a noexcept move.
 static_assert(!noexcept(
-    std::declval<PSB::PSBFile &>().Transfer_guess())); // 0x598A64 caller EH
+    std::declval<PSB::PSBFile &>().Transfer_guess()));
 
 namespace {
     class CollectingStorageLister final : public iTVPStorageLister {
@@ -175,6 +181,62 @@ namespace {
     }
 } // namespace
 
+TEST_CASE("PSB packed integer decoders preserve signed-width boundaries") {
+    const std::uint8_t signed24[] = { 0x07u, 0x00u, 0x00u, 0x80u };
+    REQUIRE(PSB::detail::DecodeInteger32_guess(signed24) ==
+            static_cast<tjs_int>(0xff800000u));
+
+    const std::uint8_t signed40[] = {
+        0x09u, 0x00u, 0x00u, 0x00u, 0x00u, 0x80u
+    };
+    REQUIRE(PSB::detail::DecodeInteger64_guess(signed40) ==
+            static_cast<tjs_int64>(0xffffff8000000000ull));
+
+    const std::uint8_t signed48[] = {
+        0x0au, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x80u
+    };
+    REQUIRE(PSB::detail::DecodeInteger64_guess(signed48) ==
+            static_cast<tjs_int64>(0xffff800000000000ull));
+
+    // Unlike the preceding encodings, tag 0x0b does not sign-extend bit 55.
+    const std::uint8_t unsigned56[] = {
+        0x0bu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu
+    };
+    REQUIRE(PSB::detail::DecodeInteger64_guess(unsigned56) ==
+            static_cast<tjs_int64>(0x00ffffffffffffffull));
+}
+
+TEST_CASE("PSB packed arrays preserve the reference width-five modulo shift") {
+    const std::uint8_t packed[] = {
+        0x0du, 0x01u, 0x11u, 0xabu, 0xcdu, 0xefu, 0x12u, 0x34u
+    };
+    const PSB::detail::PsbArray_guess array(packed);
+    REQUIRE(array.nElementCount == 1u);
+    REQUIRE(array.nSizeOf == 5u);
+    REQUIRE(array.nBytes == sizeof(packed));
+    REQUIRE(array[0] == 0xabu);
+    REQUIRE(PSB::detail::ReadPackedValue_guess(packed + 3, 0x11u) ==
+            0xabu);
+}
+
+TEST_CASE("PSB packed counts preserve 32-bit wraparound boundaries") {
+    const std::uint8_t count32[] = {
+        0x10u, 0x00u, 0x00u, 0x00u, 0x80u, 0x11u
+    };
+
+    const std::uint32_t count =
+        PSB::detail::ReadPackedCount_guess(count32);
+    REQUIRE(count == 0x80000000u);
+    REQUIRE(static_cast<tjs_int>(count) ==
+            static_cast<tjs_int>(0x80000000u));
+
+    // PsbArray uses uint32_t arithmetic for count * width + header bytes.
+    const PSB::detail::PsbArray_guess array(count32);
+    REQUIRE(array.nElementCount == 0x80000000u);
+    REQUIRE(array.nSizeOf == 5u);
+    REQUIRE(array.nBytes == 0x80000006u);
+}
+
 TEST_CASE("raw psb storage load applies the Android motion decrypt filter") {
     PSB::PSBFile file;
     REQUIRE(file.LoadStorage(TEST_FILES_PATH
@@ -182,14 +244,21 @@ TEST_CASE("raw psb storage load applies the Android motion decrypt filter") {
                              motionDecryptFilter(742877301u)));
     const auto root = file.GetRoot();
     REQUIRE(root.GetTypeCategory() == 7);
-    // PSBRawNode_ContainsDictionaryKey_guess @ 0x5995D8 constructs its
-    // temporary before the category gate, delegates only category 7, and
-    // returns false for known non-dictionary categories.
+    // ContainsDictionaryKey is
+    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_5999B8,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD918,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EDEF0, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_EA120. All four construct the temporary
+    // before the category gate, delegate only category 7, and return false
+    // for known non-dictionary categories.
     REQUIRE(root.ContainsDictionaryKey("id"));
     REQUIRE_FALSE(
         root.GetDictionaryValueStrict("id").ContainsDictionaryKey("id"));
-    // PSBRawNode_GetString_guess @ 0x598B58 returns null for every known
-    // non-category-4 tag before touching the owner's strings table.
+    // GetString is Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_598F38,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD3A0,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000ED94C, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_E9C90. All four return null for every
+    // known non-category-4 tag before touching the owner's strings table.
     REQUIRE(root.GetString() == nullptr);
     REQUIRE(std::string(root.GetDictionaryValueStrict("id").GetString()) ==
             "motion");
@@ -202,9 +271,12 @@ TEST_CASE("raw psb owner and node views retain ezsave.pimg") {
     {
         PSB::PSBFile file;
         REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
-        // Android motionplayer callers inline this single-argument root
-        // constructor at seven sites; iOS keeps the shared boundary as
-        // iOS arm64 @0x1001263B8.
+        // Root-node construction is
+        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_598E1C,
+        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD33A,
+        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000ED8C8, and
+        // Kirikiroid2_1.3.9_iOS_armv7!sub_E9BD0. Each copies the one-pointer
+        // owner holder before storing the independent root-node pointer.
         retainedRoot = PSB::PSBRawNode(file);
         REQUIRE(retainedRoot.GetType() == 0x21);
         REQUIRE(retainedRoot.GetDictionaryValueStrict("width").GetInt() == 1280);
@@ -229,9 +301,12 @@ TEST_CASE("raw psb dictionary lookup accepts an aliased output node") {
     PSB::PSBRawOwner *const owner = node.GetOwner();
     const std::uint8_t *const rootNode = node.GetNode();
 
-    // sub_695DE8 @ 0x696A84..0x696A90 passes the same raw-node address as
-    // both this and out to sub_598D58.  The callee deliberately has no alias
-    // guard: it releases out, reloads/retains this->owner, then writes child.
+    // Non-throwing dictionary lookup is
+    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_599138,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD544,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EDB08, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_E9E1C. All four capture the child before
+    // releasing out, then reload/retain this->owner without an alias guard.
     // "name" exists in the shared trie for layer dictionaries but not in the
     // root dictionary, so this reaches the second lookup's alias-miss path.
     REQUIRE_FALSE(node.GetDictionaryValue("name", node));
@@ -316,7 +391,11 @@ TEST_CASE("psb media replacement keeps old stream metadata destructible") {
     const tjs_uint64 borrowedSize = borrowed->GetSize();
     REQUIRE(borrowedSize > 0);
 
-    // Open reaches EnsureContainer @ 0x599E04 first.  The encrypted motion's
+    // Open first reaches EnsureContainer:
+    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_59A1E4,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DDF18,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EE754, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_EA7F8. The encrypted motion's
     // raw header is loadable without a filter, while its unfiltered root is a
     // resource node rather than the ezsave dictionary.  Looking up ezsave's
     // known resource path must therefore reach the post-replacement
@@ -537,8 +616,12 @@ TEST_CASE("PSB Resource Variant owns copied bytes after owner release") {
         REQUIRE(std::equal(expected.begin(), expected.end(), octet->GetData()));
     }
 
-    // CreateVariant @0x596B50..0x596B74 owns a copied Octet allocation; the
-    // source PSBFile/raw-node holders above are all gone at this point.
+    // CreateVariant is Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_596B1C,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DBD78,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EB9D0, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_E8308. Their Octet branches allocate a
+    // copy and transfer its ownership into the output variant; the source
+    // PSBFile/raw-node holders above are all gone at this point.
     auto *octet = copiedResource.AsOctetNoAddRef();
     REQUIRE(octet != nullptr);
     REQUIRE(octet->GetLength() == expected.size());

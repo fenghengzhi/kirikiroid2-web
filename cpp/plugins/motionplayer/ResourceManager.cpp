@@ -106,8 +106,10 @@ namespace motion::detail {
     }
 
     LoadedResourceRecord::LoadedResourceRecord() {
-        // sub_6EBCFC @0x6EBCFC asks the libstdc++ prime rehash policy for 10
-        // buckets independently for both nested maps.
+        // Current mapped-record construction is 6E8DC4->6E8EEC->6E90DC,
+        // 5A7488->5A751C->5A762C, inline in 100101798, and inline in FE940.
+        // Each path initializes the retained PSB owner first, then asks its STL
+        // policy for ten buckets independently for both nested maps.
         winSourceTextures.rehash(10);
         krkrSourceEntries.rehash(10);
     }
@@ -118,24 +120,23 @@ namespace {
         TVPExecuteExpression(TJS_W("new Math.RandomGenerator()"), &generator);
     }
 
-    // motionplayer_static_init @0x42EE18 default-constructs the process-wide
-    // std::function at 0x1AB82E0 and registers its destructor with atexit.
+    // Process-wide owner filter; static destruction releases its target.
     PSB::PSBFile::OwnerFilter emotePSBDecryptFilter;
 
     void replaceEmotePSBDecryptFilter_guess(
         const PSB::PSBFile::OwnerFilter &filter) {
-        // sub_6A87D0 @0x6A87D0 copy-constructs a temporary target through the
-        // source manager's op=2, swaps it into 0x1AB82E0, then destroys the
-        // former global target through op=3.
+        // Assignment copy-constructs the replacement target and destroys the
+        // former target after the swap.
         emotePSBDecryptFilter = filter;
     }
 
     PSB::PSBFile::OwnerFilter makeEmotePSBDecryptSeedFilter(
         tjs_int64 seed) {
-        // sub_6863CC @0x6863CC: decrypt [header.encryptData,
-        // header.chunkOffsets) with a four-word xorshift stream seeded by the
-        // low word of the captured 64-bit TJS Integer installed at 0x685D30.
-        // Its std::function manager @0x686450 allocates and clones all 8 bytes.
+        // The current seed callbacks are 683110/564EC0/1001B8D68/1B83AC;
+        // their filter invokers are 6837AC/56522E/1001B92E8/1B8992. All four
+        // decrypt [header.encryptData, header.chunkOffsets) with the same
+        // four-word xorshift stream, seeded by the low word of the captured
+        // 64-bit TJS Integer.
         return [seed](PSB::PSBRawOwner &owner) {
             auto *header = owner.GetHeader();
             auto *cursor = header->encryptData;
@@ -166,10 +167,9 @@ namespace {
         };
     }
 
-    // The first 0x10-byte allocation in
-    // EmotePlayer_setEmotePSBDecryptFunc_callback @0x685E60 stores exactly the
-    // two dispatch pointers. Its final release path @0x685F74..0x685FA0
-    // releases Object and ObjThis before deleting the allocation.
+    // The current function callbacks 683240/564F58/1001B8E50/1B84D0 retain
+    // exactly the Object and ObjThis dispatch pointers in a 0x10/0x08-byte
+    // closure (64/32-bit). Final control-block release releases both pointers.
     class EmotePSBDecryptClosure final {
     public:
         explicit EmotePSBDecryptClosure(tTJSVariant &value) :
@@ -188,22 +188,20 @@ namespace {
 
     PSB::PSBFile::OwnerFilter makeEmotePSBDecryptFuncFilter(
         tTJSVariant &callable) {
-        // 0x685E90..0x685F3C: the closure allocation is owned by the
-        // pointer+RefCount control block implemented by TJS::tRefHolder, then
-        // copied as the sole pointer-sized std::function capture.
+        // The closure is owned by a pointer+RefCount tRefHolder control block,
+        // then copied as the sole pointer-sized std::function capture.
         TJS::tRefHolder<EmotePSBDecryptClosure> closure(
             new EmotePSBDecryptClosure(callable));
         return [closure](PSB::PSBRawOwner &owner) {
-            // EmotePlayer_DecryptFunc_call_guess @0x6865B4 constructs the same
-            // CBinaryAccessor used by xp3filter.dll (ctor sub_62C808), creates
-            // {object,size} variants, and ignores the callback result.
+            // Current invokers 683994/5652C0/1001B94A8/1B8AB0 construct the
+            // same CBinaryAccessor shape, create {object,size} variants, call
+            // the closure with two arguments, and ignore its result.
             auto *accessor = new CBinaryAccessor(
                 owner.GetData(), static_cast<unsigned int>(owner.GetSize()));
             tTJSVariant accessorValue(accessor);
-            // The Android body does not Release the constructor's initial
+            // None of the four bodies releases the constructor's initial
             // accessor reference after the variant AddRef. Preserve that
-            // observable leak boundary instead of applying the XP3 wrapper's
-            // balancing Release.
+            // observable leak boundary.
             tTJSVariant sizeValue(static_cast<tjs_int64>(owner.GetSize()));
             tTJSVariant *params[] = { &accessorValue, &sizeValue };
             closure->invoke(params);
@@ -212,12 +210,10 @@ namespace {
 
 } // namespace
 
-// ResourceManager_ctor @0x6A88CC invokes SourceCache_ctor @0x6A78F4 before
-// initializing its own maps and RandomGenerator. The base receives the KAG
-// owner and byte budget; it owns the primary/buffer Layers and cache list.
+// SourceCache is the base subobject; it owns the Layers and list cache before
+// ResourceManager initializes its module map and random generator.
 motion::ResourceManager::ResourceManager() {
-    // ResourceManager_ctor @0x6A891C initializes HashMap A with 10 buckets
-    // before constructing the random generator @0x6A8988..0x6A8994.
+    // The native map is initialized with ten buckets before the generator.
     _loadedModules.rehash(10);
     initializeRandomGenerator(_randomGenerator);
 }
@@ -262,9 +258,8 @@ motion::ResourceManager::ResourceManager(tTJSVariant kag,
 }
 
 motion::ResourceManager::~ResourceManager() {
-    // Motion_ResourceManager_destructor_guess @0x6A8B94 first clears HashMap A
-    // in the destructor body. Automatic teardown then runs set -> random -> map
-    // before SourceCache.
+    // Clear the module map in the derived destructor body before automatic
+    // member and SourceCache-base teardown.
     _loadedModules.clear();
 }
 
@@ -272,9 +267,8 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
                                                           tjs_int count,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *) {
-    // EmotePlayer_setEmotePSBDecryptSeed_callback @ 0x685D30 accepts one or
-    // more arguments and applies the ordinary TJS integer conversion to only
-    // the first argument before installing the captured decrypt filter.
+    // 683110/564EC0/1001B8D68/1B83AC accept extra arguments and apply ordinary
+    // TJS integer conversion only to p[0] before installing the seed filter.
     if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
@@ -288,9 +282,9 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *,
                                                           tjs_int count,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *) {
-    // EmotePlayer_setEmotePSBDecryptFunc_callback @0x685E60 accepts extra
-    // arguments, converts only p[0] to an object closure, and swaps the new
-    // std::function into the process-wide filter through sub_6A87D0.
+    // 683240/564F58/1001B8E50/1B84D0 accept extra arguments and convert only
+    // p[0] to an object closure. The process-wide replacement helpers are
+    // 6A5BB0/57B174/1001010B0/FE1E0.
     if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
@@ -300,13 +294,17 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *,
 }
 
 tTJSVariant motion::ResourceManager::load(ttstr path) {
-    // ResourceManager_loadResource @0x6A8D8C first replaces its input with
-    // TVPGetPlacedPath(path), then uses that exact normalized ttstr for both
-    // HashMap-A lookup and insertion.
+    // The four current load/cache boundaries are:
+    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6A616C,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_57B338,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_1001012D8, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_FE40C. All four first replace the input
+    // with TVPGetPlacedPath(path), then use that exact ttstr for lookup and
+    // insertion in the module map.
     path = TVPGetPlacedPath(path);
     PSB::PSBFile selected;
-    // 0x6A8E8C..0x6A8EBC: a cache hit copies the one-pointer PSBFile holder,
-    // then falls through to the common fresh-dispatch return block.
+    // A cache hit copies the one-pointer PSBFile holder, then falls through to
+    // the common fresh-dispatch return block.
     if(const auto cached = _loadedModules.find(path);
        cached != _loadedModules.end()) {
         selected = cached->second.file;
@@ -321,8 +319,8 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
             TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"), path);
         }
 
-        // 0x6A8F20..0x6A9204 performs strict raw-node validation before
-        // consuming the loaded holder through sub_598A64.
+        // Each reference performs the same strict raw-node validation before
+        // transferring the loaded holder into the cache.
         const PSB::PSBRawNode root = loaded.GetRoot();
         const char *id = root.GetDictionaryValueStrict("id").GetString();
         if(id == nullptr || std::strcmp(id, "motion") != 0) {
@@ -338,9 +336,8 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
             _spec = 2;
         }
         if(_spec == 0) {
-            // ResourceManager_loadResource @0x6A90EC..0x6A911C keeps the raw
-            // label node alive while sub_A13878 constructs the ttstr, then the
-            // throwing call unwinds the ttstr before that raw-node temporary.
+            // The label raw node stays alive while its ttstr is constructed;
+            // the throwing call then unwinds the ttstr before the node.
             TVPThrowExceptionMessage(
                 TJS_W(
                     "motion file '%1' has not adaptive spec. export psb again."),
@@ -348,10 +345,9 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
         }
 
         if(root.GetDictionaryValueStrict("version").GetDouble() > 3.0300001) {
-            // ResourceManager_loadResource @0x6A905C..0x6A91F4 constructs
-            // the complete ttstr before throwing.  Keeping the label lookup in
-            // this expression also preserves the temporary ttstr/raw-node
-            // destruction order visible at 0x6A9180..0x6A91C4.
+            // All four construct the complete message before throwing. Keeping
+            // the label lookup in this expression preserves the common
+            // temporary ttstr/raw-node destruction order.
             ttstr message(TJS_W("motion file '"));
             message += ttstr(
                 root.GetDictionaryValueStrict("label").GetString());
@@ -359,18 +355,17 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
             TVPThrowExceptionMessage(message.c_str());
         }
 
-        // sub_598A64 @ 0x598A64 returns a transferred holder; the caller at
-        // 0x6A9238..0x6A9258 copy-assigns that temporary into selected and
-        // destroys the temporary. sub_6EBB0C/sub_6EBCFC then default-construct
-        // the mapped record and 0x6A926C..0x6A92A8 copies selected into it.
+        // Transfer returns a holder and clears loaded. The caller copy-assigns
+        // that temporary into selected, destroys the temporary, default-
+        // constructs the mapped record, then copies selected into its file.
         selected = loaded.Transfer_guess();
         _loadedModules[path].file = selected;
     }
 
-    // 0x6A92AC..0x6A92F8 destroys root and the cleared loaded holder before
-    // both hit/miss paths construct the fresh dispatch directly from selected
-    // @0x6A92FC..0x6A9358.  There is no PSBFile::GetRoot call and thus no
-    // retained PSBRawNode temporary on this boundary.
+    // Both hit and miss paths construct a fresh dispatch directly from
+    // selected after the miss-path root and cleared loaded holder are gone.
+    // There is no PSBFile::GetRoot call and no retained PSBRawNode temporary on
+    // this boundary in any of the four references.
     PSB::PSBRawOwner *owner = selected.GetOwner();
     auto *dispatch = new PSB::PSBValueDispatch(
         selected, owner->GetHeader()->entries);
@@ -379,80 +374,67 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
     return result;
 }
 
-// C-1 (2026-06-07): RM-own loadSource(ttstr)->load(path) forward REMOVED. The
-//   binary RM `loadSource` NCB member (sub_6A7BA8) is the INHERITED
-//   SourceCache::loadSource(source, descriptor) base method (the RM
-//   registrar @0x6AB8BC re-lists the SAME callback address sub_6A7BA8 that the
-//   SourceCache registrar @0x6A85A8 binds). It materialises a Layer into the
-//   SourceCache base +72 list — it is NOT a thin forward to RM::load. The
-//   inherited local method serves the RM NCB binding, but its remaining
-//   by-name facade shape is explicitly tracked as an open source-structure gap;
-//   only the prepared-item production wrapper currently restores the exact
-//   source/descriptor cache tuple.
+// The four ResourceManager registrars re-list SourceCache::loadSource at
+// 6A4F88/57ACC8/1001009AC/FDB50. It is inherited `(source, descriptor)` cache
+// materialization, not a by-name forward to ResourceManager::load.
 
 void motion::ResourceManager::unload(ttstr path) const {
     LOGGER->debug("ResourceManager::unload({})", path.AsStdString());
-    // ResourceManager_unload @0x6A959C normalizes before the same
-    // 1025/9/32769 Jenkins-style hash + wcscmp lookup used by loadResource.
+    // Current unload callbacks 6A697C/57B6F8/100101A28/FEC04 normalize before
+    // performing the same case-sensitive map lookup used by load.
     path = TVPGetPlacedPath(path);
     _loadedModules.erase(path);
 }
 
-// C-1 (2026-06-07): RM-own clearCache() const REMOVED. The binary RM
-//   `clearCache` NCB member (sub_6A8438) is the INHERITED
-//   SourceCache::clearCache() base method (RM registrar @0x6AB8BC re-lists the
-//   SAME callback address sub_6A8438 the SourceCache registrar @0x6A85A8
-//   binds). sub_6A8438 touches ONLY the SourceCache base +72 layer-list
-//   (releases each Layer image via vtable+112, frees nodes, resets +72/+80
-//   sentinels and +60=0); it does NOT clear HashMap A or the layer-id set —
-//   the prior RM-own body that cleared _loadedModules was a documented
-//   deviation (see old NOTE),
-//   now correctly dropped: the inherited SourceCache::clearCache() serves the
-//   RM NCB binding faithfully. The module cache lifetime is governed by
-//   load/unload/unloadAll, not clearCache.
+// The four ResourceManager registrars also re-list inherited clearCache at
+// 6A5818/57B018/100100F10/FE0D4. It clears only SourceCache's Layer list;
+// load/unload/unloadAll govern the PSB module map.
 
-// Aligned with libkrkr2.so ResourceManager::findSource (sub_6AAB3C) at
-// 0x6AAB3C. The binary:
-//   1. split path by "/" (sub_697D34); an empty first element -> result void.
+// The four current icon/source lookup boundaries are:
+// Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6A7F1C,
+// Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_57BDE0,
+// Kirikiroid2_1.3.9_iOS_arm64!sub_100102594, and
+// Kirikiroid2_1.3.9_iOS_armv7!sub_FF890. Their shared flow is:
+//   1. split path by "/" (detail::splitTtstr_guess); an empty first element
+//      produces a void result.
 //      The helper always appends its final remainder, so no vector-size gate
 //      exists here or at the direct pieces[1]/pieces[2] consumers.
-//   2. if pieces[0] != "src" (sub_9B1ED0): if "blank", split pieces[1] by
+//   2. if pieces[0] != "src": if "blank", split pieces[1] by
 //      ":" and write width/height/originX/originY as String Variants plus
 //      Integer blank=1 through ncbDictionaryAccessor::SetValue; otherwise void.
-//   3. for "src": HashMap A (this+88 buckets / this+96 count) lookup keyed by
-//      moduleKey (a2, 1025/9/32769 hash cached in the backing
-//      tTJSVariantString Hint@+68 via sub_6EB8F4). The
-//      requested source path is the separate a3 argument. Player_findSource
-//      @0x6948E8 supplies Player+1012 as moduleKey and the resolved src path as
-//      a3. Player_playImpl @0x6B2284 fills +1012 from findMotion result[1],
-//      which ResourceManager_findMotion @0x6A9ED4 copies from the matched map
-//      key.
+//   3. for "src": look up the module map by moduleKey. The requested source
+//      path is the separate argument. Player_findSource
+//      Player::findSourceForNode_guess supplies Player+1012 as moduleKey and
+//      the resolved src path as
+//      the path argument; Player's play path fills that key from the matched
+//      module-map entry.
 //   4. navigate the mapped record's raw root["source"][group]["icon"][icon];
 //      only the dynamic group/icon keys have hasKey gates.
-//   5. on hit: operator new(0x18) ObjSource facade holding the icon raw node
-//      (qword[0..1]=owner/node, qword[2]=0), wrapped as a TJS object via the
-//      NCB class object (sub_6EC124). Port: new ObjSource(iconNode) +
-//      ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
+//   5. on hit: allocate an ObjSource facade holding the icon raw node and a
+//      null lazy texture, then wrap it through the NCB class adaptor. The
+//      object is 0x18 bytes on both 64-bit references and 0x0c bytes on both
+//      32-bit references; those sizes are ABI consequences, not source layout
+//      constants. Port: new ObjSource(iconNode) + CreateAdaptor.
 tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
                                                 ttstr path) const {
-    // 1. split name by "/" (sub_697D34 @0x697D34).
+    // 1. split name by "/" with detail::splitTtstr_guess.
     const std::vector<ttstr> pieces =
-        detail::splitTtstrLike_0x697D34(path, TJS_W("/"));
+        detail::splitTtstr_guess(path, TJS_W("/"));
     if(pieces[0].IsEmpty()) {
         return {}; // LABEL_11: *(a4+16)=0 -> void
     }
 
-    // 2. prefix gate: "src" (sub_9B1ED0 @0x9B1ED0 == 0 means equal).
+    // 2. All four compare the first component with "src", then "blank".
     if(pieces[0] != TJS_W("src")) {
         if(pieces[0] != TJS_W("blank")) {
             return {}; // LABEL_11
         }
 
-        // 0x6AAC74..0x6AAE84 is the inlined ncbDictionaryAccessor path:
-        // each SetValue owns a fresh temporary Variant, calls PropSet with a
-        // distinct hint slot, then destroys that Variant immediately.
+        // The inlined dictionary-accessor path gives each SetValue a fresh
+        // temporary Variant and a distinct hint slot, then destroys that
+        // Variant immediately.
         const std::vector<ttstr> dims =
-            detail::splitTtstrLike_0x697D34(pieces[1], TJS_W(":"));
+            detail::splitTtstr_guess(pieces[1], TJS_W(":"));
         ncbDictionaryAccessor dictionary;
         dictionary.SetValue(TJS_W("width"), dims[0], TJS_MEMBERENSURE,
                             &detail::widthMemberHint_guess);
@@ -467,41 +449,41 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
         return tTJSVariant(dictionary.GetDispatch(), dictionary.GetDispatch());
     }
 
-    // 0x6AAC10/0x6AAC20 converts both direct vector elements before touching
-    // HashMap A.  Malformed paths therefore retain the binary's unchecked
-    // indexing boundary even when moduleKey is absent.
+    // Both direct vector elements are converted before the module-map lookup.
+    // Malformed paths therefore retain the common unchecked indexing boundary
+    // even when moduleKey is absent.
     const std::string groupKey = detail::narrow(pieces[1]);
     const std::string iconKey = detail::narrow(pieces[2]);
 
-    // 3. HashMap A lookup keyed directly by moduleKey (a2).  sub_6EB8F4's
-    // null bucket/node return is represented completely by find()==end(); the
-    // value's PSB owner is not checked a second time in 0x6AAF00.
+    // 3. The module map is keyed directly by moduleKey. find()==end()
+    // represents the null bucket/node result; no reference checks the mapped
+    // PSB owner a second time.
     const auto recordIt = _loadedModules.find(moduleKey);
     if(recordIt == _loadedModules.end()) {
         return {}; // !v27 || !*v27 -> LABEL_71 result void
     }
     detail::LoadedResourceRecord *record = &recordIt->second;
 
-    // 4. Raw root navigation. sub_598C58 is strict for the fixed keys;
-    // sub_5995D8 gates only the two dynamic keys before their strict reads.
+    // 4. Raw root navigation is strict for fixed keys. ContainsDictionaryKey
+    // gates only the two dynamic keys before their strict reads.
     const PSB::PSBRawNode root(record->file);
     const PSB::PSBRawNode source = root.GetDictionaryValueStrict("source");
-    if(!source.ContainsDictionaryKey(groupKey.c_str())) { // sub_5995D8 gate
+    if(!source.ContainsDictionaryKey(groupKey.c_str())) {
         return {}; // LABEL_64 -> result void
     }
-    // The group node is a full-expression temporary: Android destroys it at
-    // 0x6AAF74 immediately after constructing iconHolder, before the icon gate.
+    // The group node is a full-expression temporary destroyed immediately
+    // after constructing iconHolder, before the icon gate, in all four builds.
     const PSB::PSBRawNode iconHolder =
         source.GetDictionaryValueStrict(groupKey.c_str())
             .GetDictionaryValueStrict("icon");
-    if(!iconHolder.ContainsDictionaryKey(iconKey.c_str())) { // sub_5995D8 gate
+    if(!iconHolder.ContainsDictionaryKey(iconKey.c_str())) {
         return {};
     }
     const PSB::PSBRawNode iconEntry =
         iconHolder.GetDictionaryValueStrict(iconKey.c_str());
 
-    // 5. copy the raw pair into ObjSource (owner AddRef), zero its texture,
-    // then attach it to the NCB native instance (0x6AAFC0..0x6AB02C).
+    // 5. Copy the raw pair into ObjSource (owner AddRef), zero its texture,
+    // then attach it to the NCB native instance.
     using ObjSourceAdaptor = ncbInstanceAdaptor<motion::ObjSource>;
     motion::ObjSource *src = new motion::ObjSource(iconEntry);
     if(iTJSDispatch2 *dispatch = ObjSourceAdaptor::CreateAdaptor(src)) {
@@ -509,31 +491,15 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
         dispatch->Release();
         return result;
     }
-    // 0x6AAFE0 passes sticky=false/err=false; the null-adaptor branch at
-    // 0x6AB044 returns void without reclaiming the just-allocated ObjSource.
+    // The null-adaptor branch returns void without reclaiming the newly
+    // allocated ObjSource in all four references.
     return {};
 }
 
 tjs_int motion::ResourceManager::requireLayerId() {
-    // Aligned with sub_6AB694 @0x6AB694. Binary topology (cross-verified by
-    // fresh decompile 2026-06-06, disasm 0x6ab694-0x6ab74c):
-    //   counter = (uint*)(this+216);            // ctor 0x6a8a3c seeds it to 1
-    //   lower_bound(set@+168, *counter):        // 0x6ab6a4-0x6ab728
-    //     while (*counter ∈ set) ++*counter;    // skip already-used ids, retry
-    //   set._M_insert_unique(*counter);         // 0x6ab734
-    //   ret = *counter; *counter += 1; return ret; // 0x6ab738-0x6ab74c
-    // The counter (+216) is monotone and only ever holds a value NOT yet handed
-    // out, so the skip-loop body never actually iterates and the function never
-    // reuses a released id (the counter never rewinds). nextLayerId here is the
-    // same persistent monotone counter, so this `while(find()!=end)++` mirrors
-    // the binary's lower_bound-skip exactly — it is NOT a "search lowest free
-    // slot / reuse released id" scheme. (2026-06-06 audit item #5 claimed local
-    // reuses released ids while binary is a pure monotone counter; BOTH halves
-    // were wrong — binary also has the skip-loop, local also never rewinds. No
-    // behavioral divergence under any require/release interleave. Audit #5 is a
-    // misjudgement; no change made.)
-    // The ctor-level {0} insertion at 0x6A8A08 is a real source operation,
-    // not an inert compiler artifact; _usedLayerIds is initialized with it.
+    // Current callbacks: 6A8A74/57C258/100102D40/100240. The counter is
+    // monotone, skips occupied ids, inserts the selected id, and never rewinds
+    // when an id is released. Sentinel 0 is never returned.
     while(_usedLayerIds.find(_nextLayerId) != _usedLayerIds.end()) {
         ++_nextLayerId;
     }
@@ -543,11 +509,8 @@ tjs_int motion::ResourceManager::requireLayerId() {
     return id;
 }
 
-// P3-B (2026-06-05): releaseLayerId aligned to sub_6AB750 @0x6AB750 —
-//   erase the id from the std::set<unsigned int> @+168 and nothing else. The
-//   binary keeps NO name<->id maps (requireLayerIdForName removed, its string
-//   has 0 hits in libkrkr2.so); the by-name cleanup that used to live here is
-//   gone.
+// Current callbacks: 6A8B30/57C2C8/100102DB8/10028A. Only the id-set entry is
+// erased; id 0 remains reserved.
 void motion::ResourceManager::releaseLayerId(tjs_int id) {
     if(id == 0) {
         return;
@@ -555,21 +518,11 @@ void motion::ResourceManager::releaseLayerId(tjs_int id) {
     _usedLayerIds.erase(id);
 }
 
-// Binary ResourceManager members from ncb_registerMembers @0x6AB8BC. HashMap A
-// is represented by the mapped raw-file records in _loadedModules.
-
-// C-1 (2026-06-07): RM-own getBufLayer()->ttstr REMOVED. The binary RM
-//   `bufLayer` prop-ro (sub_6A84FC) reads `a1+40` = the SourceCache base
-//   bufLayer LAYER VARIANT (set by the SourceCache base ctor sub_6A78F4 via
-//   sub_A0FB64(a1+40, newLayer)), NOT a ttstr name. The RM registrar @0x6AB8BC
-//   re-lists the SAME callback address sub_6A84FC the SourceCache registrar
-//   @0x6A85A8 binds. So the inherited SourceCache::getBufLayer() (returns the
-//   base tTJSVariant _bufLayer) now serves the RM NCB binding faithfully; the
-//   former RM ttstr getBufLayer() was a misattributed two-class artifact.
+// bufLayer is likewise inherited: the current callbacks are
+// 6A58DC/57B060/100100F84/FE11A in both SourceCache and ResourceManager tables.
 
 void motion::ResourceManager::unloadAll() const {
-    // unloadAll @0x6A8CF8 clears ONLY HashMap A. The preceding merged body at
-    // 0x6A8B94 is the ResourceManager destructor, not unloadAll.
+    // Current callbacks 6A60D8/57B32C/1001012CC/FE3FE clear only the module map.
     LOGGER->debug("ResourceManager::unloadAll()");
     _loadedModules.clear();
 }
@@ -577,15 +530,12 @@ void motion::ResourceManager::unloadAll() const {
 bool motion::ResourceManager::isExistMotion(tTJSVariant projectKey,
                                             ttstr path) const {
     const std::vector<ttstr> pieces =
-        detail::splitTtstrLike_0x697D34(path, TJS_W("/"));
+        detail::splitTtstr_guess(path, TJS_W("/"));
     const std::string chara = detail::narrow(pieces[1]);
     const std::string motionName = detail::narrow(pieces[2]);
-    // ResourceManager_isExistMotion keeps the direct map hit
-    // @0x6A9870..0x6A9910 and fallback node-chain walk
-    // @0x6A99A4..0x6A9A3C as two separately expanded raw-node paths.
-    // 0x6A9798..0x6A9844: void skips the direct lookup.  Every other type
-    // must already be String; GetString preserves the binary's strict type
-    // error before the independent ttstr key copy is constructed.
+    // Current callbacks 6A6AD8/57B780/100101AC8/FECF4 keep the direct module
+    // hit and fallback map walk as separate raw-node paths. Void skips the
+    // direct lookup; every other project key must already be String.
     if(projectKey.Type() != tvtVoid) {
         const tTJSVariantString *projectString =
             projectKey.AsStringNoAddRef();
@@ -627,14 +577,11 @@ bool motion::ResourceManager::isExistMotion(tTJSVariant projectKey,
 tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
                                                 ttstr path) const {
     const std::vector<ttstr> pieces =
-        detail::splitTtstrLike_0x697D34(path, TJS_W("/"));
+        detail::splitTtstr_guess(path, TJS_W("/"));
     const std::string chara = detail::narrow(pieces[1]);
     const std::string motionName = detail::narrow(pieces[2]);
-    // Motion_ResourceManager_findMotion keeps the direct hit
-    // @0x6AA058..0x6AA124 and fallback walk @0x6AA360..0x6AA424 separately
-    // expanded.  Only each path's final motion node is wrapped in a dispatch.
-    // 0x6A9F80..0x6AA02C mirrors isExistMotion's Variant gate and strict
-    // String extraction before the direct HashMap lookup.
+    // Current callbacks 6A72B4/57B9F8/100101E84/FF11C mirror isExistMotion's
+    // direct/fallback split. Only the final motion node is wrapped in a dispatch.
     if(projectKey.Type() != tvtVoid) {
         const tTJSVariantString *projectString =
             projectKey.AsStringNoAddRef();
@@ -693,9 +640,8 @@ tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
 tjs_error motion::ResourceManager::random(tTJSVariant *r, tjs_int,
                                           tTJSVariant **,
                                           iTJSDispatch2 *objthis) {
-    // ResourceManager_random @0x6AB56C copies the ctor-created generator
-    // variant at +144, calls random() with no arguments, converts every
-    // non-void result through TJS numeric conversion, and otherwise keeps 0.
+    // Current callbacks 6A894C/57C1CC/100102C90/1000F0 call the retained
+    // generator with no arguments and numerically convert a non-void result.
     auto *self =
         ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(objthis, true);
     if(!self) {

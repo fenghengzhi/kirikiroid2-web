@@ -1,5 +1,11 @@
 # ADB + Frida Oracle Runner
 
+> **Historical oracle only.** The checked-in native offsets target a removed
+> Android `libkrkr2.so` build. They are not valid for the four files under
+> `reference/binaries/` and must not be cited as evidence when restoring the
+> current source. Rebase a test family only after mapping its complete hook
+> surface against one explicitly selected current binary.
+
 Runs libkrkr2.so (the Android kirikiroid2 binary) inside the repacked
 `krkr2-harness.apk` on a real Android arm64 device or Redroid
 container, driven from the host over `adb forward tcp:5039` +

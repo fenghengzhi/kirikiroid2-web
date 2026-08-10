@@ -129,7 +129,7 @@ namespace motion::detail {
     // Player_HM1_value_destroy @0x6DD1A0. Binary V (value base = node+16) layout:
     //   V+0  ttstr key copy (the joinedKey)                     (store @0x6c4880)
     //   V+8/+16/+24 std::vector<tTJSVariant*> chainSegments     (set @0x6c48c8..)
-    //              = the scope label split into "::"-segments by sub_697D34
+    //              = the scope label split into "::"-segments
     //              @0x6c48bc; elements are tTJSVariant<string> (compared by
     //              type tag +0x3C + ttstr_c_str/wcscmp inside sub_6B9650).
     //   V+32 double writeVal  (= a4, store @0x6c4968 every bind)

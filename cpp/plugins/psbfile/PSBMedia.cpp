@@ -9,15 +9,16 @@
 
 namespace PSB {
     void PSBMedia::NormalizeDomainName(ttstr &) {
-        // nullsub_262 @ 0x5998BC.
+        // All four vtable bodies are empty.
     }
 
     void PSBMedia::NormalizePathName(ttstr &) {
-        // nullsub_263 @ 0x5998C0.
+        // All four vtable bodies are empty.
     }
 
     bool PSBMedia::EnsureContainer(const ttstr &name) {
-        // sub_599E04 @ 0x599E04.
+        // All four references preserve the same container-name commit and
+        // adaptor-failure behavior below.
         const tjs_int slash = name.IndexOf(TJS_W('/'));
         if(slash < 0) {
             return false;
@@ -41,8 +42,9 @@ namespace PSB {
                 nextFile.SetObject(object, object);
                 object->Release();
             }
-            // sub_59A330 @ 0x59A330 leaves the native holder unclaimed when
-            // the class object cannot create an adaptor; nextFile stays void.
+            // Every target leaves the native holder unclaimed when the class
+            // object cannot create an adaptor; nextFile stays void. The
+            // container name is nevertheless committed and the call succeeds.
             _file = nextFile;
         }
         _container = container;
@@ -50,13 +52,14 @@ namespace PSB {
     }
 
     bool PSBMedia::Resolve(const ttstr &name, PSBRawNode &value) {
-        // sub_59A4B0 @ 0x59A4B0.
+        // All four references preserve the same segmented traversal and defer
+        // caller-output replacement until the successful tail.
         iTJSDispatch2 *dispatch = _file.AsObjectNoAddRef();
         PSBFile *file =
             ncbInstanceAdaptor<PSBFile>::GetNativeInstance(dispatch);
-        // sub_59A4B0 @ 0x59A548..0x59A55C keeps the root in a local node.
-        // The caller's output is not touched until the successful tail at
-        // 0x59A730..0x59A774, so every miss preserves its previous value.
+        // All four bodies keep the root in a retained local node. The
+        // caller's output is not touched until the successful tail, so every
+        // missing slash or dictionary key preserves its previous value.
         PSBRawOwner *owner = file->GetOwner();
         PSBRawNode current(*file, owner->GetHeader()->entries);
 
@@ -73,10 +76,9 @@ namespace PSB {
                 if(last) {
                     segment = rest;
                 } else {
-                    // 0x59A5C0..0x59A5E8 copies the substring owner into the
-                    // segment, then immediately releases the returned
-                    // temporary. Keep this AddRef/Release no-op as a
-                    // source-lifetime token.
+                    // The four builds copy the substring owner into segment,
+                    // then immediately release the returned temporary. Keep
+                    // this scope as the corresponding source-lifetime token.
                     {
                         const ttstr segmentTemporary =
                             rest.SubString(0, slash);
@@ -85,24 +87,20 @@ namespace PSB {
                     rest = rest.SubString(slash + 1, -1);
                 }
 
-                // sub_59A4B0 @ 0x59A654..0x59A710 constructs exactly one
-                // narrow holder and passes the same buffer through contains
-                // and strict lookup before destroying it.
+                // Exactly one narrow holder supplies the same buffer to the
+                // contains check and the strict lookup before destruction.
                 tTJSNarrowStringHolder key(segment.c_str());
                 if(!current.ContainsDictionaryKey(key.Buf)) {
                     return false;
                 }
-                // sub_59A4B0 @ 0x59A694..0x59A704 copy-assigns the strict
-                // getter's retained temporary and then destroys that
-                // temporary.  0x59A6D0/0x59A6D8 reads and writes back the same
-                // refcount: the optimizer's remnant of AddRef followed by
-                // Release, including its incoming-zero deletion boundary.
+                // Each build copy-assigns the strict getter's retained
+                // temporary and then destroys it. Optimized forms still keep
+                // the AddRef/Release pair and its incoming-zero deletion edge.
                 current = current.GetDictionaryValueStrict(key.Buf);
             }
             if(last) {
-                // 0x59A710 destroys key and 0x59A714..0x59A71C releases
-                // segment before 0x59A730..0x59A774 alone performs
-                // Release-old -> copy -> AddRef -> write-node on caller out.
+                // key and segment die before the sole caller-output update:
+                // Release-old -> copy -> AddRef -> write-node.
                 value = current;
                 return true;
             }
@@ -111,27 +109,27 @@ namespace PSB {
 
     const std::uint8_t *PSBMedia::GetResourceData(const ttstr &name,
                                                   std::uint32_t &size) {
-        // sub_59A0B4 @ 0x59A0B4.
+        // All four references resolve into a retained local node before
+        // borrowing its resource pointer.
         PSBRawNode value;
         if(!Resolve(name, value)) {
             return nullptr;
         }
-        // sub_59A0B4 @ 0x59A0EC..0x59A214 is the complete inlined body of
-        // PSBRawNode::GetResource @ 0x5996E8..0x5997E8 after binding `this`
-        // to this local node.  Preserve that source-level member call; the
-        // Android arm64 -O3 build removes the BL but keeps every callee branch;
-        // iOS arm64 independently preserves the call after Resolve.
+        // Android arm64 inlines the complete raw-resource decoder here. The
+        // other three builds preserve calls to their raw GetResource wrappers.
+        // Keep the source-level call.
         return value.GetResource(size);
     }
 
     bool PSBMedia::CheckExistentStorage(const ttstr &name) {
-        // sub_5998C4 @ 0x5998C4.
+        // All four short-circuit on a failed container check before resolving.
         std::uint32_t size;
         return EnsureContainer(name) && GetResourceData(name, size) != nullptr;
     }
 
     tTJSBinaryStream *PSBMedia::Open(const ttstr &name, tjs_uint32) {
-        // sub_59993C @ 0x59993C.
+        // All four return null on a failed container check, but throw after a
+        // successful container check when the named resource is absent.
         if(!EnsureContainer(name)) {
             return nullptr;
         }
@@ -140,14 +138,16 @@ namespace PSB {
         if(data == nullptr) {
             TVPThrowExceptionMessage(TJS_W("%1: cannot open psbfile"), name);
         }
-        // tTVPMemoryStream ctor @0x8F7C74 borrows every non-null block
-        // (Reference=true); dtor @0x8F7D04 does not free it or retain the PSB
-        // owner. A live stream therefore shares the container's raw lifetime.
+        // The four memory-stream constructors set Reference=true for every
+        // non-null block. Their destructors free only when Reference=false and
+        // never retain the PSB owner, so the stream shares the container's raw
+        // lifetime.
         return new tTVPMemoryStream(data, size);
     }
 
     void PSBMedia::GetListAt(const ttstr &name, iTVPStorageLister *lister) {
-        // sub_5999F4 @ 0x5999F4.
+        // All four list numeric array indices and decoded dictionary names,
+        // while ignoring the lister callback's return value.
         if(!EnsureContainer(name)) {
             return;
         }
@@ -156,9 +156,8 @@ namespace PSB {
             return;
         }
 
-        // sub_5999F4 @ 0x599A4C contains the complete category-specialized
-        // classifier residual. Same-lineage iOS arm64 @0x1000EE50C retains
-        // the shared classifier call.
+        // Android specializes the category classifier into this body; iOS
+        // retains calls to the shared classifier.
         switch(detail::GetTypeCategory_guess(value.GetNode()[0])) {
             case 6: {
                 const std::uint8_t *packed = value.GetNode() + 1;
@@ -193,10 +192,9 @@ namespace PSB {
             case 7: {
                 std::string key;
                 const std::uint8_t *packed = value.GetNode() + 1;
-                // Android arm64 @0x599B00..0x599C6C scalarizes the first view
-                // and eliminates the unused second one. iOS arm64 retains
-                // both constructor calls; the second record is deliberately
-                // dead after construction.
+                // Android arm64 scalarizes the keys view and eliminates the
+                // unused offsets view. The remaining builds retain both
+                // constructions; offsets is deliberately dead afterwards.
                 const detail::PsbArray_guess keys(packed);
                 const detail::PsbArray_guess offsets(packed + keys.nBytes);
                 (void)offsets;
@@ -219,7 +217,7 @@ namespace PSB {
     }
 
     void PSBMedia::GetLocallyAccessibleName(ttstr &name) {
-        // sub_599DD8 @ 0x599DD8.
+        // All four release the old string value and leave it empty.
         name.Clear();
     }
 } // namespace PSB

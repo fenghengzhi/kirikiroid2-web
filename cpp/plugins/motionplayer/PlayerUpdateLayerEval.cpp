@@ -1211,7 +1211,7 @@ namespace motion {
                 if(sourceGate() &&
                    (node.activeSlot().frameIndex != priorActiveFrame ||
                     node.otherSlot().frameIndex != priorOtherFrame)) {
-                    findSourceForNodeLike_0x6948E8(node);
+                    findSourceForNode_guess(node);
                 }
                 continue;
             }
@@ -1231,7 +1231,7 @@ namespace motion {
             if(sourceGate() &&
                (node.activeSlot().frameIndex != priorActiveFrame ||
                 node.otherSlot().frameIndex != priorOtherFrame)) {
-                findSourceForNodeLike_0x6948E8(node);
+                findSourceForNode_guess(node);
             }
         }
     }
@@ -1275,7 +1275,7 @@ namespace motion {
                 if(node.forceVisible != 0 ||
                    (node.nodeType >= 0 && node.nodeType < 31 &&
                     ((1 << node.nodeType) & mask) != 0)) {
-                    findSourceForNodeLike_0x6948E8(node);
+                    findSourceForNode_guess(node);
                 }
             }
         }
@@ -1328,7 +1328,7 @@ namespace motion {
                 if(node.forceVisible != 0 ||
                    (node.nodeType >= 0 && node.nodeType < 31 &&
                     ((1 << node.nodeType) & mask) != 0)) {
-                    findSourceForNodeLike_0x6948E8(node);
+                    findSourceForNode_guess(node);
                 }
             }
         }

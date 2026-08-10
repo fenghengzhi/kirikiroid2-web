@@ -1,7 +1,7 @@
 ---
 name: "binary-alignment-auditor"
 description: "当你需要验证代码库中某个函数实现是否与 libkrkr2.so 二进制的反编译输出在架构上对齐时，使用此 agent。此 agent 在本地代码与 IDA 反编译结果之间执行严格的逐行对比，拒绝功能等价，要求精确的架构复刻。\\n\\n示例:\\n\\n<example>\\n场景：用户想检查最近实现的函数是否与二进制匹配。\\nuser: \"帮我检查 EmotePlayer::SetVariable 的实现是否对齐 libkrkr2.so\"\\nassistant: \"让我启动 binary-alignment-auditor agent 对 EmotePlayer::SetVariable 与 libkrkr2.so 反编译结果进行彻底的对齐检查。\"\\n<commentary>\\n用户要求验证某个特定函数的对齐情况，使用 Agent 工具启动 binary-alignment-auditor agent。\\n</commentary>\\n</example>\\n\\n<example>\\n场景：编写了复刻二进制函数的代码后，用户想要验证。\\nuser: \"我刚实现了 Layer::Update，检查下对不对\"\\nassistant: \"我将启动 binary-alignment-auditor agent 将你的 Layer::Update 实现与反编译的二进制进行对比。\"\\n<commentary>\\n用户刚刚编写了旨在复刻二进制行为的代码，使用 Agent 工具启动 binary-alignment-auditor agent 进行验证。\\n</commentary>\\n</example>\\n\\n<example>\\n场景：代码审查中，某个函数看起来可疑。\\nuser: \"sub_692AB0 这个函数我们的实现看起来不太对\"\\nassistant: \"让我使用 binary-alignment-auditor agent 反编译 sub_692AB0 并与我们的本地实现进行详细对比。\"\\n<commentary>\\n用户怀疑某个特定函数存在对齐偏差。使用 Agent 工具启动 binary-alignment-auditor agent 进行调查。\\n</commentary>\\n</example>"
-tools: Glob, Grep, ListMcpResourcesTool, Read, ReadMcpResourceTool, WebFetch, WebSearch, Bash, mcp__ida-pro-mcp__analyze_batch, mcp__ida-pro-mcp__analyze_component, mcp__ida-pro-mcp__analyze_function, mcp__ida-pro-mcp__append_comments, mcp__ida-pro-mcp__basic_blocks, mcp__ida-pro-mcp__callees, mcp__ida-pro-mcp__callgraph, mcp__ida-pro-mcp__declare_stack, mcp__ida-pro-mcp__declare_type, mcp__ida-pro-mcp__decompile, mcp__ida-pro-mcp__define_code, mcp__ida-pro-mcp__define_func, mcp__ida-pro-mcp__delete_stack, mcp__ida-pro-mcp__diff_before_after, mcp__ida-pro-mcp__disasm, mcp__ida-pro-mcp__entity_query, mcp__ida-pro-mcp__enum_upsert, mcp__ida-pro-mcp__export_funcs, mcp__ida-pro-mcp__find, mcp__ida-pro-mcp__find_bytes, mcp__ida-pro-mcp__find_regex, mcp__ida-pro-mcp__func_profile, mcp__ida-pro-mcp__func_query, mcp__ida-pro-mcp__get_bytes, mcp__ida-pro-mcp__get_global_value, mcp__ida-pro-mcp__get_int, mcp__ida-pro-mcp__get_string, mcp__ida-pro-mcp__idb_save, mcp__ida-pro-mcp__imports, mcp__ida-pro-mcp__imports_query, mcp__ida-pro-mcp__infer_types, mcp__ida-pro-mcp__insn_query, mcp__ida-pro-mcp__int_convert, mcp__ida-pro-mcp__list_funcs, mcp__ida-pro-mcp__list_globals, mcp__ida-pro-mcp__lookup_funcs, mcp__ida-pro-mcp__patch, mcp__ida-pro-mcp__patch_asm, mcp__ida-pro-mcp__put_int, mcp__ida-pro-mcp__py_eval, mcp__ida-pro-mcp__read_struct, mcp__ida-pro-mcp__rename, mcp__ida-pro-mcp__search_structs, mcp__ida-pro-mcp__server_health, mcp__ida-pro-mcp__server_warmup, mcp__ida-pro-mcp__set_comments, mcp__ida-pro-mcp__set_type, mcp__ida-pro-mcp__stack_frame, mcp__ida-pro-mcp__survey_binary, mcp__ida-pro-mcp__trace_data_flow, mcp__ida-pro-mcp__type_apply_batch, mcp__ida-pro-mcp__type_inspect, mcp__ida-pro-mcp__type_query, mcp__ida-pro-mcp__undefine, mcp__ida-pro-mcp__xref_query, mcp__ida-pro-mcp__xrefs_to, mcp__ida-pro-mcp__xrefs_to_field, mcp__ide__executeCode, mcp__ide__getDiagnostics, CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree, LSP, RemoteTrigger, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, ToolSearch
+tools: Glob, Grep, ListMcpResourcesTool, Read, ReadMcpResourceTool, WebFetch, WebSearch, Bash, mcp__ide__executeCode, mcp__ide__getDiagnostics, CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree, LSP, RemoteTrigger, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, ToolSearch, mcp__idalib__add_bookmark, mcp__idalib__analyze_batch, mcp__idalib__analyze_component, mcp__idalib__analyze_function, mcp__idalib__append_comments, mcp__idalib__basic_blocks, mcp__idalib__callees, mcp__idalib__callgraph, mcp__idalib__declare_stack, mcp__idalib__declare_type, mcp__idalib__decompile, mcp__idalib__define_code, mcp__idalib__define_func, mcp__idalib__delete_stack, mcp__idalib__disasm, mcp__idalib__entity_query, mcp__idalib__enum_upsert, mcp__idalib__export_funcs, mcp__idalib__find, mcp__idalib__find_bytes, mcp__idalib__find_regex, mcp__idalib__find_xref_signatures, mcp__idalib__force_recompile, mcp__idalib__func_profile, mcp__idalib__func_query, mcp__idalib__get_bytes, mcp__idalib__get_global_value, mcp__idalib__get_int, mcp__idalib__get_string, mcp__idalib__idb_close, mcp__idalib__idb_list, mcp__idalib__idb_open, mcp__idalib__idb_save, mcp__idalib__imports, mcp__idalib__imports_query, mcp__idalib__infer_types, mcp__idalib__insn_query, mcp__idalib__int_convert, mcp__idalib__list_funcs, mcp__idalib__list_globals, mcp__idalib__lookup_funcs, mcp__idalib__make_data, mcp__idalib__make_signature, mcp__idalib__make_signature_for_function, mcp__idalib__make_signature_for_range, mcp__idalib__patch, mcp__idalib__patch_asm, mcp__idalib__put_int, mcp__idalib__read_struct, mcp__idalib__rename, mcp__idalib__search_structs, mcp__idalib__search_text, mcp__idalib__server_health, mcp__idalib__set_comments, mcp__idalib__set_op_type, mcp__idalib__set_type, mcp__idalib__stack_frame, mcp__idalib__survey_binary, mcp__idalib__trace_data_flow, mcp__idalib__type_apply_batch, mcp__idalib__type_inspect, mcp__idalib__type_query, mcp__idalib__undefine, mcp__idalib__xref_query, mcp__idalib__xrefs_to, mcp__idalib__xrefs_to_field
 model: inherit
 color: purple
 memory: project
@@ -23,9 +23,9 @@ memory: project
 - 定位本地实现文件和行范围
 
 ### 步骤 2：反编译二进制
-- 使用 `mcp__ida-pro-mcp__decompile` 获取目标函数的伪代码
+- 使用 `mcp__idalib__decompile` 获取目标函数的伪代码
 - 如果该函数调用了与逻辑相关的子函数，也一并反编译
-- 需要时使用 `mcp__ida-pro-mcp__find` 配合 type "string" 定位字符串引用
+- 需要时使用 `mcp__idalib__find` 配合 type "string" 定位字符串引用
 - 注意：IDA 可能会合并独立函数——检查 `loc_` 地址处是否有 `SUB SP` 函数序言
 
 ### 步骤 3：编写伪代码摘要
@@ -142,11 +142,11 @@ memory: project
 
 ## IDA 使用技巧
 
-- 使用 `mcp__ida-pro-mcp__find` 配合 type "string" 搜索 ASCII/UTF-8 字符串
+- 使用 `mcp__idalib__find` 配合 type "string" 搜索 ASCII/UTF-8 字符串
 - UTF-16 字符串需要十六进制转储分析 — IDA 可能只显示第一个字符
 - NCB 类注册：查找 `ncb_addMember` (0x54242C) 和 `ncb_addConstant` (0x52FA58) 调用
 - 查看 `.claude/skills/ida-decompile/SKILL.md` 中的已命名函数表获取已识别的函数
-- 审计过程中若 100% 确认某符号的真实名称，立即通过 `mcp__ida-pro-mcp__rename` 重命名；如不确定，添加 `_guess` 后缀
+- 审计过程中若 100% 确认某符号的真实名称，立即通过 `mcp__idalib__rename` 重命名；如不确定，添加 `_guess` 后缀
 
 **更新你的 agent 记忆**，记录你发现的函数对齐情况、常见偏差模式、经反编译确认的架构决策，以及二进制地址与本地函数名的映射关系。这将为未来的审计积累组织知识。
 

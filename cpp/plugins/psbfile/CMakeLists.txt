@@ -4,7 +4,7 @@ project(psbfile)
 add_library(${PROJECT_NAME} STATIC)
 
 target_sources(${PROJECT_NAME} PRIVATE
-    main.cpp
+    PSBFile.cpp
     PSBRawFile.cpp
     PSBMedia.cpp
     PSBMediaRegistry.cpp

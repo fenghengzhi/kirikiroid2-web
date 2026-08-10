@@ -476,7 +476,7 @@ namespace motion {
                         pn.particleMotionListVariant, idx)));
                 if (selectedSrc.empty()) goto physics_step;
 
-                // Handle "chara/motion" format (binary: sub_697D34 splits by "/")
+                // Handle "chara/motion" format (splitTtstr_guess splits by "/")
                 std::string particleChara;
                 std::string motionPath;
                 auto slashPos = selectedSrc.find('/');

@@ -42,6 +42,17 @@
  else
    gtester = executable('gtester', 'gtester.c',
      install : true,
+@@ -554,7 +557,9 @@
+ gdb_conf = configuration_data()
+ gdb_conf.set('datadir', glib_datadir)
+ # This is also used in gobject/meson.build
+-if host_system != 'windows'
++# The install path embeds glib_libdir after share/gdb/auto-load. Emscripten
++# packages are installed by the Windows host and glib_libdir contains "C:".
++if host_system != 'windows' and host_system != 'emscripten'
+   gdb_install = true
+ else
+   # FIXME: Cannot install on Windows because the path will contain a drive
 --- a/gobject/meson.build	2025-12-08 23:46:06
 +++ b/gobject/meson.build	2026-06-08 06:59:53
 @@ -168,10 +168,12 @@

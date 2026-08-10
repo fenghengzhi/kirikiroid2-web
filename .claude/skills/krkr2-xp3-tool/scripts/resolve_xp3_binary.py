@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import platform
 import sys
 from pathlib import Path
@@ -53,10 +54,40 @@ def build_instructions(system_name: str, build_type: str, binary_path: Path) -> 
     lines = [
         "xp3 binary not found.",
         f"Expected: {binary_path}",
-        "Build it with:",
-        f'  cmake --preset "{preset}"',
-        f"  cmake --build {out_dir} --target xp3",
     ]
+    presets_path = REPO_ROOT / "CMakePresets.json"
+    try:
+        presets_document = json.loads(presets_path.read_text(encoding="utf-8"))
+        preset_names = {
+            item.get("name")
+            for item in presets_document.get("configurePresets", [])
+            if isinstance(item, dict)
+        }
+    except (OSError, json.JSONDecodeError) as error:
+        lines.extend(
+            [
+                f"Cannot read {presets_path}: {error}",
+                "Cannot provide a verified build command.",
+            ]
+        )
+        return "\n".join(lines)
+
+    if preset in preset_names:
+        lines.extend(
+            [
+                "Build it with:",
+                f'  cmake --preset "{preset}"',
+                f"  cmake --build {out_dir} --target xp3",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f'No configure preset named "{preset}" exists in CMakePresets.json.',
+                "Configure a verified native build with BUILD_TOOLS=ON, then build target xp3.",
+                "Do not substitute a Web, Android, or iOS preset.",
+            ]
+        )
     return "\n".join(lines)
 
 

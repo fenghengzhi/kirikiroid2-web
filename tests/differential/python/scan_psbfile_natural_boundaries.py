@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Read-only inventory of natural PSB/MDF value/resource boundaries.
 
-The walker follows the packed Array/Dictionary layouts used by Android
-libkrkr2.so's PSBValueDispatch and PSBRawNode implementations.  It never
-generates, patches, decrypts, or writes an input file.
+The walker follows the packed Array/Dictionary layouts jointly recovered from
+the four current ``reference/binaries`` implementations of PSBValueDispatch
+and PSBRawNode.  It never generates, patches, decrypts, or writes an input
+file.
 """
 
 from __future__ import annotations
@@ -105,8 +106,8 @@ class PackedArray:
         return cls(count, width, values, byte_size)
 
     def get(self, data: bytes, index: int) -> int:
-        # Android accepts widths 1..5.  Width 5 deliberately follows the
-        # AArch64 W-register shift modulo rule and therefore keeps one byte.
+        # All four references accept widths 1..5.  Width 5 deliberately
+        # follows the target register-shift modulo rule and keeps one byte.
         if not 1 <= self.width <= 5:
             return 0
         address = self.values + ((index * self.width) & 0xFFFFFFFF)

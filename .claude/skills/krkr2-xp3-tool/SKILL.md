@@ -14,17 +14,19 @@ description: 使用仓库内置的 `tools/xp3` 工具解包 XP3 归档，包括�
 
 ## 快速流程
 
+下文 `<python>` 表示当前机器可用的 Python 3 解释器：Windows 通常是 `python`，POSIX 环境通常是 `python3`。
+
 1. 先定位可执行文件：
 
 ```bash
-python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release
+<python> .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release
 ```
 
-2. 如果脚本提示未构建，按它给出的本机 CMake 命令先构建原生版本。不要使用 Web preset，Web preset 会关闭 `BUILD_TOOLS`。
+2. 如果脚本提示未构建：只有仓库确实存在匹配当前主机的 native preset 时，才按它给出的 CMake 命令构建；没有匹配 preset 时先报告配置缺口，不得编造 preset。不要使用 Web preset，Web preset 会关闭 `BUILD_TOOLS`。
 3. 解包单个归档：
 
 ```bash
-XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
+XP3_BIN="$(<python> .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
 "$XP3_BIN" -o /path/to/out /path/to/data.xp3
 ```
 

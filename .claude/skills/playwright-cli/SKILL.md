@@ -1,10 +1,12 @@
 ---
 name: playwright-cli
-description: Automate browser interactions, test web pages and work with Playwright tests.
+description: Optional Claude CLI workflow for environments where playwright-cli is explicitly installed. Codex tasks must use browser:control-in-app-browser instead; do not select this skill merely because browser automation is needed in Codex.
 allowed-tools: Bash(playwright-cli:*) Bash(npx:*) Bash(npm:*)
 ---
 
 # Browser Automation with playwright-cli
+
+> Scope: this is an optional CLI-specific reference. It is not the Codex browser workflow and does not imply that `playwright-cli` is installed. In Codex, use `browser:control-in-app-browser` and the project `.codex/skills/krkr2-debug/SKILL.md` instructions.
 
 ## Quick start
 
@@ -210,7 +212,7 @@ After each command, playwright-cli provides a snapshot of the current browser st
 - Page URL: https://example.com/
 - Page Title: Example Domain
 ### Snapshot
-[Snapshot](.playwright-cli/page-2026-02-14T19-22-42-679Z.yml)
+Snapshot: `.playwright-cli/page-2026-02-14T19-22-42-679Z.yml`
 ```
 
 You can also take a snapshot on demand using `playwright-cli snapshot` command. All the options below can be combined as needed.

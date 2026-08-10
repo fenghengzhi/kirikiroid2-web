@@ -4,9 +4,8 @@
 #include "StorageIntf.h"
 
 void initPsbFile() {
-    // sub_59849C @ 0x59849C is itself the pre-register callback: the
-    // function-local pointer is initialized once, then registered on every
-    // invocation.
+    // Every reference guard-initializes the function-local pointer once, while
+    // still registering the same media object on every invocation.
     static PSB::PSBMedia *psbMedia = new PSB::PSBMedia();
     TVPRegisterStorageMedia(psbMedia);
 }

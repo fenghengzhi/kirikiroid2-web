@@ -1,35 +1,37 @@
 ---
 name: krkr2-mtndump
-description: 使用 mtndump 工具把 KiriKiri2 的 .mtn / .psb motion 文件里所有 src/ 源贴图导出为独立的 PNG，并生成一份 TSV manifest（source、png、宽高、origin、BGRA 标志）。用于 KrKr2/E-mote/EmotePlayer 的离线资源提取、differential testing（对比 libkrkr2.so 与 Web port 的贴图输出）、调试 motionplayer/EmotePlayer 渲染路径，或者只是想知道一个 motion 到底引用了哪些 src/<group>/<name> 贴图。典型触发：用户提到 "mtndump"、"dump motion"、"dump .mtn"、"dump .psb"、"提取 motion 贴图"、"解包 e-mote"、"导出 PSB 图像"、"EmotePlayer 的 src"、"emote 贴图"、"motion snapshot"；或者在调试 motionplayer 渲染问题需要看原始贴图、做 KrKr2 差分测试需要对比贴图输出、提到 `tests/test_files/emote/*.psb` 或 seed `742877301` 时。
+description: 使用 mtndump 从 KiriKiri2 的 .mtn / .psb motion 文件导出 src/ 源贴图和 manifest.tsv。适用于查看 motion 引用的贴图、尺寸与锚点，排查源贴图问题，批量验证解密 seed，以及比较两个 mtndump 版本的导出结果。典型触发：用户提到 "mtndump"、"dump motion"、"dump .mtn"、"dump .psb"、"提取 motion 贴图"、"导出 PSB 图像"、"EmotePlayer 的 src"、"emote 贴图"，或提到 `tests/test_files/emote/*.psb`、seed `742877301`。
 ---
 
 # KrKr2 Motion PSB 贴图导出器（mtndump）
 
 ## 工具位置
 
-```
-tools/bin/mac/rel/mtndump
-```
+| 主机 | Release 产物 |
+|------|--------------|
+| macOS | `tools/bin/mac/rel/mtndump` |
+| Linux | `tools/bin/linux/rel/mtndump` |
+| Windows | `tools/bin/win/rel/mtndump.exe` |
+
+下文用 `<mtndump>`、`<xp3>` 和 `<temp-dir>` 表示当前主机二进制及临时目录，执行前必须替换为真实路径。
 
 ## 它做什么
 
 加载一个 `.mtn`（KiriKiri2 motion 文件）或 `.psb`（motion 类型的 PhyreEngine Script Binary），把 PSB 树里 `source/<group>/icon/<name>/pixel` 节点存放的每一张贴图解码后导出为 RGBA PNG。同时生成 `manifest.tsv`，记录每张贴图的元信息。
 
-PSB 加载直接走生产 `PSB::PSBFile::LoadStorage`，资源枚举和 octet 读取直接走 `PSBRawNode`。工具只保留一个 intrusive `PSBRawOwner`，不再创建 `DecodedPSBFile`、`MotionSnapshot`、`PSBDictionary` 或资源 side map。`source/<group>/icon/<name>` 导航及 atlas 裁剪对应 libkrkr2.so `sub_6948E8`。
-
 ## 前置条件
 
 ### 构建
 
-mac 构建：
+当前仓库已有 preset 的 macOS Release 构建：
 
 ```bash
-export VCPKG_ROOT=/Users/bytedance/vcpkg
-cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison
+test -n "$VCPKG_ROOT"  # 应由当前机器配置提供，不要写死个人目录
+cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON
 cmake --build out/macos/release --target mtndump
 ```
 
-构建产物 `tools/bin/mac/rel/mtndump`（约 49 MB，静态链接 krkr2plugin + motionplayer + core）。如果之前没构建过 `BUILD_TOOLS`，第一次 configure 可能要几分钟（vcpkg 会装 opencv4 等依赖）。
+macOS 构建产物为 `tools/bin/mac/rel/mtndump`。Linux/Windows 当前没有仓库内置 native preset；先提供经过验证的 native CMake 配置，再构建 `mtndump` target，禁止编造 preset 名。如果之前没构建过 `BUILD_TOOLS`，第一次 configure 可能要几分钟（vcpkg 会安装依赖）。
 
 ### 不支持的平台
 
@@ -39,17 +41,17 @@ cmake --build out/macos/release --target mtndump
 
 ```bash
 # 明文 PSB（无加密）
-tools/bin/mac/rel/mtndump -o /tmp/out file.psb
+<mtndump> -o <temp-dir>/out file.psb
 
 # 加密 emote PSB — 必须提供 seed
-tools/bin/mac/rel/mtndump -s 742877301 -o /tmp/out "e-mote3.0バニラパジャマa.psb"
+<mtndump> -s 742877301 -o <temp-dir>/out "e-mote3.0バニラパジャマa.psb"
 
 # 批量处理
-tools/bin/mac/rel/mtndump -s 742877301 -o /tmp/out emote1.psb emote2.psb emote3.psb
+<mtndump> -s 742877301 -o <temp-dir>/out emote1.psb emote2.psb emote3.psb
 
 # 从 XP3 解包再处理（典型工作流）
-tools/bin/mac/rel/xp3 -o /tmp/game game.xp3
-tools/bin/mac/rel/mtndump -s <seed> -o /tmp/motion_dump /tmp/game/**/*.mtn
+<xp3> -o <temp-dir>/game game.xp3
+<mtndump> -s <seed> -o <temp-dir>/motion_dump <temp-dir>/game/**/*.mtn
 ```
 
 ## 参数
@@ -98,9 +100,9 @@ tools/bin/mac/rel/mtndump -s <seed> -o /tmp/motion_dump /tmp/game/**/*.mtn
 | `png` | 相对 `manifest.tsv` 的 PNG 路径 |
 | `width` | 贴图宽（像素）|
 | `height` | 贴图高（像素）|
-| `origin_x` | 贴图锚点 X（从 icon 节点读取），libkrkr2.so 里用于 `origin = pos - matrix × (originX, originY)` |
+| `origin_x` | 贴图锚点 X |
 | `origin_y` | 贴图锚点 Y |
-| `decoded_bgra` | `1` 表示原始解码 buffer 是 BGRA 序（palette 路径），`0` 表示 RGBA 序。导出的 PNG 已经是 RGBA，这列只是 debug 标志 |
+| `decoded_bgra` | 解码过程使用的颜色顺序标志；`1` 表示 BGRA，`0` 表示 RGBA。导出的 PNG 始终为 RGBA |
 
 示例（`e-mote3.0バニラパジャマa.psb` 的前几行）：
 
@@ -139,39 +141,33 @@ src/face_nose/icon1	src/face_nose/icon1.png	44	50	22	25	0
 
 路径不存在，或给的是一个目录。mtndump 不会递归目录，需要自己展开 glob：`mtndump foo/**/*.psb`（需 shell 支持 `globstar`）。
 
-### `skip src/xxx/yyy: icon node not found in PSB tree`
+### `skip src/xxx/yyy: raw icon/pixel unavailable`
 
-PSB 的 `source/<group>/icon/<name>` 路径找不到对应条目。通常因为：
-- `src/<group>/<name>` 引用是 stale 的（PSB 里其它地方提到这个名字，但没有实际的 icon 节点）
-- 命名不一致（大小写、连字符）
-- motion 文件依赖外部 emote 资源（跨 motion 引用）——mtndump 不会跟着去加载别的文件
+工具发现了一个 `src/<group>/<name>` 引用，但无法导出对应贴图。常见原因：
 
-### `skip src/xxx/yyy: decoded pixel buffer empty`
-
-`findPSBResourceBySourceName` 找到了 resource blob，但 RL 解压或 palette 解码返回空。通常是 PSB 资源格式不对或数据损坏。
-
-### `skip src/xxx/yyy: decoded pixel buffer too small`
-
-解码出来的字节数小于 `width * height * 4`。resource blob 格式可能被误判（比如 palette 路径被当成 raw RGBA），或者 width/height 元数据错了。
+- PSB 中没有对应的 `source/<group>/icon/<name>` 条目
+- 贴图宽高、atlas 范围或 pixel 数据无效
+- motion 引用了其它文件中的外部资源；mtndump 不会自动加载依赖文件
+- PSB 数据损坏，或使用了错误的解密 seed
 
 ## 典型用例
 
 ### 1. 快速看一个 motion 引用了哪些 src
 
 ```bash
-mtndump -s 742877301 -o /tmp/dump emote.psb
-cut -f1 /tmp/dump/emote/manifest.tsv | head -50
+<mtndump> -s 742877301 -o <temp-dir>/dump emote.psb
+cut -f1 <temp-dir>/dump/emote/manifest.tsv | head -50
 ```
 
-### 2. Differential testing — 对比 libkrkr2.so 与 Web port 的贴图输出
+### 2. 比较两个 mtndump 版本的导出结果
 
-libkrkr2.so 的 `sub_6948E8`（PSB 贴图查找）和本地 `findPSBResourceBySourceName` 架构对齐。理论上两边导出同一个 .psb 应该得到 bit-identical 的 PNG。不一致就说明本地实现有偏差——典型表现是 BGRA/RGBA 通道顺序错、palette 解码结果不一致、RL 解压 size 错。
+分别使用基线版本和待验证版本的 `mtndump` 处理同一个输入，然后比较 PNG 与 manifest。这个流程适合检查代码修改是否改变了工具输出。
 
 ```bash
-# 两个 checkout 各自跑 mtndump，diff 结果
-mtndump -s 742877301 -o /tmp/libkrkr2_ref ref.psb
-mtndump -s 742877301 -o /tmp/port_out ref.psb
-diff -r /tmp/libkrkr2_ref/ref /tmp/port_out/ref
+# 两个 checkout 必须使用各自构建出的 mtndump
+<baseline-mtndump> -s 742877301 -o <temp-dir>/baseline_dump ref.psb
+<candidate-mtndump> -s 742877301 -o <temp-dir>/candidate_dump ref.psb
+diff -r <temp-dir>/baseline_dump/ref <temp-dir>/candidate_dump/ref
 ```
 
 ### 3. 调试 EmotePlayer 渲染异常时查源贴图
@@ -179,17 +175,17 @@ diff -r /tmp/libkrkr2_ref/ref /tmp/port_out/ref
 当发现某个 src（例如 `src/face_eye_hitomi_l`）在 Web 构建里渲染不对，想知道源贴图是什么样：
 
 ```bash
-mtndump -s <seed> -o /tmp/debug broken.psb
-open /tmp/debug/broken/src/face_eye_hitomi_l/icon1.png
+<mtndump> -s <seed> -o <temp-dir>/debug broken.psb
+<image-viewer> <temp-dir>/debug/broken/src/face_eye_hitomi_l/icon1.png
 ```
 
-然后用 Finder 预览对比渲染出来的异常画面。如果源贴图本身就是错的，说明 PSB 解析或 palette 解码有问题；如果源贴图正确但渲染出来的合成图错，说明问题在 Layer/DrawDevice 渲染路径。
+用当前主机的图片查看器预览并对比渲染出来的异常画面（macOS 可用 `open`，Linux 常用 `xdg-open`，Windows PowerShell 可用 `Start-Process`）。如果源贴图本身就是错的，说明 PSB 解析或 palette 解码有问题；如果源贴图正确但渲染出来的合成图错，说明问题在 Layer/DrawDevice 渲染路径。
 
 ### 4. 批量校验一批 emote 资产的 seed 是否正确
 
 ```bash
 for f in /path/to/assets/*.psb; do
-  tools/bin/mac/rel/mtndump -s 742877301 -o /tmp/check "$f" > /dev/null 2>&1 \
+  <mtndump> -s 742877301 -o <temp-dir>/check "$f" > /dev/null 2>&1 \
     && echo "OK  $f" \
     || echo "FAIL $f"
 done
@@ -202,20 +198,12 @@ FAIL 的文件要么 seed 不对，要么不是 motion 类型的 PSB。
 锚点 debug 时经常需要的数据：
 
 ```bash
-grep "src/face_nose/icon1" /tmp/dump/emote/manifest.tsv
+grep "src/face_nose/icon1" <temp-dir>/dump/emote/manifest.tsv
 # src/face_nose/icon1   src/face_nose/icon1.png   44   50   22   25   0
 #                                                 ^W   ^H   ^OX  ^OY  ^BGRA
 ```
 
-`origin_x=22, origin_y=25` 说明这张 44×50 的贴图锚点是正中心。libkrkr2.so 的贴图位置计算是 `screen_pos = layer_pos - transform × (origin_x, origin_y)`。
-
-## 技术细节
-
-- PSB 加载：`PSB::PSBFile::LoadStorage(path, rawOwnerFilter)`；seed filter 对齐 `sub_6863CC @ 0x6863CC`
-- 贴图查找：直接用 `PSBRawNode` 导航 `source/<group>/icon/<name>`，对齐 `sub_6948E8 @ 0x6948E8`
-- 像素布局：BGRA 路径（palette）用 `memcpy` 整行拷贝；RGBA 路径（其它）逐像素 swap R/B
-- PNG 写出：走 `tTVPBaseBitmap` + `TVPSaveAsPNG`（与游戏运行时同一条 PNG encoder）
-- manifest 的 `decoded_bgra` 只是 debug flag，PNG 写出时已经统一成 RGBA
+`origin_x=22, origin_y=25` 说明这张 44×50 的贴图锚点位于正中心。
 
 ## 不适用场景
 

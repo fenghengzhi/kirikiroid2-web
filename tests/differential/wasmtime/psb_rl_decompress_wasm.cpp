@@ -1,6 +1,9 @@
 // Standalone WASM harness for PSB RL decompression.
-// Function copied from motionplayer/PlayerInternal.h (lines 65-98).
-// Aligned to libkrkr2.so sub_695DE8 (0x695DE8).
+// Four-binary evidence covers two consumers: atlas materialization at
+// 6931C8/570F54/1000F4098/F0BE4 and ObjSource lazy materialization at
+// 6D7834/599A34/10012686C/125D4C. Android arm64 inlines both loops in each
+// consumer; Android armv7 inlines RL8 and shares 571DA4 for RL32; iOS shares
+// 1000F5510/F1F6A for RL8 and 1000F5474/F1F10 for RL32.
 //
 // @exports: _run_psb_rl_decompress,_get_compressed_ptr
 // @requires-lldb
@@ -13,8 +16,12 @@
 
 namespace {
 
-// Verbatim copy of motion::internal::decompressPsbRL from PlayerInternal.h.
-// PSB RL decompression — two variants based on libkrkr2.so sub_695DE8:
+// The reference source has two concrete loops selected by palette presence;
+// it does not have a generic `align` loop. Both loops stop only when the
+// compressed input pointer reaches its end. They deliberately have no output
+// bound checks and assume a valid stream that exactly fills the allocation.
+//
+// PSB RL decompression:
 //
 // align=1 (with palette): single-byte RLE, used with 8-bit indexed data
 //   RLE run:  count = (marker & 0x7F) + 3, repeat 1 byte
@@ -23,41 +30,48 @@ namespace {
 // align=4 (no palette, RGBA8): 4-byte RLE, used with 32-bit pixel data
 //   RLE run:  count = (marker & 0x7F) + 3, repeat 4 bytes
 //   Literal:  count = marker + 1, copy count*4 bytes
-//   (0x696D00-0x696D98 in libkrkr2.so)
-std::vector<std::uint8_t> decompressPsbRL(
-    const std::vector<std::uint8_t> &compressed,
-    size_t elementCount, int align = 4) {
-    const size_t outputSize = elementCount * static_cast<size_t>(align);
-    std::vector<std::uint8_t> output(outputSize, 0);
+void decodePsbRL8_guess(std::uint8_t *dst, const std::uint8_t *src,
+                        std::int32_t compressedSize) {
+    if(compressedSize < 1) return;
 
-    const auto *src = compressed.data();
-    const auto *srcEnd = src + compressed.size();
-    auto *dst = output.data();
-    const auto *dstEnd = dst + outputSize;
-
-    while(src < srcEnd && dst < dstEnd) {
-        const auto marker = *src++;
+    const auto *srcEnd = src + compressedSize;
+    do {
+        const std::uint8_t marker = *src++;
         if(marker & 0x80) {
-            // RLE run: repeat `align` bytes (count) times
             const size_t count = (marker & 0x7F) + 3;
-            if(src + align > srcEnd) break;
-            for(size_t i = 0; i < count && dst + align <= dstEnd; i++) {
-                std::memcpy(dst, src, align);
-                dst += align;
-            }
-            src += align;
+            std::memset(dst, *src++, count);
+            dst += count;
         } else {
-            // Literal: copy (marker+1)*align bytes verbatim
-            const size_t count = (marker + 1) * static_cast<size_t>(align);
-            if(src + count > srcEnd) break;
-            const size_t n = std::min(count,
-                static_cast<size_t>(dstEnd - dst));
-            std::memcpy(dst, src, n);
+            const size_t count = static_cast<size_t>(marker) + 1;
+            std::memcpy(dst, src, count);
             src += count;
-            dst += n;
+            dst += count;
         }
-    }
-    return output;
+    } while(src < srcEnd);
+}
+
+void decodePsbRL32_guess(std::uint32_t *dst, const std::uint8_t *src,
+                         std::int32_t compressedSize) {
+    if(compressedSize < 1) return;
+
+    const auto *srcEnd = src + compressedSize;
+    do {
+        const std::uint8_t marker = *src++;
+        if(marker & 0x80) {
+            size_t count = (marker & 0x7F) + 3;
+            std::uint32_t pixel;
+            std::memcpy(&pixel, src, sizeof(pixel));
+            src += sizeof(pixel);
+            std::fill_n(dst, count, pixel);
+            dst += count;
+        } else {
+            const size_t count = static_cast<size_t>(marker) + 1;
+            const size_t bytes = count * sizeof(*dst);
+            std::memcpy(dst, src, bytes);
+            src += bytes;
+            dst += count;
+        }
+    } while(src < srcEnd);
 }
 
 } // namespace
@@ -96,10 +110,16 @@ std::uint8_t *get_compressed_ptr() { return g_compressed; }
 void run_psb_rl_decompress(std::int32_t compressed_len,
                            std::int32_t element_count,
                            std::int32_t align) {
-    std::vector<std::uint8_t> input(g_compressed,
-                                    g_compressed + compressed_len);
-    auto output = decompressPsbRL(input,
-                                  static_cast<size_t>(element_count), align);
+    const size_t outputSize = static_cast<size_t>(element_count) *
+                              static_cast<size_t>(align);
+    std::vector<std::uint8_t> output(outputSize);
+    if(align == 1) {
+        decodePsbRL8_guess(output.data(), g_compressed, compressed_len);
+    } else {
+        decodePsbRL32_guess(
+            reinterpret_cast<std::uint32_t *>(output.data()),
+            g_compressed, compressed_len);
+    }
     g_decompressed_size = static_cast<std::int32_t>(output.size());
     const size_t copy_n = std::min(output.size(), sizeof(g_decompressed));
     std::memcpy(g_decompressed, output.data(), copy_n);

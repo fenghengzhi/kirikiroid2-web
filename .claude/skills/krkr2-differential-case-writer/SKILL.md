@@ -32,7 +32,7 @@ Treat the current scheme as a narrow contract:
 
 - Mirror every new case in `tests/differential/python/run_geometry_hit_test_wasmtime.py` under `EXPECTED_HITS`.
 - Encode intended behavior, not current wasm output.
-- For the current suite, circle and rect cases are stable. Quad cases currently expose a known mismatch; keep their expected values aligned with intended hit-test semantics instead of changing them to `false`.
+- Do not preserve pass/fail status as documentation. Build and run the current wasm suite before reporting which families pass. Regardless of the current result, keep expectations aligned with intended semantics instead of weakening them to match a local failure.
 
 ## Validate
 
@@ -40,8 +40,9 @@ Treat the current scheme as a narrow contract:
   - `cmake --preset "Web Debug Config"`
   - `cmake --build out/web/debug --target geometry_hit_test_wasm`
 - Run the wasmtime driver:
-  - `python3 -m pip install -r tests/differential/python/requirements-wasm.txt`
-  - `python3 tests/differential/python/run_geometry_hit_test_wasmtime.py --spec-dir tests/differential/specs/geometry_hit_test --wasm out/web/debug/tests/differential/wasm/geometry_hit_test.wasm`
+  - Use the current machine's Python 3 executable (`python` on Windows is common; `python3` on POSIX is common).
+  - `<python> -m pip install -r tests/differential/python/requirements-wasm.txt`
+  - `<python> tests/differential/python/run_geometry_hit_test_wasmtime.py --spec-dir tests/differential/specs/geometry_hit_test --wasm out/web/debug/tests/differential/wasm/geometry_hit_test.wasm`
 - If a new case requires changing the wasm ABI or `flatten_case`, call that out explicitly because it is outside normal case-authoring work.
 
 ## References

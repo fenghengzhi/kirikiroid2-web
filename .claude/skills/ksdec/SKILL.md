@@ -7,9 +7,13 @@ description: 使用 ksdec 工具解密 KiriKiri2 加密的剧情脚本文件（.
 
 ## 工具位置
 
-```
-tools/bin/mac/rel/ksdec
-```
+| 主机 | Release 产物 |
+|------|--------------|
+| macOS | `tools/bin/mac/rel/ksdec` |
+| Linux | `tools/bin/linux/rel/ksdec` |
+| Windows | `tools/bin/win/rel/ksdec.exe` |
+
+下文用 `<ksdec>`、`<xp3>` 和 `<temp-dir>` 表示当前主机二进制及临时目录，执行前必须替换为真实路径。
 
 ## 功能说明
 
@@ -28,16 +32,16 @@ tools/bin/mac/rel/ksdec
 
 ```bash
 # 解密输出到标准输出
-tools/bin/mac/rel/ksdec input.ks
+<ksdec> input.ks
 
 # 解密输出到文件
-tools/bin/mac/rel/ksdec -o output.txt input.ks
+<ksdec> -o output.txt input.ks
 
 # 批量解密多个文件
-tools/bin/mac/rel/ksdec file1.ks file2.ks file3.tjs
+<ksdec> file1.ks file2.ks file3.tjs
 
 # 解密目录下所有 .ks 文件
-find /tmp/gamedata -name "*.ks" -exec tools/bin/mac/rel/ksdec {} \;
+find <temp-dir>/gamedata -name "*.ks" -exec <ksdec> {} \;
 ```
 
 诊断信息（检测到的格式、字符数）输出到 stderr。解密后的文本输出到 stdout。
@@ -50,20 +54,22 @@ find /tmp/gamedata -name "*.ks" -exec tools/bin/mac/rel/ksdec {} \;
 
 ```bash
 # 完整流程示例
-tools/bin/mac/rel/xp3 -o /tmp/gamedata game.xp3
-tools/bin/mac/rel/ksdec /tmp/gamedata/data/sysscn/first.ks
+<xp3> -o <temp-dir>/gamedata game.xp3
+<ksdec> <temp-dir>/gamedata/data/sysscn/first.ks
 ```
 
 ## 从源码构建
 
 ```bash
 # 独立编译（无需 cmake）
-c++ -std=c++17 -O2 -lz -o tools/bin/mac/rel/ksdec tools/ksdec/main.cpp
+c++ -std=c++17 -O2 -lz -o <ksdec-output> tools/ksdec/main.cpp
 
-# 通过 cmake（与其他工具一起构建）
+# 通过当前仓库已有的 macOS native preset（与其他工具一起构建）
 cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON
 cmake --build out/macos/release --target ksdec
 ```
+
+Linux/Windows 当前没有仓库内置 native preset；先提供经过验证的 native CMake 配置，再构建 `ksdec` target，禁止编造 preset 名。
 
 ## 技术细节
 

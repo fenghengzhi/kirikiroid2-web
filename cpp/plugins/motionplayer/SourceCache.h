@@ -1,9 +1,6 @@
 //
-// Reverse-engineered from libkrkr2.so motionplayer.dll
-// Stub classes for TJS API compatibility
-//
-// Aligned to libkrkr2.so Motion_namespace_ncb_register (0x6D9B08):
-// Includes Point, Circle, Rect, Quad, LayerGetter stubs + SourceCache/ObjSource.
+// Reconstructed from the four current reference binaries. Exact current
+// mappings are kept beside the PSB-consuming members below.
 //
 #pragma once
 
@@ -32,18 +29,16 @@ namespace motion {
         struct PlayerRuntime;
     }
 
-    // Aligned to libkrkr2.so SourceCache:
-    //   0x6A78F4 constructor stores owner/primaryLayer/bufLayer/list state.
-    //   0x6A7BA8 loadSource scans a list cache before materializing a Layer.
-    //   0x6A8438 clearCache dispatch-invalidates cached Layers and clears list state.
-    //   0x6A84FC bufLayer returns the cached bufLayer variant.
+    // Current SourceCache registrars are sub_6A5988, sub_57B0DC,
+    // sub_100100F90, and sub_FE12A. Their loadSource/clearCache/bufLayer
+    // callbacks are 6A4F88/6A5818/6A58DC, 57ACC8/57B018/57B060,
+    // 1001009AC/100100F10/100100F84, and FDB50/FE0D4/FE11A.
     class SourceCache {
     public:
         struct Entry {
-            // SourceCache_loadSource @0x6A7BA8 and the std::list node copier
-            // @0x6EAC60 establish this exact source-level payload order.  ARM64
-            // byte offsets are ABI evidence only and intentionally stay out of
-            // the compiled type.
+            // The four current loadSource implementations and their list-node
+            // copy paths establish this source-level payload order. ABI byte
+            // offsets intentionally stay out of the compiled type.
             tTJSVariant key;
             tTJSVariant layer;
             ttstr src;
@@ -67,7 +62,7 @@ namespace motion {
         iTVPTexture2D *loadRenderSourceTextureFromItemLike_0x6C1B70(
             Player &player,
             detail::PreparedRenderItem &item);
-        iTVPTexture2D *loadRenderSourceTextureForItemLike_0x6F1060(
+        iTVPTexture2D *loadRenderSourceTextureForItem_guess(
             Player &player,
             detail::PreparedRenderItem &item);
         void clearCache();
@@ -76,8 +71,8 @@ namespace motion {
         std::size_t size() const;
 
     private:
-        void bakeSourceLike_0x6A6BE0(iTJSDispatch2 *source, Entry &entry);
-        void trimCacheBeforeInsertLike_0x6A6B08();
+        void bakeSource_guess(iTJSDispatch2 *source, Entry &entry);
+        void trimCacheBeforeInsert_guess();
         tTJSVariant loadRawSourceVariant(const Player *player,
                                          const ttstr &name,
                                          std::string &resolvedKey) const;
@@ -90,20 +85,24 @@ namespace motion {
         std::list<Entry> _entries;
     };
 
-    // Aligned to libkrkr2.so ObjSource (ncb_registerMembers @0x69CCB8). The
-    // binary ObjSource is a thin raw-node facade: operator new(0x18) holds a
-    // PSBRawNode owner/node pair in qword[0..1] and a lazy texture in qword[2].
+    // The four current references reconstruct ObjSource as a thin raw-node
+    // facade: a PSBRawNode owner/node pair followed by a lazy texture. Its
+    // allocation is 0x18 bytes in both 64-bit ABIs and 0x0c in both 32-bit
+    // ABIs; those sizes are compiler layout evidence, not source constants.
     // Every member navigates the raw node directly. The former
     // _key/_src/_blendMode/_color fields were a port invention. Its actual
     // fields are precisely the retained raw owner/node pair plus lazy texture;
     // MASTER's older "ObjSource missing 6 members" verdict was also inverted.
     //
-    // Now constructed by ResourceManager::findSource (ResourceManager.cpp,
-    // aligned with the binary RM findSource @0x6AAB3C): the "src" branch
-    // navigates module["source"][group]["icon"][icon] and wraps the resulting
-    // sub-dict in this facade via ncbInstanceAdaptor<ObjSource>::CreateAdaptor
-    // (mirrors operator new(0x18) + sub_6EC124). Player_findSource @0x6948E8
-    // and the production 0x6C1B70 -> 0x6A7BA8 route consume this same facade.
+    // ResourceManager::findSource constructs it at
+    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6A7F1C,
+    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_57BDE0,
+    // Kirikiroid2_1.3.9_iOS_arm64!sub_100102594, and
+    // Kirikiroid2_1.3.9_iOS_armv7!sub_FF890. The "src" branch navigates
+    // module["source"][group]["icon"][icon] and wraps the resulting sub-dict
+    // through ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
+    // Player::findSourceForNode_guess and the production load-source route
+    // consume this same facade.
     // The inherited NCB loadSource has the exact `(source,descriptor)` boundary;
     // the separate Player by-name helper is Web compatibility code and does not
     // create a second cache topology. There is no decoded MotionSnapshot image
@@ -117,15 +116,16 @@ namespace motion {
         ObjSource(const ObjSource &) = delete;
         ObjSource &operator=(const ObjSource &) = delete;
 
-        // originX/originY @0x69D014/0x69D0D8 have no category gate: both use
-        // the strict raw dictionary getter followed by GetInt.
+        // The four originX/originY wrappers have no category gate: both use
+        // the strict raw dictionary getter followed by GetInt. Their current
+        // mapping is recorded in the psbfile four-binary audit.
         tjs_int getOriginX() const {
             return _source.GetDictionaryValueStrict("originX").GetInt();
         }
         tjs_int getOriginY() const {
             return _source.GetDictionaryValueStrict("originY").GetInt();
         }
-        // width/height @0x69D19C/0x69D27C return 32 only when the raw node's
+        // The four width/height wrappers return 32 only when the raw node's
         // category is not dictionary; a missing member on a dictionary throws.
         tjs_int getWidth() const {
             return _source.GetTypeCategory() == 7
@@ -137,22 +137,21 @@ namespace motion {
                 ? _source.GetDictionaryValueStrict("height").GetInt()
                 : 32;
         }
-        // clip @0x69D35C builds a fresh property object from
-        // dict["clip"].{left,top,right,bottom}. drawLayer @0x69D6D8 lazily
-        // materialises the dict's pixel/palette/RL data through
-        // ObjSource_ensureTexture @0x6DA454, assigns that retained texture to
-        // the target Layer and resizes it.
+        // The four clip wrappers build a fresh property object from
+        // dict["clip"].{left,top,right,bottom}. drawLayer lazily materialises
+        // pixel/palette/RL data, assigns the retained texture to the target
+        // Layer and resizes it; the exact ensureTexture source name is stripped.
         tTJSVariant getClip() const;
         void drawLayer(tTJSVariant target);
 
     private:
-        void ensureTextureLike_0x6DA454();
+        void ensureTexture_guess();
 
         PSB::PSBRawNode _source; // qword[0..1]: retained owner + raw node
         iTVPTexture2D *_texture = nullptr; // qword[2]: retained lazy texture
     };
 
-    // Aligned to libkrkr2.so Motion.Point (0x690FBC)
+    // Motion.Point compatibility facade.
     struct Point {
         int type = 0;
         double x = 0, y = 0;
@@ -163,7 +162,7 @@ namespace motion {
         bool contains(double, double) { return false; }
     };
 
-    // Aligned to libkrkr2.so Motion.Circle (0x691300)
+    // Motion.Circle compatibility facade.
     struct Circle {
         int type = 1;
         double x = 0, y = 0, r = 0;
@@ -178,7 +177,7 @@ namespace motion {
         }
     };
 
-    // Aligned to libkrkr2.so Motion.Rect (0x6916A4)
+    // Motion.Rect compatibility facade.
     struct Rect {
         int type = 2;
         double l = 0, t = 0, w = 0, h = 0;
@@ -193,7 +192,7 @@ namespace motion {
         }
     };
 
-    // Aligned to libkrkr2.so Motion.Quad (0x691AD0)
+    // Motion.Quad compatibility facade.
     struct Quad {
         int type = 3;
         // 4 corners × 2 floats = 8 values
@@ -204,8 +203,8 @@ namespace motion {
         bool contains(double, double) { return false; } // stub
     };
 
-    // Aligned to libkrkr2.so Motion.LayerGetter (0x69B350): the native object
-    // is a non-owning one-pointer facade over a live MotionNode.  Every one of
+    // Motion.LayerGetter is a non-owning one-pointer facade over a live
+    // MotionNode. Every one of
     // its 29 read-only properties dereferences that node when the property is
     // read; it does not snapshot or retain any node field.
     class LayerGetter {

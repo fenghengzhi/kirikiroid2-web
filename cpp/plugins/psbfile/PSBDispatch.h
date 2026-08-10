@@ -7,13 +7,12 @@
 #include "tjsNative.h"
 
 namespace PSB {
-    // Raw collection dispatch reconstructed from sub_597AD4 @ 0x597AD4.
-    // Its constructor has two distinct source arguments: X1 refers to the
-    // one-pointer PSBFile holder and X2 supplies the node. Android exposes the
-    // scalarized slot. Same-lineage iOS independently preserves one standalone
-    // holder caller and two raw-node-first-subobject callers with a separate
-    // node argument. A single PSBRawNode parameter remains ruled out.
-    // valid_ is the independent byte toggled by sub_596F0C @ 0x596F0C.
+    // The four reference constructors receive a one-pointer PSBFile holder
+    // and a separate node pointer; every ABI preserves that factorization.
+    // The per-binary function map belongs in the four-binary audit rather
+    // than as unqualified addresses in compiled source comments.
+    // valid_ is an independent byte, not part of the raw-node view. The four
+    // member Invalidate functions clear only this byte and retain owner/node.
     class PSBValueDispatch final : public iTJSDispatch2,
                                    public iTJSNativeInstance {
     public:
@@ -23,10 +22,11 @@ namespace PSB {
 
         tjs_uint Release() override;
 
-        // Unsupported one-instruction vtable entries in
-        // 0x596D78..0x597A20 return TJS_E_NOTIMPL unconditionally.  Construct
-        // returns TJS_S_OK, while the native Invalidate/Destruct slots are
-        // nullsubs; all differ from tTJSDispatch's member-sensitive defaults.
+        // Unsupported one-instruction vtable entries return TJS_E_NOTIMPL
+        // unconditionally in all four references. Construct returns TJS_S_OK,
+        // while the paired main/secondary native Invalidate and Destruct
+        // entries are nullsubs; all differ from tTJSDispatch's
+        // member-sensitive defaults.
         tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
                            tTJSVariant *, tjs_int, tTJSVariant **,
                            iTJSDispatch2 *) override;
@@ -118,15 +118,15 @@ namespace PSB {
     private:
         ~PSBValueDispatch() = default;
 
-        tTJSVariant *CreateVariant_guess(tTJSVariant *result,
-                                         const std::uint8_t *node);
+        tTJSVariant *CreateVariant(tTJSVariant *result,
+                                   const std::uint8_t *node);
         void decodeName_guess(std::string &name,
-                              std::uint32_t nameIndex) const; // 0x5975C0
+                              std::uint32_t nameIndex) const;
         [[nodiscard]] const char *
-        getString_guess(const std::uint8_t *node) const; // 0x596BC4
+        getString_guess(const std::uint8_t *node) const;
         [[nodiscard]] const std::uint8_t *
         getResource_guess(const std::uint8_t *node,
-                          std::uint32_t &size) const; // 0x596C70
+                          std::uint32_t &size) const;
 
         tjs_uint refCount_{ 1 };
         PSBRawNode value_;

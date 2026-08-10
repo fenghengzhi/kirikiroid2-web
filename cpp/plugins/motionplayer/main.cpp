@@ -1,6 +1,7 @@
 //
 // Created by LiDon on 2025/9/13.
-// Reverse-engineered from libkrkr2.so emoteplayer.dll + motionplayer.dll
+// Reconstructed from the four current reference/binaries targets; the shared
+// native image contains the emoteplayer.dll and motionplayer.dll NCB modules.
 //
 #include <spdlog/spdlog.h>
 #include "tjs.h"
@@ -559,10 +560,10 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 
 NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_CONSTRUCTOR((tTJSVariant, tjs_int));
-    // M9 brick B: expose the binary ResourceManager's 12 members in the
-    // ncb_registerMembers @0x6AB8BC registration order. The two
-    // setEmotePSBDecrypt* methods are injected later by emoteplayer_entry
-    // @0x682528, rather than belonging to this 12-member table.
+    // Expose the binary ResourceManager's 12 members in the order shared by
+    // 6A8C9C/57C3A8/100102E88/1002FC (Android arm64/armv7, iOS arm64/armv7).
+    // The two setEmotePSBDecrypt* methods are injected later by the separate
+    // emoteplayer registrars, rather than belonging to this member table.
     NCB_METHOD(loadSource);
     NCB_METHOD(clearCache);
     NCB_PROPERTY_RO(bufLayer, getBufLayer);
@@ -698,19 +699,18 @@ static void motion_doAlphaMaskOperation(iTJSDispatch2 *dstLayer,
 static bool motion_getD3DAvailable() { return true; }
 
 // ============================================================
-// emoteplayer.dll module — separate from motionplayer.dll
-// In libkrkr2.so, emoteplayer.dll is an independent module whose
-// entry callback (sub_682528) loads motionplayer.dll as a dependency,
-// then registers EmotePlayer into the Motion namespace.
+// emoteplayer.dll module — separate from motionplayer.dll. The four current
+// module registrars are 67F908/5623EC/1001B65DC/1B645C; each loads the
+// motionplayer module as a dependency, then registers EmotePlayer and the two
+// PSB decrypt setters into the Motion namespace.
 // ============================================================
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("emoteplayer.dll")
 
 static void EmotePlayerPreRegist() {
-    // emoteplayer_entry @0x682528 is the module's sole registration callback.
-    // motionplayer_ncb_register @0x6D9B08 deliberately does not contain
-    // EmotePlayer; this entry creates the full class and attaches it only when
-    // emoteplayer.dll is loaded.
+    // The four emoteplayer registrars above form the separate registration
+    // path. The corresponding motionplayer namespace registrars deliberately
+    // do not contain EmotePlayer; it is attached only when this module loads.
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
 
     iTJSDispatch2 *global = TVPGetScriptDispatch();
@@ -718,9 +718,9 @@ static void EmotePlayerPreRegist() {
     global->PropGet(0, TJS_W("Motion"), nullptr, &value, global);
     iTJSDispatch2 *motion = value.AsObjectNoAddRef();
 
-    // EmotePlayer_loadClass @0x685BC0 creates finalize + the complete member
-    // table. Its boolean result is ignored by emoteplayer_entry before the
-    // class object is registered on Motion with flags 0x10000.
+    // Each current registrar creates the complete EmotePlayer class before
+    // registering its class object on Motion with flags 0x10000; the class
+    // setup result is not used by the surrounding registration path.
     ncbSubClassItem<EmotePlayer>::Setup(TJS_W("EmotePlayer"), true);
     TJSNativeClassRegisterNCM(
         static_cast<tTJSNativeClass *>(motion), TJS_W("EmotePlayer"),
@@ -749,8 +749,9 @@ static void EmotePlayerPreRegist() {
                      TJS_W("setEmotePSBDecryptFunc"), nullptr,
                      &methodValue, manager);
 
-    // emoteplayer_entry has no explicit Release for the AddRef returned by
-    // TVPGetScriptDispatch; only methodValue and value are destructed.
+    // All four registrar bodies have no explicit Release for the AddRef
+    // returned by TVPGetScriptDispatch; only methodValue and value are
+    // destructed.
 }
 NCB_PRE_REGIST_CALLBACK(EmotePlayerPreRegist);
 

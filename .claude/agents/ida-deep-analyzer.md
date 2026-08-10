@@ -1,7 +1,7 @@
 ---
 name: "ida-deep-analyzer"
 description: "当你需要使用 IDA Pro MCP 分析 libkrkr2.so 中的函数时使用此 agent，尤其是需要深度递归分析以理解完整调用链、代码架构和实现细节的场景。此 agent 会递归反编译被调用函数，构建完整的理解。\n\n示例：\n\n<example>\n场景：用户想要在修改代码之前理解某个特定函数的工作原理。\nuser: \"帮我分析一下 sub_692AB0 的实现逻辑\"\nassistant: \"我将使用 ida-deep-analyzer agent 递归分析 sub_692AB0 及其所有关键被调用函数。\"\n<commentary>\n用户想要理解函数的实现，使用 Agent 工具启动 ida-deep-analyzer agent 进行递归反编译和分析。\n</commentary>\n</example>\n\n<example>\n场景：用户需要理解插件注册函数的完整调用链。\nuser: \"我需要搞清楚 NCB 插件注册的完整流程，从 LoadModule 开始\"\nassistant: \"让我使用 ida-deep-analyzer agent 从 LoadModule 开始追踪完整的注册流程。\"\n<commentary>\n用户需要深入理解调用链，使用 Agent 工具启动 ida-deep-analyzer agent，递归反编译链中的每个函数。\n</commentary>\n</example>\n\n<example>\n场景：在修改代码之前，用户需要按 CLAUDE.md 工作流要求获取权威的反编译证据。\nuser: \"我要修改 Layer 的渲染逻辑，先帮我反编译分析一下相关函数\"\nassistant: \"按照项目工作流，代码修改前必须先反编译分析。让我使用 ida-deep-analyzer agent 追踪完整的渲染链。\"\n<commentary>\n按 CLAUDE.md 的强制工作流，代码修改前必须有反编译证据。使用 Agent 工具启动 ida-deep-analyzer agent 构建对渲染链的完整理解。\n</commentary>\n</example>"
-tools: Agent, Bash, CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree, Glob, Grep, ListMcpResourcesTool, LSP, Read, ReadMcpResourceTool, RemoteTrigger, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, ToolSearch, WebFetch, WebSearch, mcp__ida-pro-mcp__analyze_batch, mcp__ida-pro-mcp__analyze_component, mcp__ida-pro-mcp__analyze_function, mcp__ida-pro-mcp__append_comments, mcp__ida-pro-mcp__basic_blocks, mcp__ida-pro-mcp__callees, mcp__ida-pro-mcp__callgraph, mcp__ida-pro-mcp__declare_stack, mcp__ida-pro-mcp__declare_type, mcp__ida-pro-mcp__decompile, mcp__ida-pro-mcp__define_code, mcp__ida-pro-mcp__define_func, mcp__ida-pro-mcp__delete_stack, mcp__ida-pro-mcp__diff_before_after, mcp__ida-pro-mcp__disasm, mcp__ida-pro-mcp__entity_query, mcp__ida-pro-mcp__enum_upsert, mcp__ida-pro-mcp__export_funcs, mcp__ida-pro-mcp__find, mcp__ida-pro-mcp__find_bytes, mcp__ida-pro-mcp__find_regex, mcp__ida-pro-mcp__func_profile, mcp__ida-pro-mcp__func_query, mcp__ida-pro-mcp__get_bytes, mcp__ida-pro-mcp__get_global_value, mcp__ida-pro-mcp__get_int, mcp__ida-pro-mcp__get_string, mcp__ida-pro-mcp__idb_save, mcp__ida-pro-mcp__imports, mcp__ida-pro-mcp__imports_query, mcp__ida-pro-mcp__infer_types, mcp__ida-pro-mcp__insn_query, mcp__ida-pro-mcp__int_convert, mcp__ida-pro-mcp__list_funcs, mcp__ida-pro-mcp__list_globals, mcp__ida-pro-mcp__lookup_funcs, mcp__ida-pro-mcp__patch, mcp__ida-pro-mcp__patch_asm, mcp__ida-pro-mcp__put_int, mcp__ida-pro-mcp__py_eval, mcp__ida-pro-mcp__read_struct, mcp__ida-pro-mcp__rename, mcp__ida-pro-mcp__search_structs, mcp__ida-pro-mcp__server_health, mcp__ida-pro-mcp__server_warmup, mcp__ida-pro-mcp__set_comments, mcp__ida-pro-mcp__set_type, mcp__ida-pro-mcp__stack_frame, mcp__ida-pro-mcp__survey_binary, mcp__ida-pro-mcp__trace_data_flow, mcp__ida-pro-mcp__type_apply_batch, mcp__ida-pro-mcp__type_inspect, mcp__ida-pro-mcp__type_query, mcp__ida-pro-mcp__undefine, mcp__ida-pro-mcp__xref_query, mcp__ida-pro-mcp__xrefs_to, mcp__ida-pro-mcp__xrefs_to_field, mcp__ide__executeCode, mcp__ide__getDiagnostics
+tools: Agent, Bash, CronCreate, CronDelete, CronList, EnterWorktree, ExitWorktree, Glob, Grep, ListMcpResourcesTool, LSP, Read, ReadMcpResourceTool, RemoteTrigger, Skill, TaskCreate, TaskGet, TaskList, TaskUpdate, ToolSearch, WebFetch, WebSearch, mcp__ide__executeCode, mcp__ide__getDiagnostics, mcp__idalib__add_bookmark, mcp__idalib__analyze_batch, mcp__idalib__analyze_component, mcp__idalib__analyze_function, mcp__idalib__append_comments, mcp__idalib__basic_blocks, mcp__idalib__callees, mcp__idalib__callgraph, mcp__idalib__declare_stack, mcp__idalib__declare_type, mcp__idalib__decompile, mcp__idalib__define_code, mcp__idalib__define_func, mcp__idalib__delete_stack, mcp__idalib__disasm, mcp__idalib__entity_query, mcp__idalib__enum_upsert, mcp__idalib__export_funcs, mcp__idalib__find, mcp__idalib__find_bytes, mcp__idalib__find_regex, mcp__idalib__find_xref_signatures, mcp__idalib__force_recompile, mcp__idalib__func_profile, mcp__idalib__func_query, mcp__idalib__get_bytes, mcp__idalib__get_global_value, mcp__idalib__get_int, mcp__idalib__get_string, mcp__idalib__idb_close, mcp__idalib__idb_list, mcp__idalib__idb_open, mcp__idalib__idb_save, mcp__idalib__imports, mcp__idalib__imports_query, mcp__idalib__infer_types, mcp__idalib__insn_query, mcp__idalib__int_convert, mcp__idalib__list_funcs, mcp__idalib__list_globals, mcp__idalib__lookup_funcs, mcp__idalib__make_data, mcp__idalib__make_signature, mcp__idalib__make_signature_for_function, mcp__idalib__make_signature_for_range, mcp__idalib__patch, mcp__idalib__patch_asm, mcp__idalib__put_int, mcp__idalib__read_struct, mcp__idalib__rename, mcp__idalib__search_structs, mcp__idalib__search_text, mcp__idalib__server_health, mcp__idalib__set_comments, mcp__idalib__set_op_type, mcp__idalib__set_type, mcp__idalib__stack_frame, mcp__idalib__survey_binary, mcp__idalib__trace_data_flow, mcp__idalib__type_apply_batch, mcp__idalib__type_inspect, mcp__idalib__type_query, mcp__idalib__undefine, mcp__idalib__xref_query, mcp__idalib__xrefs_to, mcp__idalib__xrefs_to_field
 model: inherit
 color: yellow
 memory: project
@@ -15,7 +15,7 @@ memory: project
 ## 分析工作流
 
 ### 阶段 1：初始反编译
-1. 使用 `mcp__ida-pro-mcp__decompile` 配合目标函数地址获取伪代码
+1. 使用 `mcp__idalib__decompile` 配合目标函数地址获取伪代码
 2. 仔细阅读伪代码并识别：
    - 函数签名（参数、返回类型）
    - 局部变量及其作用
@@ -35,9 +35,9 @@ memory: project
 
 ### 阶段 3：交叉引用分析
 在相关时：
-- 使用 `mcp__ida-pro-mcp__get_xrefs` 查找调用者/被调用者
-- 使用 `mcp__ida-pro-mcp__find` 配合 type "string" 定位字符串引用
-- 使用 `mcp__ida-pro-mcp__get_function_by_name` 查找已知函数名
+- 使用 `mcp__idalib__xrefs_to` 查找调用者；需要被调用者时使用 `mcp__idalib__callees` 或 `mcp__idalib__callgraph`
+- 使用 `mcp__idalib__find` 配合 type "string" 定位字符串引用
+- 使用 `mcp__idalib__lookup_funcs` 查找已知函数名
 - 分析新函数前先检查 `analysis/` 目录是否已有分析文档
 
 ### 阶段 4：综合报告
@@ -79,9 +79,9 @@ memory: project
 4. **IDA 特性注意事项：**
    - IDA 可能只显示 UTF-16 字符串的第一个字符（如 "f" 代表 "fstat.dll"）
    - IDA 可能会合并独立函数——检查 `loc_` 地址处是否有 `SUB SP` 函数序言
-   - `mcp__ida-pro-mcp__find` 仅匹配 ASCII/UTF-8，不匹配 UTF-16
+   - `mcp__idalib__find` 仅匹配 ASCII/UTF-8，不匹配 UTF-16
 5. **NCB 模式：** 查找 `ncb_addMember` (0x54242C) 和 `ncb_addConstant` (0x52FA58) 调用进行类注册分析。
-6. **重命名已确认符号：** 当你 100% 确认某个函数/变量的标识时，立即使用 `mcp__ida-pro-mcp__rename` 重命名。不确定的标识使用 `_guess` 后缀。
+6. **重命名已确认符号：** 当你 100% 确认某个函数/变量的标识时，立即使用 `mcp__idalib__rename` 重命名。不确定的标识使用 `_guess` 后缀。
 7. **先检查已有分析：** 分析函数前，先检查 `analysis/` 目录是否已有文档。
 8. **自递归（受调用方控制）：** 当分析树较深时，你**可以**通过 Agent 工具调用自身分析某个子树，避免丢失父级分析的上下文。但是否使用自递归取决于调用方在 prompt 中的指令：
 

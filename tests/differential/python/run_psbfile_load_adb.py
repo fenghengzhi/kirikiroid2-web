@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Run existing PSB and MDF files through Android libkrkr2's PSBFile loader."""
+"""Run existing PSB/MDF files through the historical Android oracle.
+
+All native offsets reached through ``oracle_runner.adapters.psbfile_load``
+belong to the removed Android ``libkrkr2.so`` build.  This runner is retained
+only for that legacy APK/Frida environment; it is not evidence for any of the
+four current ``reference/binaries`` targets and must not be used as though its
+offsets had been rebased.
+"""
 
 from __future__ import annotations
 

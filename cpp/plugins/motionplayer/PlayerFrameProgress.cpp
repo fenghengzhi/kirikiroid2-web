@@ -613,7 +613,7 @@ namespace {
                 hm3RestoreValueToNodeLike_0x6997F0(node, v);
                 // 0x6b8588 findSource gate (nodeType==0 && active slot.done==0).
                 if(node.nodeType == 0 && !node.activeSlot().done) {
-                    findSourceForNodeLike_0x6948E8(node);
+                    findSourceForNode_guess(node);
                 }
                 // 0x6b8644 erase the matched HM3 entry (--HM3.count).
                 _perNodeLayerStateMap.erase(it);

@@ -502,7 +502,7 @@ namespace motion {
         // a var value into HM2 (_evalResultValues, always) and, when the key
         // splits on "::"/"/", HM1 (_evalCascadeMap[joined].writeVal). Called by
         // interpolateVarTrackValues per item. Dispatch/animator side-effects
-        // (sub_697D34, RenderItem updates) have no getVariable consumer → DEFERRED.
+        // (split helper, RenderItem updates) have no getVariable consumer → DEFERRED.
         void bindParameterValueLike_0x6C4668(const ttstr &key, double value);
         // libkrkr2.so Player_isLabelInBindScopeList @0x6CD16C: scans the
         // var-track deque (_variableLabelScopes), true if any item's cascadeKey
@@ -1034,14 +1034,16 @@ namespace motion {
         // value+44 src is deliberately lifetime-only, matching the native body.
         void hm3RestoreValueToNodeLike_0x6997F0(
             detail::MotionNode &node, const detail::PerNodeLayerState &v) const;
-        // Motion_Player_findSource @0x6948E8. Reads the active clip slot's
-        // separate src/icon values and rewrites node.source. The module owns
-        // group-atlas textures; nodes borrow them.
-        void findSourceForNodeLike_0x6948E8(detail::MotionNode &node);
-        // sub_695DE8 @0x695DE8 is one shared out-of-line KRKR atlas resolver.
-        // Both findSource above and the render-time texture getter
-        // sub_6F1060 call it with the persistent node SourceState.
-        static bool loadKrkrAtlasSourceLike_0x695DE8(
+        // Four-reference mapping: Android arm64 sub_691CC8, Android armv7
+        // sub_570500, iOS arm64 sub_1000F316C, iOS armv7 sub_EF97C. Reads the
+        // active clip slot's separate src/icon values and rewrites node.source.
+        // The module owns group-atlas textures; nodes borrow them.
+        void findSourceForNode_guess(detail::MotionNode &node);
+        // Shared KRKR atlas resolver: Android arm64 sub_6931C8, Android armv7
+        // sub_570F54, iOS arm64 sub_1000F4098, iOS armv7 sub_F0BE4. Both the
+        // find-source path above and the render-time texture getter call it
+        // with the persistent node SourceState.
+        static bool loadKrkrAtlasSource_guess(
             detail::MotionNode::SourceState &source,
             ResourceManager *resourceManager,
             const ttstr &moduleKey);

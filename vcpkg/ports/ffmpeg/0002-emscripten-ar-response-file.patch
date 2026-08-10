@@ -1,0 +1,18 @@
+diff --git a/library.mak b/library.mak
+index 36cd2f3..9e5514a 100644
+--- a/library.mak
++++ b/library.mak
+@@ -18,4 +18,10 @@ $(TESTOBJS) $(TESTOBJS:.o=.i): CFLAGS += -Umain
+ $(SUBDIR)$(LIBNAME): $(OBJS)
+-	$(RM) $@
+-	$(AR) $(ARFLAGS) $(AR_O) $^
+-	$(RANLIB) $@
++	$(RM) $@
++ifneq ($(findstring emar,$(AR)),)
++	$(file >$@.rsp,$^)
++	$(AR) $(ARFLAGS) $(AR_O) @$@.rsp
++	$(RM) $@.rsp
++else
++	$(AR) $(ARFLAGS) $(AR_O) $^
++endif
++	$(RANLIB) $@

@@ -1,10 +1,12 @@
 # XP3 参考
 
+文中的 `<python>` 表示当前机器可用的 Python 3 解释器；执行前替换为 `python` 或 `python3`。
+
 ## 构建
 
 `tools/xp3` 只会在原生平台构建中启用。仓库根 `CMakeLists.txt` 里，`BUILD_TOOLS` 仅在非 Web / Android / iOS 构建时生效，因此不要用 Web preset 构建它。
 
-常用构建命令：
+当前仓库提供的 native preset：
 
 ### macOS Release
 
@@ -13,21 +15,9 @@ cmake --preset "MacOS Release Config"
 cmake --build out/macos/release --target xp3
 ```
 
-### Linux Release
+当前 `CMakePresets.json` 没有 Linux/Windows native preset。脚本在这些主机上只能报告缺口和预期二进制位置，不能给出不存在的 preset 命令。需要 Linux/Windows 原生构建时，先添加或选择经过验证的 native CMake 配置，再构建 `xp3` target；不要使用 Web / Android / iOS preset。
 
-```bash
-cmake --preset "Linux Release Config"
-cmake --build out/linux/release --target xp3
-```
-
-### Windows Release
-
-```bash
-cmake --preset "Windows Release Config"
-cmake --build out/windows/release --target xp3
-```
-
-调试版把 `Release` 改成 `Debug` 即可，脚本 `scripts/resolve_xp3_binary.py --build-type debug` 也会给出对应提示。
+macOS 调试版可使用现存的 `MacOS Debug Config`。`scripts/resolve_xp3_binary.py --build-type debug` 会先核对目标 preset 是否真实存在。
 
 ## 二进制路径
 
@@ -64,7 +54,7 @@ xp3 [--help] [--version] [--output VAR] [--xp3filter VAR] files...
 ### 解包单个 XP3
 
 ```bash
-XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
+XP3_BIN="$(<python> .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
 "$XP3_BIN" -o ./out ./game/data.xp3
 ```
 
@@ -73,7 +63,7 @@ XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py -
 ### 一次解包多个 XP3
 
 ```bash
-XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
+XP3_BIN="$(<python> .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
 "$XP3_BIN" -o ./out ./game/data.xp3 ./game/patch.xp3
 ```
 
@@ -85,7 +75,7 @@ XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py -
 ### 显式指定 xp3filter
 
 ```bash
-XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
+XP3_BIN="$(<python> .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
 "$XP3_BIN" -o ./out --xp3filter ./filters/xp3filter.tjs ./game/data.xp3
 ```
 
@@ -94,7 +84,7 @@ XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py -
 如果 `./game/data.xp3` 同目录下存在 `./game/xp3filter.tjs`，直接运行：
 
 ```bash
-XP3_BIN="$(python3 .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
+XP3_BIN="$(<python> .claude/skills/krkr2-xp3-tool/scripts/resolve_xp3_binary.py --build-type release)"
 "$XP3_BIN" -o ./out ./game/data.xp3
 ```
 

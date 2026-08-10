@@ -9,13 +9,15 @@ description: 启动带跨域隔离响应头的 KrKr2 开发服务器，用于 We
 
 Web 版本需要跨域隔离响应头（COOP / COEP）以支持 `SharedArrayBuffer`，普通 HTTP 服务器无法正常运行。使用项目自带的 `coi-server.py`：
 
+下文 `<python>` 表示当前机器可用的 Python 3 解释器：Windows 通常是 `python`，POSIX 环境通常是 `python3`。
+
 ```bash
-python3 coi-server.py out/web/debug [http端口] [https端口] [选项]
+<python> coi-server.py out/web/debug [http端口] [https端口] [选项]
 ```
 
-默认启动：
-- **HTTP** 端口 8080 — 用于 `localhost` 本地调试
-- **HTTPS** 端口 8443 — 用于局域网设备访问
+默认端口：
+- **HTTP** 8080 — 总是启动，用于 `localhost` 本地调试
+- **HTTPS** 8443 — 仅当 `coi-server.py` 同级存在 `server.crt` 和 `server.key` 时启动，用于局域网设备访问；没有证书时脚本会明确输出 `HTTPS not enabled`
 
 打开 `http://localhost:8080/index.html` 进入页面。
 
@@ -24,7 +26,7 @@ python3 coi-server.py out/web/debug [http端口] [https端口] [选项]
 ### 单个 .xp3 文件
 
 ```bash
-python3 coi-server.py out/web/debug --xp3 /path/to/game/data.xp3
+<python> coi-server.py out/web/debug --xp3 /path/to/game/data.xp3
 ```
 
 服务器映射文件到 `/data.xp3`，输出含 `?xp3=` 参数的完整 URL，打开即自动加载。
@@ -32,13 +34,13 @@ python3 coi-server.py out/web/debug --xp3 /path/to/game/data.xp3
 ### ZIP 压缩包
 
 ```bash
-python3 coi-server.py out/web/debug --zip /path/to/game.zip
+<python> coi-server.py out/web/debug --zip /path/to/game.zip
 ```
 
 多个 `.xp3` 时用 `--entry` 指定：
 
 ```bash
-python3 coi-server.py out/web/debug --zip /path/to/game.zip --entry data.xp3
+<python> coi-server.py out/web/debug --zip /path/to/game.zip --entry data.xp3
 ```
 
 ### URL 查询参数

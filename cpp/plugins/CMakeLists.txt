@@ -24,7 +24,9 @@ set(_PLUGIN_SOURCES
 target_sources(${PROJECT_NAME} PRIVATE ${_PLUGIN_SOURCES})
 
 # CBinaryAccessor is one native dispatch type shared by xp3filter.dll and the
-# emoteplayer.dll PSB decrypt callback (libkrkr2.so ctor sub_62C808).
+# motionplayer PSB decrypt callbacks registered on Motion.ResourceManager.
+# Current reference registrars: Android arm64 0x67F908, Android armv7 0x5623EC,
+# iOS arm64 0x1001B65DC, and iOS armv7 0x1B645C.
 add_library(krkr2_binary_accessor STATIC
     BinaryAccessor.cpp
 )
@@ -33,10 +35,8 @@ target_include_directories(krkr2_binary_accessor PUBLIC
 )
 target_link_libraries(krkr2_binary_accessor PUBLIC krkr2core)
 
-add_library(krkr2plugins_ncbind STATIC
+set(_KRKR2_NCBIND_SOURCES
     xp3filter.cpp
-    layerExImage/Main.cpp
-    layerExImage/LayerExImage.cpp
     shrinkCopy.cpp
     layerExBTOA.cpp
     layerExRaster.cpp
@@ -52,11 +52,26 @@ add_library(krkr2plugins_ncbind STATIC
     extrans/rotatetrans.cpp
     extrans/ripple.cpp
 )
-set_source_files_properties(
-    layerExImage/Main.cpp
-    layerExImage/LayerExImage.cpp
-    PROPERTIES COMPILE_DEFINITIONS "NCB_MODULE_NAME=TJS_W(\"layerExImage.dll\")"
-)
+
+# layerExImage is an optional git submodule.  Keep a fresh checkout buildable
+# when it is intentionally absent instead of asking source-restoration work to
+# locate an external repository.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/layerExImage/Main.cpp" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/layerExImage/LayerExImage.cpp")
+    list(APPEND _KRKR2_NCBIND_SOURCES
+        layerExImage/Main.cpp
+        layerExImage/LayerExImage.cpp
+    )
+    set_source_files_properties(
+        layerExImage/Main.cpp
+        layerExImage/LayerExImage.cpp
+        PROPERTIES COMPILE_DEFINITIONS "NCB_MODULE_NAME=TJS_W(\"layerExImage.dll\")"
+    )
+else()
+    message(STATUS "layerExImage submodule is absent; skipping layerExImage plugin sources")
+endif()
+
+add_library(krkr2plugins_ncbind STATIC ${_KRKR2_NCBIND_SOURCES})
 set_source_files_properties(
     extrans/Main.cpp
     extrans/wave.cpp
@@ -124,10 +139,11 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 #        json steam DrawDeviceForSteam
 )
 
-# Android links these plugin translation units directly into libkrkr2.so, so
-# every NCB static registrar is present before ncbAutoRegister::AllRegist().
-# The Web/macOS ports package each module as a static archive instead; ordinary
-# archive extraction drops registrar-only objects such as motionplayer/main.cpp.
+# Monolithic native builds link these plugin translation units directly into
+# the final image, so every NCB static registrar is present before
+# ncbAutoRegister::AllRegist(). The Web/macOS ports package each module as a
+# static archive instead; ordinary archive extraction drops registrar-only
+# objects such as motionplayer/main.cpp.
 # Force-load the already-separated archives at final executable links without
 # propagating their sources into one another.
 set(_KRKR2_PLUGIN_ARCHIVES

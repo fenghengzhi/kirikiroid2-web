@@ -45,7 +45,7 @@ Expected results should reflect intended/oracle-aligned behavior:
 
 - Circle: boundary is inclusive because the check is `<= r*r`.
 - Rect: left/top are inclusive, right/bottom are exclusive.
-- Quad: inside points should return `true`; outside points should return `false`; winding-order coverage should keep the intended semantic expectation even if the current implementation still fails.
+- Quad: inside points should return `true`; outside points should return `false`; winding-order coverage keeps the intended semantic expectation regardless of the current implementation result.
 - Invalid type: return `false`.
 
 Do not rewrite expectations to match temporary local bugs.
@@ -66,22 +66,17 @@ Changing those means you are modifying the test harness or hit-test implementati
 
 ## Validation Commands
 
+Replace `<python>` with the current machine's Python 3 executable before running these commands.
+
 ```bash
 cmake --preset "Web Debug Config"
 cmake --build out/web/debug --target geometry_hit_test_wasm
-python3 -m pip install -r tests/differential/python/requirements-wasm.txt
-python3 tests/differential/python/run_geometry_hit_test_wasmtime.py \
+<python> -m pip install -r tests/differential/python/requirements-wasm.txt
+<python> tests/differential/python/run_geometry_hit_test_wasmtime.py \
   --spec-dir tests/differential/specs/geometry_hit_test \
   --wasm out/web/debug/tests/differential/wasm/geometry_hit_test.wasm
 ```
 
-## Current Known State
+## Result Reporting
 
-At the time this skill was created:
-
-- circle cases pass
-- rect cases pass
-- invalid-type case passes
-- quad expectation cases currently fail in local wasm execution
-
-Treat the quad failures as a signal about implementation alignment, not as a reason to weaken the cases.
+Pass/fail status is runtime state, not durable skill documentation. Before reporting current status, build `geometry_hit_test_wasm` and run the driver above against the present checkout. If an expected case fails, treat it as an implementation-alignment signal rather than weakening the expected result.
