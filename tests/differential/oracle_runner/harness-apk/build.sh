@@ -108,10 +108,11 @@ for needle in (
 print("classes2.dex contains HarnessActivity startup markers")
 PY
 
-echo "[4/6] Patching AndroidManifest.xml + copying libharness.so..."
+echo "[4/6] Patching AndroidManifest.xml (HarnessActivity + target SDK 23) + copying libharness.so..."
 python3 "$HERE/patch_manifest.py" \
     "$BUILD/decoded/AndroidManifest.xml" \
-    "$HERE/manifest-patch.xml"
+    "$HERE/manifest-patch.xml" \
+    "$BUILD/decoded/apktool.yml"
 mkdir -p "$BUILD/decoded/lib/arm64-v8a"
 cp "$LIBHARNESS_SO" "$BUILD/decoded/lib/arm64-v8a/libharness.so"
 

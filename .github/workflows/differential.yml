@@ -649,7 +649,10 @@ jobs:
           # HarnessActivity over a TCP socket (adb forward). This path
           # runs cocos2d's native init before STARTUP_FROM schedules the
           # fixture's normal TVPMainScene startup chain.
-          adb -s "${ANDROID_SERIAL}" install -r -t \
+          # The 1.3.9 harness manifest is raised to target SDK 23 while
+          # repacking. Grant its runtime permissions up front so Android 12
+          # cannot interpose ReviewPermissionsActivity on the RPC Activity.
+          adb -s "${ANDROID_SERIAL}" install -r -t -g \
                    tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
 
           # Push frida-server separately (not inside APK).
