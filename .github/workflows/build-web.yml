@@ -110,9 +110,30 @@ jobs:
         run: |
           set -o pipefail
           echo "Build branch: $BUILD_BRANCH; source map: $KRKR2_WEB_SOURCE_MAP"
-          cmake --preset "Web Release Config" \
-            -DKRKR2_WEB_ENABLE_SOURCE_MAP="$KRKR2_WEB_SOURCE_MAP" \
-            2>&1 | tee /tmp/cmake-configure.log
+          : > /tmp/cmake-configure.log
+
+          # CMake configures vcpkg as part of this step. Retry transient source
+          # download failures while preserving every attempt in the artifact log.
+          configure_status=1
+          for attempt in 1 2 3; do
+            echo "CMake configure attempt $attempt/3" | tee -a /tmp/cmake-configure.log
+            if cmake --preset "Web Release Config" \
+              -DKRKR2_WEB_ENABLE_SOURCE_MAP="$KRKR2_WEB_SOURCE_MAP" \
+              2>&1 | tee -a /tmp/cmake-configure.log; then
+              configure_status=0
+              break
+            else
+              configure_status=${PIPESTATUS[0]}
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              retry_delay=$((attempt * 15))
+              echo "::warning::CMake/vcpkg configuration failed (attempt $attempt/3); retrying in ${retry_delay}s"
+              sleep "$retry_delay"
+            fi
+          done
+
+          exit "$configure_status"
 
       - name: Pre-build Emscripten ports
         run: |
