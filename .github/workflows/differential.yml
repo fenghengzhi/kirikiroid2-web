@@ -26,7 +26,7 @@ env:
   LEGACY_NDK_BASENAME: "android-ndk-r17c"
   LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
   # Google Drive references are mutable; pin the exact oracle inputs each job consumes.
-  REFERENCE_LIBKRKR2_SHA256: "ded611b9018cfca425e97d5f8aaaa5dff809c4bacefb66ba77806372ddb52b38"
+  # The APK hash also pins its embedded lib/arm64-v8a/libkrkr2.so.
   REFERENCE_APK_SHA256: "262bab07722b95d76e3e10170744d88f80141260502e3d0a7b4e005ed3090379"
   REFERENCE_YUZULOGO_15HZ_XP3_SHA256: "038bab92728c80e917ed55224aa8c96cc04474d112d8a0e42730d908acd7e3df"
   REFERENCE_M2LOGO_15HZ_XP3_SHA256: "704729939ceabc2d93388cdc8b980bfd79506bedf660d0911c3dd13e9f78cb94"
@@ -278,17 +278,22 @@ jobs:
             fi
           done
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends rclone
-          mkdir -p reference/libkrkr2
+          sudo apt-get install -y --no-install-recommends rclone unzip
+          mkdir -p reference/apk reference/libkrkr2
           rclone copyto \
-            gdrive:reference/libkrkr2/libkrkr2.so \
-            reference/libkrkr2/libkrkr2.so \
+            "gdrive:reference/apk/krkr2 1.4.4.apk" \
+            "reference/apk/krkr2 1.4.4.apk" \
             --checksum \
             --drive-acknowledge-abuse
           printf '%s  %s\n' \
-            "${REFERENCE_LIBKRKR2_SHA256}" \
-            "reference/libkrkr2/libkrkr2.so" \
+            "${REFERENCE_APK_SHA256}" \
+            "reference/apk/krkr2 1.4.4.apk" \
             | sha256sum -c -
+          unzip -p \
+            "reference/apk/krkr2 1.4.4.apk" \
+            "lib/arm64-v8a/libkrkr2.so" \
+            > reference/libkrkr2/libkrkr2.so
+          test -s reference/libkrkr2/libkrkr2.so
 
       - name: Install harness build tools
         run: |
@@ -384,13 +389,8 @@ jobs:
             fi
           done
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends rclone
+          sudo apt-get install -y --no-install-recommends rclone unzip
           mkdir -p reference/libkrkr2 reference/apk reference/xp3
-          rclone copyto \
-            gdrive:reference/libkrkr2/libkrkr2.so \
-            reference/libkrkr2/libkrkr2.so \
-            --checksum \
-            --drive-acknowledge-abuse
           rclone copyto \
             "gdrive:reference/apk/krkr2 1.4.4.apk" \
             "reference/apk/krkr2 1.4.4.apk" \
@@ -405,9 +405,6 @@ jobs:
           done
           {
             printf '%s  %s\n' \
-              "${REFERENCE_LIBKRKR2_SHA256}" \
-              "reference/libkrkr2/libkrkr2.so"
-            printf '%s  %s\n' \
               "${REFERENCE_APK_SHA256}" \
               "reference/apk/krkr2 1.4.4.apk"
             printf '%s  %s\n' \
@@ -417,6 +414,11 @@ jobs:
               "${REFERENCE_M2LOGO_15HZ_XP3_SHA256}" \
               "reference/xp3/logo_test_oracle_m2logo_15hz.xp3"
           } | sha256sum -c -
+          unzip -p \
+            "reference/apk/krkr2 1.4.4.apk" \
+            "lib/arm64-v8a/libkrkr2.so" \
+            > reference/libkrkr2/libkrkr2.so
+          test -s reference/libkrkr2/libkrkr2.so
 
       # Redroid needs the Android binder driver. Azure kernels don't
       # ship binder in the default module set — try linux-modules-extra
