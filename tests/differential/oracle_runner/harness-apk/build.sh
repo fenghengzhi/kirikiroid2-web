@@ -50,13 +50,9 @@ rm -rf "$BUILD"
 mkdir -p "$BUILD" "$HERE/prebuilt"
 
 echo "[1/6] Decoding APK with apktool..."
-# Decode the original classes.dex so KR2Activity.exit() can be disabled in the
-# repacked test APK.  Stock 1.3.9 calls System.exit(0) before the harness can
-# provide its fixture through STARTUP_FROM.  HarnessActivity still ships as
-# a separate classes2.dex below.
-"$APKTOOL" d -f -o "$BUILD/decoded" "$ORIGINAL_APK"
-python3 "$HERE/patch_kr2_activity_smali.py" \
-    "$BUILD/decoded/smali/org/tvp/kirikiri2/KR2Activity.smali"
+# --no-src skips baksmali on classes.dex — we keep the original classes.dex
+# intact and ship our new class as classes2.dex (multidex).
+"$APKTOOL" d -f --no-src -o "$BUILD/decoded" "$ORIGINAL_APK"
 
 echo "[2/6] Compiling HarnessActivity.java..."
 mkdir -p "$BUILD/java"
@@ -64,9 +60,14 @@ mkdir -p "$BUILD/java"
 # compiled with older toolchains; staying at the same level keeps bytecode
 # compatibility bulletproof. (d8 doesn't mind higher targets but javac does.)
 #
-# Classpath needs the KR2Activity symbol. Build against a minimal stub since
-# only its Activity lifecycle surface is needed at compile time. The rebuilt
-# original classes.dex provides the runtime implementation.
+# Classpath needs the KR2Activity symbol. Extract from the original APK
+# to a temporary jar so javac can see it. Using the original classes.dex
+# via d2j would be circular; simpler: extract via apktool's decoded jar.
+# apktool 3.x by default produces $decoded/dist/*.jar — in --no-src mode
+# we don't get that, so fall back to unzipping classes.dex and running
+# d8 in "reverse": no. Simplest: build a stub KR2Activity we compile
+# against, since we only need the method signatures (onWindowFocusChanged
+# + onCreate). The APK's own classes.dex provides the runtime impl.
 STUB_DIR="$BUILD/java/stub"
 mkdir -p "$STUB_DIR/org/tvp/kirikiri2"
 cat > "$STUB_DIR/org/tvp/kirikiri2/KR2Activity.java" <<'EOF'

@@ -10,13 +10,14 @@
 3. A `<activity>` entry in `AndroidManifest.xml` wiring HarnessActivity
    to an exported intent.
 4. Re-signed with the test keystore at `keystore/harness-test.jks`.
-5. The repacked-only `KR2Activity.exit()` changed to a no-op. Stock 1.3.9
-   exits when launched without a game path before the harness can receive
-   `STARTUP_FROM`; the original APK and `libgame.so` are not modified.
 
-The original launcher Activity remains present, but this repack is test-only:
-its process-exit behavior is intentionally different so the RPC harness can
-take control before loading a fixture.
+The original MainActivity is untouched — install this APK and the game
+still plays normally.
+
+The 1.3.9 free APK must be launched under a Simplified Chinese system locale.
+CI starts its disposable Redroid instance with `ro.product.locale=zh-CN` and
+checks the effective locale before installing this harness; the APK's original
+exit path remains intact.
 
 ## Why repack instead of running alongside
 
