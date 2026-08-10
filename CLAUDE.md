@@ -15,17 +15,17 @@
 - 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
 - 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`
 - 依赖：emsdk 已 source、VCPKG_ROOT 已设置、ninja、cmake 3.31.1+、bison 3.8.2+
-- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.worker.js, vlfs.js, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）
-- 环境变量：见 `.claude.local.md`（机器特定的 EMSDK/VCPKG_ROOT 路径）
+- 固定输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, vlfs.js, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）。`index.worker.js`、`.symbols` 等 sidecar 是否出现取决于当前 Emscripten 版本和构建选项，不得当作固定产物
+- 机器特定的 EMSDK/VCPKG_ROOT 路径可写在可选且不入库的 `.claude.local.md`；该文件不存在时使用当前 shell 环境或实际安装路径，禁止假定它必然存在
 
 ### 构建陷阱
-- 必须导出 EMSDK_PYTHON — vcpkg ffmpeg 构建需要（系统 Python 缺少 `match` 语法）
+- Windows/vcpkg 构建应显式导出 EMSDK_PYTHON，避免 vcpkg 误选不兼容的旧 Python 或重复下载嵌入式 Python；要求是所选解释器支持项目脚本所需语法，不得笼统断言“系统 Python 缺少 `match`”
 - 改 CMakeLists.txt（增删改文件）后必须重跑 `cmake --preset` 再构建
 - macOS/Homebrew 上若 bison 报错 "require 3.8.2 but have 2.3"，将 `BISON_EXECUTABLE` 指向本机 Homebrew bison；其它平台使用本机实际路径，禁止照抄 `/opt/homebrew/...`
 - 构建前必须关闭 coi-server — 否则提供旧 wasm
 
 ## 项目结构
-- `cpp/plugins/` — NCB 插件 DLL（每个文件 = 一个虚拟 .dll 模块）
+- `cpp/plugins/` — NCB 插件实现；一个虚拟 `.dll` 模块可以由多个 translation unit 共同组成，模块边界以 NCB 注册/`NCB_MODULE_NAME` 和 CMake 目标为准，不能按“一文件一模块”推断
   - `PackinOne.cpp` — 批量加载器，`Plugins.link("PackinOne.dll")` 时加载 8 个子插件
   - `DrawDeviceD3D.cpp` — iTVPDrawDevice 封装（Web 构建的 D3D 桩实现）
 - `cpp/plugins/motionplayer/` — EmotePlayer + Player (MotionPlayer)，带 NCB TJS2 绑定，详见各文件头注释
@@ -98,7 +98,9 @@
 
 ## 工作流 — 代码修改前置条件（BLOCKING）
 
-任何对 cpp/ 目录的代码修改（Edit/Write），**必须**满足以下全部条件，缺一不可。不满足条件的修改视为无效，必须回退。
+任何会改变 `cpp/` 中参考实现运行行为、源码结构、数据流、调用链、对象生命周期、内部容器或边界行为的 C/C++ 修改，**必须**满足以下全部条件，缺一不可。不满足条件的修改视为无效，必须回退。
+
+纯构建系统修改（如 CMake target/source discovery）、纯注释或文档修改、格式化，以及经检查确认不改变运行语义的机械性 include/path/编译兼容修正不适用四文件函数取证前置条件。豁免只针对“没有可对应参考函数的非语义修改”；只要改动可能影响上述任一运行语义，或无法确定是否影响，就必须按完整四文件流程执行。
 
 ### 前置检查清单
 1. **四文件函数映射** — 列出 `reference/binaries/` 的四个文件，以及目标函数在每个文件中的函数名/地址和定位状态；禁止只给一个地址
@@ -128,7 +130,7 @@
 1. 发现问题 → 加诊断日志确认现象
 2. 枚举 `reference/binaries/` 四个文件 → 在每个二进制中定位并反编译对应函数 → 建立四文件函数映射
 3. 提炼共同伪代码并记录逐文件差异 → 对比本地代码 → 找到精确偏差
-4. 修改本地代码精确复刻联合证据 → 在注释中引用二进制文件名及其函数地址，禁止只写无归属地址
+4. 修改本地代码精确复刻联合证据 → 编译源码中的注释只记录必要的语义依据，不写反编译地址；逐文件函数名、地址、偏移与映射统一写入 `analysis/*.md`，并在每条记录中标明所属二进制
 5. 构建验证 → 运行时诊断确认修复
 
 ### 渲染/定位问题专项
