@@ -1,8 +1,11 @@
 diff --git a/library.mak b/library.mak
-index 36cd2f3..9e5514a 100644
 --- a/library.mak
 +++ b/library.mak
-@@ -18,4 +18,10 @@ $(TESTOBJS) $(TESTOBJS:.o=.i): CFLAGS += -Umain
+@@ -13,10 +13,16 @@ all-$(CONFIG_SHARED): $(SUBDIR)$(SLIBNAME)
+ LIBOBJS := $(OBJS) $(SUBDIR)%.h.o $(TESTOBJS)
+ $(LIBOBJS) $(LIBOBJS:.o=.s) $(LIBOBJS:.o=.i):   CPPFLAGS += -DHAVE_AV_CONFIG_H
+ $(TESTOBJS) $(TESTOBJS:.o=.i): CFLAGS += -Umain
+
  $(SUBDIR)$(LIBNAME): $(OBJS)
 -	$(RM) $@
 -	$(AR) $(ARFLAGS) $(AR_O) $^
@@ -16,3 +19,5 @@ index 36cd2f3..9e5514a 100644
 +	$(AR) $(ARFLAGS) $(AR_O) $^
 +endif
 +	$(RANLIB) $@
+
+ install-headers: install-lib$(NAME)-headers install-lib$(NAME)-pkgconfig
