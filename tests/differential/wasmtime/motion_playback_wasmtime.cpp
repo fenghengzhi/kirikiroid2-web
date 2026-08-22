@@ -463,7 +463,16 @@ void appendPreparedItemJson(
     out += ",\"dirtyRect\":";
     appendNumberArray(out, item.dirtyRect);
     out += ",\"localCorners\":";
-    appendNumberArray(out, item.localCorners);
+    // Diagnostic-only projection. Native keeps these values as call-local Real
+    // arguments and has no persistent item field for them.
+    std::array<float, 8> localCorners{};
+    for(std::size_t ci = 0; ci < item.corners.size(); ci += 2) {
+        localCorners[ci] =
+            item.corners[ci] - 0.5f - item.clipRect[0];
+        localCorners[ci + 1] =
+            item.corners[ci + 1] - 0.5f - item.clipRect[1];
+    }
+    appendNumberArray(out, localCorners);
     out += ",\"viewportRect\":";
     appendNumberArray(out, item.viewport);
     out += ",\"sourceGate232\":";
@@ -488,11 +497,12 @@ void appendPreparedItemJson(
     out += ",\"composedLayerVariantTag\":";
     out += std::to_string(static_cast<int>(item.composedLayer.Type()));
     out += ",\"leafBuilt\":";
-    out += item.leafBuilt ? "true" : "false";
+    out += item.leafLayer.Type() != tvtVoid ? "true" : "false";
     out += ",\"composedBuilt\":";
-    out += item.composedBuilt ? "true" : "false";
-    out += ",\"executedDirect\":";
-    out += item.executedDirect ? "true" : "false";
+    out += item.composedLayer.Type() != tvtVoid ? "true" : "false";
+    // V158 removed the non-native persistent route marker. The route is only
+    // observable in the scoped execute trace, not from a later item snapshot.
+    out += ",\"executedDirect\":null";
     out += "}";
 }
 
@@ -636,12 +646,14 @@ void appendRenderItemsPayload(std::string &out,
                (!item.rawFlag21 && hasValidPaintOrViewportRect(item))) {
                 ++validDrawableCount;
             }
-            if(item.leafBuilt) ++leafBuiltCount;
+            if(item.leafLayer.Type() != tvtVoid) ++leafBuiltCount;
         }
     }
     if(auxList) {
         for(const auto *item : *auxList) {
-            if(item && item->composedBuilt) ++composedBuiltCount;
+            if(item && item->composedLayer.Type() != tvtVoid) {
+                ++composedBuiltCount;
+            }
         }
     }
     out += "\"preparedItemCount\":";
@@ -775,7 +787,7 @@ tTJSNI_BaseLayer *resolveTraceLayerLikeNative(iTJSDispatch2 *layerObject) {
            reinterpret_cast<iTJSNativeInstance **>(&layer))) && layer) {
         return layer;
     }
-    return motion::resolvePrivateMotionGLLNativeLike_0x6DE24C(layerObject);
+    return motion::resolvePrivateMotionGLLNative_guess(layerObject);
 }
 
 bool writePackedRowsFromScanLines(const std::string &path,
@@ -1484,8 +1496,8 @@ void MotionTraceRenderDrawScope::recordBranchAfterPrepare(bool d3dDrawMode) {
             : "\"d3dDrawModeAfterPrepare\":false");
 }
 
-void MotionTraceRenderDrawScope::recordApplyTranslateOffset() {
-    emitStep("apply_translate_offset", "done");
+void MotionTraceRenderDrawScope::recordApplyPreparedProjection() {
+    emitStep("apply_prepared_projection", "done");
 }
 
 void MotionTraceRenderDrawScope::recordRenderToCanvas(bool ok) {
@@ -1876,25 +1888,25 @@ void motionTraceRenderPrepareLeave(
                       diagnostics);
 }
 
-void motionTraceRenderApplyTranslateEnter(Player *player) {
+void motionTraceRenderApplyProjectionEnter(Player *player) {
     if(!isCurrentRenderPlayer(player)) return;
     std::string diagnostics = playerDiagnostics(player);
-    appendRenderEvent(player, "render_prepare", "apply_translate_enter",
-                      "Player::applyPreparedRenderItemTranslateOffsets.enter",
+    appendRenderEvent(player, "render_prepare", "apply_projection_enter",
+                      "Player::applyPreparedRenderItemProjection_guess.enter",
                       "", diagnostics);
 }
 
-void motionTraceRenderApplyTranslateLeave(
+void motionTraceRenderApplyProjectionLeave(
     Player *player,
     const PreparedItemList &mainList) {
     if(!isCurrentRenderPlayer(player)) return;
     std::string payload;
-    // Player_applyTranslateOffset @0x6D5264 receives only main; aux is not an
-    // empty vector argument, it is absent from this call boundary.
+    // The native post-prepare pass receives only main; aux is not an empty
+    // vector argument, it is absent from this call boundary.
     appendPreparedRenderListsPayload(payload, &mainList, nullptr, false);
     std::string diagnostics = playerDiagnostics(player);
-    appendRenderEvent(player, "render_prepare", "apply_translate_leave",
-                      "Player::applyPreparedRenderItemTranslateOffsets.leave",
+    appendRenderEvent(player, "render_prepare", "apply_projection_leave",
+                      "Player::applyPreparedRenderItemProjection_guess.leave",
                       payload, diagnostics);
 }
 
@@ -1915,7 +1927,7 @@ void motionTraceRenderBuildItemsEnter(Player *player,
     diagnostics += inheritedFlag18 ? "1" : "0";
     diagnostics += "}";
     appendRenderEvent(nullptr, "render_commands", "build_items_enter",
-                      "sub_6C2334.enter", "",
+                      "Player_appendPreparedRenderItems.enter", "",
                       diagnostics);
 }
 
@@ -1928,7 +1940,7 @@ void motionTraceRenderBuildItemsLeave(
     appendPreparedRenderListsPayload(payload, &mainList, &auxList);
     std::string diagnostics = playerDiagnostics(player);
     appendRenderEvent(nullptr, "render_commands", "build_items_leave",
-                      "sub_6C2334.leave", payload,
+                      "Player_appendPreparedRenderItems.leave", payload,
                       diagnostics);
 }
 
@@ -2106,7 +2118,7 @@ void motionTracePrivateMotionGLLDraw(void *nativeLayer,
     payload += visibleCheck ? "true" : "false";
     appendRenderEvent(
         player, "private_motion_gll", "draw_gpu",
-        "__Private_Motion_GLLayer::Draw_GPU@0x6DD56C",
+        "__Private_Motion_GLLayer::Draw_GPU",
         payload, playerDiagnostics(player));
 }
 

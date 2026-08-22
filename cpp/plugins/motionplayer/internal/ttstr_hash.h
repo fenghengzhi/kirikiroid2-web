@@ -1,14 +1,13 @@
 // motion::Player container hash specialisation.
 //
-// libkrkr2.so embeds four std::unordered_map<ttstr, V> instances at fixed
-// offsets inside motion::Player. All four share the same KiriKiri-specific
-// ttstr hash, reverse-engineered from the binary at sub_6F4D40-ish region
-// (called from every Player_HM*_find_node / Player_HM*_upsert_*). Using
-// std::hash<std::string> (or the default for any other key) would change the
-// bucket distribution and therefore the iteration order; that breaks any
-// script that walks these maps in insertion-relative order.
-//
-// Reference: .claude/agent-memory/ida-deep-analyzer/player_containers_libstdcxx_spec.md
+// The four current references separate hashing into two layers. The core
+// tTJSHashFunc<ttstr>::Make operation is a pure UTF-16 payload hash and never
+// reads or writes tTJSVariantString::Hint. The motionplayer unordered-container
+// wrappers first inspect that shared 32-bit Hint, accept any nonzero value
+// verbatim, and otherwise call the pure payload hash and cache its result before
+// bucket lookup. Using std::hash<std::string> (or omitting the wrapper cache)
+// would change native bucket selection and alias-visible Hint state. Final
+// unordered iteration order additionally remains specific to each STL ABI.
 //
 #pragma once
 
@@ -20,10 +19,11 @@
 
 namespace motion::detail {
 
-    // Compute the KiriKiri UTF-16 payload hash. A null C-string pointer and an
-    // empty payload both reach the non-zero sentinel here; the ttstr functor
-    // below handles a null ttstr backing pointer before calling this helper,
-    // as the Android unordered_map instances do.
+    // Pure counterpart of the references' core tTJSHashFunc<ttstr>::Make
+    // algorithm. It operates only on UTF-16 code units: a null C-string pointer
+    // and an empty payload both produce the nonzero UINT32_MAX sentinel. The
+    // ttstr overload below intercepts a null backing pointer and returns zero
+    // before this layer, matching all four container wrappers.
     inline std::size_t ttstr_hash_utf16(const tjs_char *p) noexcept {
         std::uint32_t acc = 0;
         if (p) {
@@ -48,10 +48,10 @@ namespace motion::detail {
     struct ttstr_hash {
         using is_transparent = void;
         std::size_t operator()(const ttstr &s) const noexcept {
-            // Player HM1/HM2/HM3/HM4 @0x6F52AC/0x686944/0x6F2674,
-            // ResourceManager @0x6A96F8/0x6AAB3C and the Emote maps/sets all
-            // distinguish a null ttstr from a non-null zero hash and share the
-            // tTJSVariantString Hint cache.
+            // GetHint addresses the shared backing object, so copied ttstr
+            // aliases share this cache word. A nonzero Hint is trusted exactly;
+            // zero alone means "compute and publish before lookup". The 32-bit
+            // result is naturally zero-extended when size_t is 64-bit.
             tjs_uint32 *hint = const_cast<ttstr &>(s).GetHint();
             if(!hint) {
                 return 0;
@@ -72,23 +72,33 @@ namespace motion::detail {
     struct ttstr_equal {
         using is_transparent = void;
         bool operator()(const ttstr &a, const ttstr &b) const noexcept {
+            // All four reference collision paths use ttstr's backing-aware
+            // equality: identical backing pointers (including two nulls) are
+            // equal; exactly one null is unequal; two nonnull backings compare
+            // Length first and then UTF-16 payload. Consequently a default
+            // null ttstr differs from an allocated empty string, while two
+            // independently allocated empty strings compare equal.
             return a == b;
         }
     };
 
-    // UTF-16 code-unit lexicographic comparator, byte-for-byte matching the
-    // libkrkr2.so std::map<ttstr,int> (Player+24 node-index map) comparator
-    // sub_9B1ED0 @0x9B1ED0. That function compares two `unsigned __int16 *`
-    // (tjs_char*) one code unit at a time: it loops while the chars are equal
-    // and the right operand is non-zero, then returns sign(a[i] - b[i]). The
-    // std::map "less" predicate is therefore (compare < 0). std::string byte
-    // order (UTF-8) would reorder any non-ASCII label; this reproduces the
-    // binary's RB-tree key ordering exactly.
+    // UTF-16 code-unit lexicographic comparator used by the four-reference
+    // std::map<ttstr,int> node-index map. A null-backed ttstr sorts before every
+    // non-null-backed ttstr, even a deliberately allocated zero-length buffer.
+    // Two non-null values are compared one code unit at a time: loop while the
+    // chars are equal and the right operand is non-zero, then use the sign of
+    // a[i] - b[i]. std::string byte order (UTF-8) would reorder non-ASCII labels.
     struct ttstr_utf16_less {
         bool operator()(const ttstr &a, const ttstr &b) const noexcept {
+            if(a.IsEmpty()) {
+                return !b.IsEmpty();
+            }
+            if(b.IsEmpty()) {
+                return false;
+            }
             const tjs_char *pa = a.c_str();
             const tjs_char *pb = b.c_str();
-            // sub_9B1ED0: v2 = a[0] - b[0]; while (b[i] != 0 && v2 == 0) advance.
+            // v = a[0] - b[0]; while (b[i] != 0 && v == 0) advance.
             std::uint16_t ca = static_cast<std::uint16_t>(*pa);
             std::uint16_t cb = static_cast<std::uint16_t>(*pb);
             int diff = static_cast<int>(ca) - static_cast<int>(cb);

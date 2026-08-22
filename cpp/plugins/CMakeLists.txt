@@ -24,9 +24,8 @@ set(_PLUGIN_SOURCES
 target_sources(${PROJECT_NAME} PRIVATE ${_PLUGIN_SOURCES})
 
 # CBinaryAccessor is one native dispatch type shared by xp3filter.dll and the
-# motionplayer PSB decrypt callbacks registered on Motion.ResourceManager.
-# Current reference registrars: Android arm64 0x67F908, Android armv7 0x5623EC,
-# iOS arm64 0x1001B65DC, and iOS armv7 0x1B645C.
+# emoteplayer PreRegist callback's two Motion.ResourceManager decrypt setters.
+# The four references agree on this translation-unit sharing and dependency.
 add_library(krkr2_binary_accessor STATIC
     BinaryAccessor.cpp
 )

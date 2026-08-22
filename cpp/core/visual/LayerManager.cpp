@@ -54,6 +54,9 @@ static bool lowLevelLogoTraceEnabled() {
 // tTVPLayerManager
 //---------------------------------------------------------------------------
 tTVPLayerManager::tTVPLayerManager(iTVPLayerTreeOwner *owner) {
+    // Four-reference note: do not value-initialize the whole object here.
+    // ReleaseTouchCaptureIDMark and ReleaseCaptureCalled are deliberately
+    // absent from this initialization sequence in every native target.
     RefCount = 1;
     LayerTreeOwner = owner;
     DrawDeviceData = nullptr;
@@ -74,13 +77,27 @@ tTVPLayerManager::tTVPLayerManager(iTVPLayerTreeOwner *owner) {
 }
 //---------------------------------------------------------------------------
 tTVPLayerManager::~tTVPLayerManager() {
+    // The native destructor owns only DrawBuffer plus the automatic member
+    // storage destroyed after this body. It does not detach/release/clear the
+    // raw owner, DrawDeviceData, primary/focus/capture pointers, or pointees in
+    // TouchCapture, ModalLayerVector, and AllNodes. Normal BaseLayer teardown
+    // is responsible for the detach/unregister path before the final Release.
+    // Deleting DrawBuffer immediately destroys its wrapper, while the wrapped
+    // iTVPTexture2D follows the renderer's deferred-release queue.
     if(DrawBuffer)
         delete DrawBuffer;
 }
 //---------------------------------------------------------------------------
-void tTVPLayerManager::AddRef() { RefCount++; }
+void tTVPLayerManager::AddRef() {
+    // Deliberately plain and non-atomic; there is no saturation/lifetime guard.
+    RefCount++;
+}
 //---------------------------------------------------------------------------
 void tTVPLayerManager::Release() {
+    // Exact native boundary: the final path enters delete this while RefCount
+    // is still 1. It neither stores zero nor performs a BeforeDestruction-style
+    // hook/recheck. The non-final path has no zero guard, so count 0 follows the
+    // same decrement expression rather than being treated as already dead.
     if(RefCount == 1)
         delete this;
     else
@@ -213,10 +230,17 @@ void tTVPLayerManager::AttachPrimary(tTJSNI_BaseLayer *pri) {
 void tTVPLayerManager::DetachPrimary() {
     // detach primary layer from the manager
     if(Primary) {
+        // The reference implementations make this ordering observable and do
+        // not provide a rollback guard around it.  In particular, Primary is
+        // read for NotifyPart only after the focus/capture/touch/mouse calls,
+        // so reentry from those calls can replace the layer that is parted.
         SetFocusTo(nullptr);
         ReleaseCapture();
         ReleaseTouchCaptureAll();
         ForceMouseLeave();
+        // Function-argument evaluation snapshots this current Primary once;
+        // NotifyPart uses the same value for both of its tree cleanups.  The
+        // manager slot is cleared only after both return normally.
         NotifyPart(Primary);
         Primary = nullptr;
     }
@@ -234,6 +258,9 @@ bool tTVPLayerManager::GetPrimaryLayerSize(tjs_int &w, tjs_int &h) const {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::NotifyPart(tTJSNI_BaseLayer *lay) {
     // notifies layer parting from its parent
+    // Keep the invalidation before either potentially reentrant tree walk.
+    // There is no local exception recovery: a failing BlurTree skips capture
+    // cleanup, while either failure leaves the caller's Primary slot uncleared.
     InvalidateOverallIndex();
     BlurTree(lay);
     ReleaseCaptureFromTree(lay);
@@ -627,6 +654,9 @@ void tTVPLayerManager::PrimaryMultiTouch() {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::ForceMouseLeave() {
     if(LastMouseMoveSent) {
+        // Clear the manager slot before firing the callback, but deliberately
+        // reload the saved layer's Owner afterward.  If FireMouseLeave throws,
+        // that Owner reference is not released here.
         tTJSNI_BaseLayer *lay = LastMouseMoveSent;
         LastMouseMoveSent = nullptr;
         lay->FireMouseLeave();
@@ -663,6 +693,10 @@ void tTVPLayerManager::ReleaseCapture() {
     // release capture state
     ReleaseCaptureCalled = true;
     if(CaptureOwner) {
+        // CaptureOwner is a raw layer pointer whose dispatch Owner supplies the
+        // held reference.  Publish the null capture before dropping that
+        // reference, then notify the current LayerTreeOwner; there is no local
+        // rollback if either operation escapes.
         tTJSNI_BaseLayer *lay = CaptureOwner;
         CaptureOwner = nullptr;
         if(lay->Owner)
@@ -685,6 +719,10 @@ void tTVPLayerManager::ReleaseCaptureFromTree(tTJSNI_BaseLayer *layer) {
     while(itr != TouchCapture.end()) {
         tTJSNI_BaseLayer *l = itr->Owner;
         if(l && l->IsAncestorOrSelf(layer)) {
+            // This intentionally walks the live vector.  Owner::Release comes
+            // before both the marker comparison and erase; reentry that mutates
+            // TouchCapture can therefore invalidate itr, and an exception
+            // leaves the still-present entry without rollback.
             if(l->Owner)
                 l->Owner->Release();
             if(ReleaseTouchCaptureIDMark == (tjs_int64)(itr->TouchID))
@@ -711,6 +749,10 @@ void tTVPLayerManager::ReleaseTouchCapture(tjs_uint32 id) {
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::ReleaseTouchCaptureAll() {
+    // Do not snapshot or erase per item.  The native implementations release
+    // through the live vector (re-reading its end after a Release), then clear
+    // the vector and marker only on the normal tail.  A partial failure thus
+    // leaves every entry present, including those whose Owner was released.
     for(std::vector<tTVPTouchCaptureLayer>::iterator itr = TouchCapture.begin();
         itr != TouchCapture.end(); itr++) {
         tTJSNI_BaseLayer *l = itr->Owner;
@@ -837,6 +879,9 @@ bool tTVPLayerManager::SetFocusTo(tTJSNI_BaseLayer *layer, bool direction) {
     FocusedLayer = layer;
 
     try {
+        // The new focus is only a raw published pointer during these callbacks;
+        // its dispatch Owner is AddRef'd afterward.  Both the normal and catch
+        // paths use the callback-reloaded FocusedLayer, then Release org.
         if(org && !org->Shutdown)
             org->FireBlur(layer);
 
@@ -860,6 +905,8 @@ bool tTVPLayerManager::SetFocusTo(tTJSNI_BaseLayer *layer, bool direction) {
         if(org->Owner)
             org->Owner->Release();
 
+    // These owner notifications are deliberately outside the catch above.
+    // If one throws, FocusChangeLock remains set, matching the references.
     if(FocusedLayer)
         SetImeModeOf(FocusedLayer);
     else
@@ -962,6 +1009,11 @@ void tTVPLayerManager::RemoveTreeModalState(tTJSNI_BaseLayer *root) {
                     do_notify = true;
                     SaveEnabledWork();
                 }
+                // Preserve the reference ordering: release the live entry,
+                // perform the focus callback, and only then erase at i.  Both
+                // operations can invalidate the iterator through reentry; the
+                // catch below balances enabled-state notification, not vector
+                // mutation or owner references.
                 if((*i)->Owner)
                     (*i)->Owner->Release();
                 SetFocusTo(root->GetNextFocusable(), true);

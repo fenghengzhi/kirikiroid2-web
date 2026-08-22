@@ -29,7 +29,7 @@ foreach(name ${ALL_TARGETS})
     catch_discover_tests(${name})
 endforeach()
 
-# D3DEmotePlayer's binary-faithful D3DImage listener owner is implemented by
+# D3DEmotePlayer's binary-faithful D3DLayer listener owner is implemented by
 # DrawDeviceD3D.cpp in krkr2plugins_ncbind. The application whole-archives that
 # library; isolated tests that compile EmotePlayer must link it explicitly as
 # well.

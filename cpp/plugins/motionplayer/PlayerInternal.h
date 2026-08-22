@@ -36,12 +36,40 @@
 #include "MotionDispatch.h"
 
 #define LOGGER spdlog::get("plugin")
-#define STUB_WARN(name) LOGGER->warn("Player::" #name "() stub called")
 
 namespace motion {
 namespace internal {
 
         constexpr double kMotionFramesPerMillisecond = 60.0 / 1000.0;
+
+        // Combine two render-native packed RGBA weights. The implementation
+        // intentionally owns the reference implementation's process-global
+        // one-entry cache; callers must not treat it as thread-safe state.
+        std::uint32_t multiplyPackedColorWeights_guess(
+            std::uint32_t lhs, std::uint32_t rhs);
+
+        // Serialize getCommandList's Bezier-patch division after the native
+        // double product.  This keeps the signed int64 narrowing and the
+        // unordered floating-point selection out of host-language UB.
+        tjs_int64 serializeBezierPatchDivision_guess(
+            double scaledDivision);
+
+        // Build the persistent prepared item's signed 32-bit Bezier division
+        // from the node's raw unsigned 32-bit field and Player ratio.
+        std::int32_t prepareBezierPatchDivision_guess(
+            double ratio, std::uint32_t meshDivision);
+
+        // calcViewParam's mesh-chain record uses unsigned 32-bit narrowing
+        // before its unsigned cap, unlike the two prepared/command stages.
+        std::uint32_t calcViewMeshDivision_guess(
+            double ratio, std::uint32_t meshDivision);
+
+        // Parameter ramps compare the two endpoints directly before computing
+        // their difference. Discretization uses the four-reference signed-int32
+        // FCVTZS/VCVT saturation profile, then ordered min/max/clamp selects.
+        // The stripped source name is unavailable, hence the suffix.
+        void normalizeParameterValue_guess(
+            detail::MotionParameterEntry &entry, double rawValue) noexcept;
 
         inline detail::MotionParameterEntry *
         resolveNodeParameterEntry(Player &player,
@@ -58,10 +86,7 @@ namespace internal {
             if(node.parameterizeIndex >= 0) {
                 throw std::out_of_range("parameter id out of range.");
             }
-            if(player._defaultParameterEntryPtr != nullptr) {
-                return player._defaultParameterEntryPtr;
-            }
-            return &player._defaultParameterEntry;
+            return nullptr;
         }
 
         inline bool getObjectProperty(const tTJSVariant &object, const tjs_char *name,
@@ -79,46 +104,9 @@ namespace internal {
                 0, name, nullptr, &result, objthis));
         }
 
-        inline tjs_int getObjectCount(const tTJSVariant &object) {
-            tTJSVariant count;
-            return getObjectProperty(object, TJS_W("count"), count)
-                ? count.AsInteger()
-                : 0;
-        }
-
-        inline bool tryGetLayerObject(const tTJSVariant &value,
-                               tTJSNI_BaseLayer *&layer) {
-            layer = nullptr;
-            if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
-                return false;
-            }
-
-            iTJSDispatch2 *obj = value.AsObjectNoAddRef();
-            if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
-               layer != nullptr) {
-                return true;
-            }
-
-            // Fallback: try via closure's Object member (may differ from
-            // AsObjectNoAddRef for certain TJS value representations)
-            const auto closure = value.AsObjectClosureNoAddRef();
-            if(closure.Object && closure.Object != obj) {
-                return TJS_SUCCEEDED(closure.Object->NativeInstanceSupport(
-                           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                           reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
-                    layer != nullptr;
-            }
-
-            return false;
-        }
-
-        // Resolve a real Layer dispatch like libkrkr2.so sub_A7A050:
-        // use only the variant's Object and ask it for the Layer native
-        // instance. Do not chase ObjThis, SeparateLayerAdaptor owner, or TJS
-        // properties here; Player_ResolveSLATarget @ 0x6D5948 only applies
-        // this coercion to SLA+20 targetLayer.
+        // Resolve a real Layer dispatch through only the Variant's Object and
+        // the public Layer ClassID. The four reference builds do not retry via
+        // ObjThis, an adaptor owner, or a TJS property at this boundary.
         inline iTJSDispatch2 *tryResolveLayerDispatch(const tTJSVariant &value) {
             if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
                 return nullptr;
@@ -134,20 +122,6 @@ namespace internal {
             }
 
             return nullptr;
-        }
-
-        inline iTJSDispatch2 *tryResolveSeparateAdaptorOwner(const tTJSVariant &value) {
-            return tryResolveLayerDispatch(value);
-        }
-
-        inline bool getArrayItem(const tTJSVariant &object, tjs_int index,
-                          tTJSVariant &result) {
-            result.Clear();
-            if(object.Type() != tvtObject || object.AsObjectNoAddRef() == nullptr) {
-                return false;
-            }
-            return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGetByNum(
-                TJS_IGNOREPROP, index, &result, object.AsObjectNoAddRef()));
         }
 
         struct DictionaryEnumerator : public tTJSDispatch {
@@ -178,240 +152,263 @@ namespace internal {
             }
         };
 
-        // Player_applyBezierEasing @0x69A754. Unlike the offline-only decoded
-        // helper, the Android runtime resolves x/y and every numbered
-        // element through TJS dispatch on each call.
-        inline double evaluateBezierVariantLike_0x69A754(
-            const tTJSVariant &curve, double t) {
-            const tTJSVariant x = detail::motionPropGet(curve, TJS_W("x"));
-            const tTJSVariant y = detail::motionPropGet(curve, TJS_W("y"));
-            const int count = detail::motionPropGetCount(x);
-            if(detail::motionPropGetDoubleByNum(x, 0) >= t) {
-                return detail::motionPropGetDoubleByNum(y, 0);
-            }
-            const int last = count - 1;
-            if(detail::motionPropGetDoubleByNum(x, last) <= t) {
-                return detail::motionPropGetDoubleByNum(y, last);
-            }
-            int index = 0;
-            do {
-                index += 3;
-            } while(detail::motionPropGetDoubleByNum(x, index) < t);
-            const double y0 = detail::motionPropGetDoubleByNum(y, index - 3);
-            const double y1 = detail::motionPropGetDoubleByNum(y, index - 2);
-            const double y2 = detail::motionPropGetDoubleByNum(y, index - 1);
-            const double y3 = detail::motionPropGetDoubleByNum(y, index);
-            const double u = 1.0 - t;
-            return u * u * u * y0 + u * u * 3.0 * t * y1 +
-                   u * 3.0 * t * t * y2 + t * t * t * y3;
-        }
+        double evaluateVariableTrackEasing_guess(
+            const tTJSVariant &curve, double t);
 
-        // sub_698454 @0x698454. All x/y/t/s and nested segment x/y/p values
-        // remain raw TJS dispatch owners and are read only at evaluation time.
-        inline void evaluateControlPointVariantLike_0x698454(
+        // Shared by timeline color evaluation and source-clip corner
+        // remapping. Equal endpoints return before the curve is inspected.
+        std::uint32_t interpolatePackedColor_guess(
+            const tTJSVariant &curve, std::uint32_t from,
+            std::uint32_t to, double ratio);
+
+        // Evaluate the two-dimensional control curve used by curved position
+        // interpolation. Dispatch order and temporary Variant lifetimes are
+        // observable and are intentionally expressed directly.
+        inline void evaluatePositionControlCurve_guess(
             double outXY[2], const tTJSVariant &curve, double inputT) {
-            const tTJSVariant mainX =
-                detail::motionPropGet(curve, TJS_W("x"));
-            const tTJSVariant mainY =
-                detail::motionPropGet(curve, TJS_W("y"));
-            const tTJSVariant knots =
-                detail::motionPropGet(curve, TJS_W("t"));
-            const tTJSVariant segments =
-                detail::motionPropGet(curve, TJS_W("s"));
+            const tTJSVariant mainX = detail::motionPropGet(
+                curve, TJS_W("x"), 0, &detail::xMemberHint_guess);
+            const tTJSVariant mainY = detail::motionPropGet(
+                curve, TJS_W("y"), 0, &detail::yMemberHint_guess);
+            const tTJSVariant knots = detail::motionPropGet(
+                curve, TJS_W("t"), 0,
+                &detail::positionControlTMemberHint_guess);
+            const tTJSVariant segments = detail::motionPropGet(
+                curve, TJS_W("s"), 0,
+                &detail::positionControlSMemberHint_guess);
 
-            int mainIndex = 0;
+            int mainIndex = -3;
             int segmentIndex = -1;
+            double nextKnot;
             do {
-                const double next = detail::motionPropGetDoubleByNum(
+                nextKnot = detail::motionPropGetDoubleByNum(
                     knots, segmentIndex + 2);
-                ++segmentIndex;
                 mainIndex += 3;
-                if(next >= inputT) {
-                    break;
-                }
-            } while(true);
+                ++segmentIndex;
+            } while(nextKnot < inputT);
 
             const double knotStart = detail::motionPropGetDoubleByNum(
                 knots, segmentIndex);
             const double knotEnd = detail::motionPropGetDoubleByNum(
                 knots, segmentIndex + 1);
-            const tTJSVariant segment = detail::motionPropGetByNum(
-                segments, segmentIndex);
-            const tTJSVariant sx =
-                detail::motionPropGet(segment, TJS_W("x"));
-            const tTJSVariant sy =
-                detail::motionPropGet(segment, TJS_W("y"));
-            const tTJSVariant sp =
-                detail::motionPropGet(segment, TJS_W("p"));
-            const double localT =
-                (inputT - knotStart) / (knotEnd - knotStart);
+            const double knotStartForDenominator =
+                detail::motionPropGetDoubleByNum(knots, segmentIndex);
 
             double parameter;
-            const int splineCount = detail::motionPropGetCount(sx);
-            if(detail::motionPropGetDoubleByNum(sx, 0) >= localT) {
-                parameter = detail::motionPropGetDoubleByNum(sy, 0);
-            } else if(detail::motionPropGetDoubleByNum(
-                          sx, splineCount - 1) <= localT) {
-                parameter = detail::motionPropGetDoubleByNum(
-                    sy, splineCount - 1);
-            } else {
-                int splineIndex = -1;
-                do {
-                    const double next = detail::motionPropGetDoubleByNum(
-                        sx, splineIndex + 2);
-                    ++splineIndex;
-                    if(next >= localT) {
-                        break;
-                    }
-                } while(true);
-                const double x1 = detail::motionPropGetDoubleByNum(
-                    sx, splineIndex + 1);
-                const double x0 = detail::motionPropGetDoubleByNum(
-                    sx, splineIndex);
-                const double p1 = detail::motionPropGetDoubleByNum(
-                    sp, splineIndex + 1);
-                const double p0 = detail::motionPropGetDoubleByNum(
-                    sp, splineIndex);
-                const double y1 = detail::motionPropGetDoubleByNum(
-                    sy, splineIndex + 1);
-                const double y0 = detail::motionPropGetDoubleByNum(
-                    sy, splineIndex);
-                const double ratio = (localT - x0) / (x1 - x0);
-                const double inverse = 1.0 - ratio;
-                parameter = (x1 - x0) * (x1 - x0) *
-                                ((ratio * ratio * ratio - ratio) * p1 +
-                                 (inverse * inverse * inverse - inverse) * p0) /
+            {
+                const tTJSVariant segment = detail::motionPropGetByNum(
+                    segments, segmentIndex);
+                const tTJSVariant splineX = detail::motionPropGet(
+                    segment, TJS_W("x"), 0,
+                    &detail::xMemberHint_guess);
+                const tTJSVariant splineY = detail::motionPropGet(
+                    segment, TJS_W("y"), 0,
+                    &detail::yMemberHint_guess);
+                const tTJSVariant splineP = detail::motionPropGet(
+                    segment, TJS_W("p"), 0,
+                    &detail::positionControlPMemberHint_guess);
+
+                const double firstX =
+                    detail::motionPropGetDoubleByNum(splineX, 0);
+                const int splineCount = detail::motionPropGetCount(splineX);
+                const double localT = (inputT - knotStart) /
+                    (knotEnd - knotStartForDenominator);
+                if(firstX >= localT) {
+                    parameter = detail::motionPropGetDoubleByNum(splineY, 0);
+                } else {
+                    const int last = splineCount - 1;
+                    if(detail::motionPropGetDoubleByNum(
+                           splineX, last) <= localT) {
+                        parameter = detail::motionPropGetDoubleByNum(
+                            splineY, last);
+                    } else {
+                        int splineIndex = -1;
+                        double nextX;
+                        do {
+                            nextX = detail::motionPropGetDoubleByNum(
+                                splineX, splineIndex + 2);
+                            ++splineIndex;
+                        } while(nextX < localT);
+
+                        const double x1 = detail::motionPropGetDoubleByNum(
+                            splineX, splineIndex + 1);
+                        const double x0ForDenominator =
+                            detail::motionPropGetDoubleByNum(
+                                splineX, splineIndex);
+                        const double x0ForRatio =
+                            detail::motionPropGetDoubleByNum(
+                                splineX, splineIndex);
+                        const double p1 = detail::motionPropGetDoubleByNum(
+                            splineP, splineIndex + 1);
+                        const double p0 = detail::motionPropGetDoubleByNum(
+                            splineP, splineIndex);
+                        const double y1 = detail::motionPropGetDoubleByNum(
+                            splineY, splineIndex + 1);
+                        const double y0 = detail::motionPropGetDoubleByNum(
+                            splineY, splineIndex);
+                        const double ratio = (localT - x0ForRatio) /
+                            (x1 - x0ForDenominator);
+                        const double deltaX = x1 - x0ForDenominator;
+                        parameter = deltaX *
+                                (deltaX *
+                                 ((ratio * (ratio * ratio) - ratio) * p1 +
+                                  ((1.0 - ratio) *
+                                       ((1.0 - ratio) * (1.0 - ratio)) -
+                                   (1.0 - ratio)) * p0)) /
                                 6.0 +
-                            ratio * y1 + inverse * y0;
+                            ratio * y1 + (1.0 - ratio) * y0;
+                    }
+                }
             }
 
-            const double x0 = detail::motionPropGetDoubleByNum(
-                mainX, mainIndex - 3);
-            const double y0 = detail::motionPropGetDoubleByNum(
-                mainY, mainIndex - 3);
-            const double x1 = detail::motionPropGetDoubleByNum(
-                mainX, mainIndex - 2);
-            const double y1 = detail::motionPropGetDoubleByNum(
-                mainY, mainIndex - 2);
-            const double x2 = detail::motionPropGetDoubleByNum(
-                mainX, mainIndex - 1);
-            const double y2 = detail::motionPropGetDoubleByNum(
-                mainY, mainIndex - 1);
-            const double x3 = detail::motionPropGetDoubleByNum(
-                mainX, mainIndex);
-            const double y3 = detail::motionPropGetDoubleByNum(
-                mainY, mainIndex);
-            const double inverse = 1.0 - parameter;
-            const double w0 = inverse * inverse * inverse;
-            const double w1 = parameter * inverse * inverse * 3.0;
-            const double w2 = parameter * parameter * inverse * 3.0;
-            const double w3 = parameter * parameter * parameter;
-            outXY[0] = w0 * x0 + w1 * x1 + w2 * x2 + w3 * x3;
-            outXY[1] = w0 * y0 + w1 * y1 + w2 * y2 + w3 * y3;
+            double x[4];
+            double y[4];
+            for(int i = 0; i < 4; ++i) {
+                x[i] = detail::motionPropGetDoubleByNum(mainX, mainIndex);
+                y[i] = detail::motionPropGetDoubleByNum(mainY, mainIndex);
+                ++mainIndex;
+            }
+
+            const double oneMinus = 1.0 - parameter;
+            const double oneMinusTimesThree = oneMinus * 3.0;
+            const double w0 = oneMinus * (oneMinus * oneMinus);
+            const double w1 = parameter * (oneMinus * oneMinusTimesThree);
+            const double w2 = parameter * (parameter * oneMinusTimesThree);
+            const double w3 = parameter * (parameter * parameter);
+            outXY[0] = w0 * x[0] + w1 * x[1] +
+                w2 * x[2] + w3 * x[3];
+            outXY[1] = w0 * y[0] + w1 * y[1] +
+                w2 * y[2] + w3 * y[3];
         }
 
-        // sub_69A4D4 @0x69A4D4 with raw slot variants. The caller supplies
-        // slot+168 ccc and slot+268 cp directly.
-        inline void interpolatePositionVariantLike_0x69A4D4(
+        // Interpolate one position sample from the two clip slots. Unknown
+        // coordinate modes with a control curve deliberately leave outPos
+        // untouched.
+        inline void evaluatePositionInterpolation_guess(
             const tTJSVariant &easingCurve,
             const double dstPos[3], const double srcPos[3], double outPos[3],
             int coordinateMode, const tTJSVariant &rotationCurve, double t) {
             if(srcPos[0] == dstPos[0] && srcPos[1] == dstPos[1] &&
                srcPos[2] == dstPos[2]) {
-                std::copy(srcPos, srcPos + 3, outPos);
+                outPos[0] = srcPos[0];
+                outPos[1] = srcPos[1];
+                outPos[2] = srcPos[2];
                 return;
             }
             const double eased = easingCurve.Type() != tvtVoid
-                ? evaluateBezierVariantLike_0x69A754(easingCurve, t) : t;
+                ? evaluateVariableTrackEasing_guess(easingCurve, t) : t;
+
+            // This default-constructed Variant and its type test are present in
+            // all four references. It remains Void, but its dead branch and
+            // destructor are part of the recovered source shape.
+            const tTJSVariant secondaryEasing_guess;
             if(rotationCurve.Type() == tvtVoid) {
-                for(int i = 0; i < 3; ++i) {
-                    outPos[i] = srcPos[i] == dstPos[i]
-                        ? srcPos[i]
-                        : srcPos[i] * (1.0 - eased) + dstPos[i] * eased;
-                }
+                outPos[0] = srcPos[0] == dstPos[0]
+                    ? srcPos[0]
+                    : (1.0 - eased) * srcPos[0] + eased * dstPos[0];
+                outPos[1] = srcPos[1] == dstPos[1]
+                    ? srcPos[1]
+                    : dstPos[1] * eased + srcPos[1] * (1.0 - eased);
+                outPos[2] = srcPos[2] == dstPos[2]
+                    ? srcPos[2]
+                    : dstPos[2] * eased + srcPos[2] * (1.0 - eased);
                 return;
             }
             double rotation[2];
-            evaluateControlPointVariantLike_0x698454(
+            evaluatePositionControlCurve_guess(
                 rotation, rotationCurve, eased);
             if(coordinateMode == 0) {
                 const double dx = dstPos[0] - srcPos[0];
                 const double dy = dstPos[1] - srcPos[1];
                 outPos[0] = srcPos[0] + dx * rotation[0] - dy * rotation[1];
-                outPos[1] = srcPos[1] + dx * rotation[1] + dy * rotation[0];
-                outPos[2] = srcPos[2] == dstPos[2]
-                    ? srcPos[2]
-                    : srcPos[2] * (1.0 - eased) + dstPos[2] * eased;
+                outPos[1] = srcPos[1] +
+                    (dx * rotation[1] + dy * rotation[0]);
+                if(srcPos[2] == dstPos[2]) {
+                    outPos[2] = srcPos[2];
+                } else {
+                    double axisEasing = eased;
+                    if(secondaryEasing_guess.Type() != tvtVoid) {
+                        axisEasing = evaluateVariableTrackEasing_guess(
+                            secondaryEasing_guess, axisEasing);
+                    }
+                    outPos[2] = dstPos[2] * axisEasing +
+                        srcPos[2] * (1.0 - axisEasing);
+                }
             } else if(coordinateMode == 1) {
                 const double dx = dstPos[0] - srcPos[0];
                 const double dz = dstPos[2] - srcPos[2];
                 outPos[0] = srcPos[0] + dx * rotation[0] - dz * rotation[1];
-                outPos[1] = srcPos[1] == dstPos[1]
-                    ? srcPos[1]
-                    : srcPos[1] * (1.0 - eased) + dstPos[1] * eased;
-                outPos[2] = srcPos[2] + dz * rotation[0] + dx * rotation[1];
+                if(srcPos[1] == dstPos[1]) {
+                    outPos[1] = srcPos[1];
+                } else {
+                    double axisEasing = eased;
+                    if(secondaryEasing_guess.Type() != tvtVoid) {
+                        axisEasing = evaluateVariableTrackEasing_guess(
+                            secondaryEasing_guess, axisEasing);
+                    }
+                    outPos[1] = dstPos[1] * axisEasing +
+                        srcPos[1] * (1.0 - axisEasing);
+                }
+                outPos[2] = dz * rotation[0] + srcPos[2] +
+                    dx * rotation[1];
             }
         }
 
-        // Phase-2 frame selection is split to match libkrkr2.so:
-        // sub_6926B4/sub_692AB0 advance PSB frameList data into node clip slots,
-        // then Player_evaluateTimeline (0x699AE4) consumes those slots and writes
-        // node runtime state. These are intentionally non-inline in
-        // PlayerUpdateLayers.cpp so native LLDB can hook the 0x699AE4 boundary.
-        // 砖5/洞2: optional pendingEvents sink — when non-null, per-node
-        // onAction events (node mask 0x40000 / content["act"], fired on each
-        // crossed action frame) are pushed as MotionEvent{type=0,
-        // param1=node label, param2=action}. Aligned to the per-node sub_6B638C
-        // calls in Player_advanceRootAndNodes/rewindRootAndNodes (node[0]=label,
-        // see analysis §9). Default null = no firing (read/test callers).
-        void
-        advanceNodeFrameSelectionLike_0x6926B4(
+        // Shared node-frame selection primitive. It advances PSB frame-list data
+        // into the node's two clip slots; the later timeline-evaluation pass
+        // consumes those slots and writes runtime state. When eventOwner is
+        // non-null, each crossed action frame queues
+        // MotionEvent{type=ACTION, param1=node label, param2=action}.
+        bool
+        seekNodeFrameSelection_guess(
             detail::MotionNode &node, double currentTime,
-            std::vector<detail::MotionEvent> *pendingEvents = nullptr,
+            Player *eventOwner = nullptr,
             bool doForward = true, bool doBackward = true);
 
-        // The two single-direction inline-seek boundaries the binary runs for
-        // NON-parameterized nodes (node+8 == 0) inside the node-deque walk:
-        //   • forward inline  @0x6B73DC (in Player_advanceRootAndNodes) — forward
-        //     seek only + onAction; reached for forward playback.
-        //   • backward inline @0x6BA1CC (in Player_rewindRootAndNodes) — backward
-        //     seek only + onAction; reached for reverse playback.
-        // Both delegate to advanceNodeFrameSelectionLike_0x6926B4 with the matching
-        // direction flag set and events enabled. (The parameterized node+8 != 0
-        // path uses advanceNodeFramesLike_0x6B7E44 = forward + corrective-backward,
-        // no events.)
-        inline void advanceNodeFrameForwardInlineSeekLike_0x6B73DC(
-            detail::MotionNode &node, double currentTime,
-            std::vector<detail::MotionEvent> *pendingEvents) {
-            advanceNodeFrameSelectionLike_0x6926B4(
-                node, currentTime, pendingEvents, /*doForward=*/true,
-                /*doBackward=*/false);
-        }
-        inline void advanceNodeFrameBackwardInlineSeekLike_0x6BA1CC(
-            detail::MotionNode &node, double currentTime,
-            std::vector<detail::MotionEvent> *pendingEvents) {
-            advanceNodeFrameSelectionLike_0x6926B4(
-                node, currentTime, pendingEvents, /*doForward=*/false,
-                /*doBackward=*/true);
-        }
+        // Absolute node timeline initializer. The native helper owns selection,
+        // both parse/merge calls, source refresh, and the exact-frame action tail.
+        void initializeNodeTimelineSlots_guess(
+            Player &player, detail::MotionNode &node);
 
-        // Player_advanceNodeFrames @ 0x6B7E44 — the binary's per-node 2-slot
-        // ping-pong frame seek for PARAMETERIZED nodes (caller branch at
-        // Player_advanceRootAndNodes 0x6B73B4 LABEL_104:
-        // `if (*(node+8)) Player_advanceNodeFrames(node,player)`). Forward
-        // (with corrective backward) seek of the active parsed-frame slot toward
-        // the node's CHILD eval time *(node+8)+40 == parameterEntry->value
-        // (D-A1 resolved: == frameSelectionTimeLike_0x6B7E44 for parameterized
-        // nodes), then re-merge both slots + gated findSource (both subsumed by
-        // the live ClipSlot parse + read-pass source refresh). Fires NO per-node
-        // onAction (the binary's parameterized path has no action push). Operates
-        // on the real MotionNode/ClipSlot state. See PlayerUpdateLayerEval.cpp.
-        void advanceNodeFramesLike_0x6B7E44(detail::MotionNode &node,
-                                            double currentTime);
+        // Shared two-slot ping-pong stepper for parameterized nodes. It seeks
+        // toward parameterEntry->value with a forward pass plus corrective
+        // backward pass and emits no per-node action events.
+        void seekParameterizedNodeFrames_guess(detail::MotionNode &node,
+                                                Player &player);
 
-        bool evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
-                                           bool dirtyArg,
-                                           double currentTime);
+        // Value result of the ARM FCVTZU/VCVT.U32.F64 instruction boundary
+        // shared by timeline `ti` quantization and rounded opacity. Floating-
+        // point exception flags are not observable in the Web port.
+        std::uint32_t doubleToUnsignedIntTowardZeroSaturated_guess(
+            double value);
+
+        bool evaluateTimeline_guess(detail::MotionNode &node,
+                                    double currentTime,
+                                    bool dirtyArg);
+
+        void propagateParticleEvaluatedOpacityToChildRoot_guess(
+            const detail::MotionNode &particleNode,
+            detail::MotionNode &childRoot);
+
+        // Numeric core of the four-reference particle deleteOutside viewport.
+        // `targetRect` is [left, top, right, bottom] in target coordinates;
+        // affine translations are the root Player's float draw-affine pair plus
+        // its float camera-offset pair. The inverse is deliberately unguarded.
+        std::array<float, 4> computeParticleOutsideRect_guess(
+            const std::array<float, 4> &targetRect,
+            double m11, double m12, double m21, double m22,
+            float affineTranslateX, float affineTranslateY,
+            float cameraOffsetX, float cameraOffsetY,
+            double outsideFactor);
+
+        // Ordered native predicate used by the first pass of the particle
+        // worker. Valid child bounds must strictly overlap the cached outside
+        // rectangle; touching an edge is outside. Ordered inverted bounds are
+        // retained, while unordered values fail the strict-overlap chain.
+        bool particleBoundsStrictlyOverlapOutsideRect_guess(
+            double boundsMinX, double boundsMinY,
+            double boundsMaxX, double boundsMaxY,
+            const std::array<float, 4> &outsideRect);
 
 } // namespace internal
 } // namespace motion

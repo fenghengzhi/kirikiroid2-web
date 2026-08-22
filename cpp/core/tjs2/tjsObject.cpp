@@ -357,6 +357,9 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     tTJSCustomObject::~tTJSCustomObject() {
+        // The native-instance container is a fixed four-slot array.  Native
+        // instances are destructed in the reverse of registration/search
+        // order (slot 3 down to slot 0); duplicate class IDs are possible.
         for(tjs_int i = TJS_MAX_NATIVE_CLASS - 1; i >= 0; i--) {
             if(ClassIDs[i] != -1) {
                 if(ClassInstances[i])
@@ -393,6 +396,7 @@ namespace TJS {
                      0, nullptr, this);
         }
 
+        // Match destruction order: later slots are invalidated first.
         for(tjs_int i = TJS_MAX_NATIVE_CLASS - 1; i >= 0; i--) {
             if(ClassIDs[i] != -1) {
                 if(ClassInstances[i])
@@ -1940,7 +1944,8 @@ namespace TJS {
     tTJSCustomObject::NativeInstanceSupport(tjs_uint32 flag, tjs_int32 classid,
                                             iTJSNativeInstance **pointer) {
         if(flag == TJS_NIS_GETINSTANCE) {
-            // search "classid"
+            // Search from the oldest slot.  REGISTER intentionally permits
+            // duplicate class IDs, so this returns the first/oldest match.
             for(tjs_int i = 0; i < TJS_MAX_NATIVE_CLASS; i++) {
                 if(ClassIDs[i] == classid) {
                     *pointer = ClassInstances[i];
@@ -1951,7 +1956,9 @@ namespace TJS {
         }
 
         if(flag == TJS_NIS_REGISTER) {
-            // search for the empty place
+            // Append to the first empty slot.  Do not replace an existing ID
+            // (including an equal ID); a full four-slot container returns
+            // TJS_E_FAIL and leaves both the slots and caller pointer alone.
             for(tjs_int i = 0; i < TJS_MAX_NATIVE_CLASS; i++) {
                 if(ClassIDs[i] == -1) {
                     // found... writes there

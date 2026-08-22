@@ -264,8 +264,13 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
     tjs_int RefCount; //!< reference count
     class iTVPLayerTreeOwner *LayerTreeOwner;
 
+    // Borrowed draw-device slot. The four reference implementations only
+    // store/load this pointer; replacement and manager destruction perform no
+    // release, delete, clear, or fallback device detach.
     void *DrawDeviceData; //!< draw device specific information
 
+    // Owned by the manager. This is the one external pointee deleted by the
+    // concrete manager destructor; the pointer is not cleared before delete.
     tTVPBaseTexture *DrawBuffer;
     tTVPLayerType DesiredLayerType; //!< desired layer type by the draw device
                                     //!< for this layer manager
@@ -274,6 +279,9 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
     tTJSNI_BaseLayer *LastMouseMoveSent;
     std::vector<tTVPTouchCaptureLayer>
         TouchCapture; //!< 同時タッチ数は多くても10点程度なのでvectorで持つ(ほぼ1or2点)
+    // Intentionally has no constructor initialization in all four references.
+    // PrimaryTouchDown first passes through ReleaseTouchCapture(id), whose
+    // final comparison can therefore observe the indeterminate initial value.
     tjs_int64 ReleaseTouchCaptureIDMark; //!< last touch down id
 
     std::vector<tTJSNI_BaseLayer *> ModalLayerVector;
@@ -296,6 +304,8 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
     tjs_int LastMouseMoveX;
     tjs_int LastMouseMoveY;
 
+    // Also intentionally not constructor-initialized. Its consumer in
+    // PrimaryMouseDown assigns false before the callback can read it.
     bool ReleaseCaptureCalled;
 
     bool InNotifyingHintOrCursorChange;

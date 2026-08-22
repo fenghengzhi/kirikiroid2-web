@@ -1,21 +1,15 @@
-// Container aliases for motion::Player's libkrkr2.so-aligned hash maps.
+// Container aliases for motion::Player's four-reference native hash maps.
+// Android uses libstdc++ and iOS/Web use different libc++ ABIs, so portable
+// object sizes and offsets cannot be identical. The contract here is the same
+// key/value semantics, custom UTF-16 hash/equality, ownership and observable
+// boundary behavior. Exact per-target layouts belong in analysis/.
 //
-// libkrkr2.so embeds four std::unordered_map<ttstr, V> at fixed offsets inside
-// motion::Player (HM1@+264, HM2@+320, HM3@+1184, HM4@+1240). All four share
-// the same key type (ttstr) and the same custom ttstr_hash; only the value
-// type and inline node size differ.
-//
-// PLATFORM_BOUNDARY: sizeof(std::unordered_map) on the Web build (libc++) is
-// ~32B while the Android build (libstdc++) is 56B. sizeof(Player) on Web
-// therefore cannot equal libkrkr2.so's 1384B. The logical 1:1 contract we
-// uphold is: same K/V semantics, same custom hash, same iteration / bucket
-// distribution algorithm, same lifetime. Byte-level offset equality is not
-// reachable inside Emscripten — see CLAUDE.md "明确标注且不可避免的平台边界".
-//
-// HM3 (PerNodeLayerState 688B value) now lives in value_structs.h with all
-// dtor-referenced ttstr / dispatch / heap slots declared in ascending binary
-// offset; reverse declaration-order destruction handles the descending-offset
-// release sequence libkrkr2.so's Player_HM3_value_destroy @0x6DD06C uses.
+// HM3's portable PerNodeLayerState now lives in value_structs.h. All four
+// references place a complete ClipSlot inside that mapped value, followed by
+// the child Variant, outer mesh vector, particle block and particle Variant.
+// Map clear first performs the explicit invalidation pass over unconsumed
+// type-3/type-4 retained child objects, then clears HM4 and finally destroys
+// the ordinary HM3 value owners.
 //
 #pragma once
 
@@ -28,86 +22,73 @@
 
 namespace motion::detail {
 
-    // HM1 — libkrkr2.so Player+264. ttstr → EvalCascadeState (cascade
-    // evaluation state). The mapped value carries the copied key, the
-    // tTJSVariant<string>-backed chain segments, writeVal/weight, and a
-    // non-owning MotionNode* result vector. Declaration order in
-    // EvalCascadeState reproduces Player_HM1_value_destroy @0x6DD1A0.
+    // HM1: ttstr → EvalCascadeState. The mapped value owns a copied key and
+    // scope-label chain, stores the latest write/weight, and caches non-owning
+    // MotionNode pointers. Rebuild clears only the vector's logical length, so
+    // its capacity is retained.
     using EvalCascadeMap =
         std::unordered_map<ttstr, EvalCascadeState, ttstr_hash, ttstr_equal>;
 
-    // HM2 — libkrkr2.so Player+320. ttstr → double, raw double @entry+16
-    // (NOT tTJSVariant). Used by setVariable / getVariable label→value path.
+    // HM2: ttstr -> raw double (not tTJSVariant). Used by the Player
+    // setVariable/getVariable path and, as the identical specialization, by the
+    // EmoteEngine variable-value map. A missing operator[] entry value-initializes
+    // the mapped double to +0.0 before returning it; an existing entry is not
+    // relinked.
     using LabelValueMap =
         std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
 
-    // HM3 — libkrkr2.so Player+1184. ttstr (node-path key built by
-    // Player_buildNodePathKey @0x6B5C1C) → PerNodeLayerState. The value type
-    // owns its 8 ttstr / 5 dispatch / 2 heap slots and releases them in the
-    // libkrkr2.so dtor order via reverse declaration-order destruction.
+    // HM3: node-path ttstr -> PerNodeLayerState. The value type owns its
+    // embedded ClipSlot plus the specialized Variants and mesh vector.
+    // Unconsumed child objects receive the separate pre-clear invalidation
+    // pass described above; that behavior is intentionally not a destructor
+    // side effect because matched entries have already transferred the owners.
     using PerNodeLayerStateMap =
         std::unordered_map<ttstr, PerNodeLayerState, ttstr_hash, ttstr_equal>;
 
-    // HM4 — libkrkr2.so Player+1240. ttstr → double, raw double @entry+16.
-    // (Same value-slot layout as HM2 — clearHM3_HM4 @0x6B80E4 only Releases the
-    // ttstr key and op-deletes the 32B entry; value slot is never AddRef'd or
-    // Release'd. Spike-grounded R-M4: prior `iTJSDispatch2 *` annotation was
-    // an audit misread; binary writer @0x6B2D40 stores a raw 8B controller
-    // snapshot, reader @0x6CD304 loads it directly to a NEON D-reg as double.)
+    // HM4: ttstr -> raw double.
+    // Same value-slot semantics as HM2: clear releases the ttstr key and deletes
+    // the node; the raw double is never AddRef'd or Release'd. The former
+    // `iTJSDispatch2 *` annotation was an audit misread: the writer stores a raw
+    // variable-track value and the reader loads it directly as double.
     //
-    // Semantics: variable-snapshot cache populated by
-    // Player_resetMotionState_clearAndRebuild's second loop (each controller
-    // writes its current value snapshot keyed by controller-name ttstr); the
-    // first stop of Player::getVariable's cascade (HM4 → HM2 → HM1).
+    // Short-lived join snapshot populated by resetMotionState_guess. Each live
+    // variable track writes its interpolated value under cascadeKey. Full reseek
+    // may restore a hit to the active slot, then clears the map. EmoteEngine's
+    // facade getter checks it before falling back to Player's HM1/HM2 reader.
     using VariableSnapshotMap =
         std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
 
-    // Player+1296 std::deque<VariableLabelScope> — the var-track deque.
-    // Populated by Player_initVariables @0x6CD750 once per motion load (one
-    // element per motion "variable" entry, cascadeKey = scope+"::"+label).
-    // Snapshotted into HM4 by Player_resetMotionState_clearAndRebuild loop2
-    // @0x6B2D3C; the lookup side (Player_evalKey_cascade @0x6CD23C) keys HM4
-    // by the raw cascadeKey. This is the active container backing Player's
-    // +1296 slot (the former std::vector<VariableLabelEntry> port model has
-    // been migrated onto it — single source of truth).
-    //
-    // Distinct from EmotePlayer's 5 controller animator deques at +256 /
-    // +336 / +416 / +576 / +656 (per-nodeType animator state); this is a
-    // lookup table, those are state machines.
+    // Variable-track deque. initVariables clears it, appends one element per
+    // motion `variable` item and builds cascadeKey as scope+"::"+label when
+    // scope is present. Join snapshot production stores current values in HM4
+    // under that raw cascadeKey. This is a lookup/interpolation table, distinct
+    // from EmotePlayer's controller state-machine deques.
     using VariableLabelScopeDeque = std::deque<VariableLabelScope>;
 
-    // Player+24 std::map<ttstr,int> — the node-index map keyed by the RAW PSB
-    // "label" ttstr (buildNodeTree_recursive @0x6B4A6C inserts PropGet("label")
-    // at 0x6B4CB0). The binary's RB-tree comparator is sub_9B1ED0 @0x9B1ED0,
-    // a UTF-16 code-unit lexicographic ordering (ttstr_utf16_less). For ASCII
-    // labels this matches std::string byte order; only non-ASCII labels
-    // reorder. Iteration is key-ascending = the binary's in-order tree walk.
+    // Node-index map keyed by the raw PSB `label`. Null-backed keys sort before
+    // every non-null backing; remaining order is UTF-16 code-unit lexicographic.
+    // Duplicate construction writes replace only the mapped flat-node index,
+    // retaining the key object from the first insertion. Iteration is the
+    // tree's in-order walk.
     using NodeLabelMap = std::map<ttstr, int, ttstr_utf16_less>;
 
     struct MotionParameterEntry;
 
-    // Player+408 std::multimap<ttstr id, MotionParameterEntry*> — the controller
-    // ramp table. Built by Player_finalizeParameterTable @0x6B1ECC right after
-    // the +384 parameter-entry vector is populated (sub_6B202C loops sub_6B1718
-    // per PSB "parameterList" entry, then calls 0x6B1ECC). Each map node is
-    // operator new(0x30) (sub_6F16AC @0x6B1ECC's insert helper): a 32B
-    // _Rb_tree_node_base + a 16B std::pair{ttstr key @+32 = entry.id (AddRef'd),
-    // MotionParameterEntry* value @+40 = &entry into the +384 vector}. Inserted
-    // UNCONDITIONALLY via _Rb_tree_insert_and_rebalance (the descent in 0x6B1ECC
-    // goes right on equal keys and never skips), so duplicate ids are kept —
-    // multimap semantics, matching Player_bindParameterValue's equal_range walk
-    // (sub_6F2F98 @0x6F2F98 returns [lower,upper) and the consumer iterates all
-    // matches). Comparator = sub_9B1ED0 (UTF-16 lexicographic = ttstr_utf16_less,
-    // same as NodeLabelMap). Read by Player_bindParameterValue @0x6C4978 (own
-    // map keyed by raw label) and the per-descendant-player loops keyed by the
-    // "::"/"/" suffix; erased per param-entry by
-    // Player_purgeNodeLabelMap_byParent_guess @0x6CDE18.
+    // Parameter controller ramp table. It is built after the parameter-entry
+    // vector is populated from PSB `parameterList`. Each mapped value borrows a
+    // pointer to its vector entry; the tree key owns a copy of entry.id. Entries
+    // are inserted unconditionally, so duplicate ids are kept. This
+    // matches the binder's equal_range walk over every duplicate. Comparator is
+    // UTF-16 lexicographic (`ttstr_utf16_less`, shared with NodeLabelMap). The
+    // own-player lookup uses the raw label; descendant lookups use the split
+    // suffix. Exact four-target addresses, node sizes and Player offsets live
+    // in analysis/. Destruction erases nodes by exact mapped pointer before the
+    // parameter vector releases its storage.
     using ParameterRampMap =
         std::multimap<ttstr, MotionParameterEntry *, ttstr_utf16_less>;
 
-    // The Player+184 deque carries motion::MotionNode (2632B in the binary).
-    // The alias is intentionally not declared here to keep this header free
-    // of the MotionNode dependency surface; consumers should spell it
-    // directly as std::deque<motion::MotionNode>.
+    // Player's other deque carries motion::MotionNode. The alias is not
+    // declared here to keep this header free of the MotionNode dependency
+    // surface; consumers spell it directly as std::deque<motion::MotionNode>.
 
 } // namespace motion::detail

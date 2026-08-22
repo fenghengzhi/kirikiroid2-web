@@ -124,6 +124,7 @@ find_package(FFMPEG COMPONENTS
 target_link_libraries(krkr2_wasmtime_guest_objects PRIVATE
     tjs2
     spdlog::spdlog
+    cocos2dx::cocos2d
 )
 
 add_executable(krkr2_wasmtime_guest EXCLUDE_FROM_ALL

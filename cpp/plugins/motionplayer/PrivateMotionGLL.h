@@ -15,7 +15,7 @@ namespace motion {
 
     class SeparateLayerAdaptor;
 
-    struct PrivateMotionGLLRenderItemInputLike_0x6DE738 {
+    struct PrivateMotionGLLRenderItemInput_guess {
         std::int32_t opacity = 0;
         std::uint8_t stencilMaskRef = 0;
         std::uint8_t stencilWriteRef = 0;
@@ -29,24 +29,24 @@ namespace motion {
         std::array<detail::MeshPoint, 3> affinePoints{};
     };
 
-    iTJSDispatch2 *ensurePrivateMotionGLLLike_0x6D5948(
-        SeparateLayerAdaptor &sla,
-        const tTJSVariant &ownerVariant,
-        const tTJSVariant &targetLayerVariant,
-        iTJSDispatch2 *targetLayerObject,
-        int canvasWidth,
-        int canvasHeight);
+    iTJSDispatch2 *ensurePrivateMotionGLL_guess(
+        SeparateLayerAdaptor &sla);
 
-    tTJSNI_BaseLayer *resolvePrivateMotionGLLNativeLike_0x6DE24C(
+    tTJSNI_BaseLayer *resolvePrivateMotionGLLNative_guess(
         iTJSDispatch2 *object);
+    tTJSNI_BaseLayer *queryPrivateMotionGLLNativeFromVariant_guess(
+        const tTJSVariant &value);
 
-    void clearPrivateMotionGLLRenderQueueLike_0x6DE738(
+    void clearPrivateMotionGLLRenderQueue_guess(
         iTJSDispatch2 *object);
-    void appendPrivateMotionGLLRenderItemLike_0x6DE738(
+    void setPrivateMotionGLLStencilCount_guess(
         iTJSDispatch2 *object,
-        const PrivateMotionGLLRenderItemInputLike_0x6DE738 &item,
+        tjs_int value);
+    void appendPrivateMotionGLLRenderItem_guess(
+        iTJSDispatch2 *object,
+        const PrivateMotionGLLRenderItemInput_guess &item,
         std::vector<detail::MeshPoint> *pointsToSwap);
-    std::size_t privateMotionGLLRenderQueueSizeLike_0x6DE738(
+    std::size_t privateMotionGLLRenderQueueSize_guess(
         iTJSDispatch2 *object);
 
 } // namespace motion

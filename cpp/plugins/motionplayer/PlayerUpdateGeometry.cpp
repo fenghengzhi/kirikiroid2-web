@@ -7,199 +7,231 @@
 namespace motion {
     void Player::updateLayersPhase3_CameraConstraint() {
         auto &nodes = _nodes;
-        // --- sub_6BC000: Camera constraint (nodeType=9) ---
-        // Aligned to 0x6BC000..0x6BC4EC. Player+1092 is the preview property.
-        // 9 cases at 0x6BC1B0..0x6BC358 based on flipX/flipY + constraintType (node+2376).
-        if (!_preview && nodes.size() >= 2) {
-            double offsetX = 0, offsetY = 0, offsetZ = 0;
-            // Track which axes have constraints and their types
-            bool hasMinX = false, hasMaxX = false, hasTrackX = false;
-            bool hasMinY = false, hasMaxY = false, hasTrackY = false;
-            bool hasMinZ = false, hasMaxZ = false, hasTrackZ = false;
-            double minX = 3.4e38, maxX = -3.4e38, trackX = 0;
-            double minY = 3.4e38, maxY = -3.4e38, trackY = 0;
-            double minZ = 3.4e38, maxZ = -3.4e38, trackZ = 0;
+        if(_preview || nodes.size() < 2) {
+            return;
+        }
 
-            for (size_t ci = 1; ci < nodes.size(); ++ci) {
-                auto &cn = nodes[ci];
-                if (cn.nodeType != 9 || cn.activeSlot().done || !cn.accumulated.active) continue;
+        bool hasMinimumX = false;
+        bool hasDirectX = false;
+        bool hasMaximumX = false;
+        bool hasMinimumY = false;
+        bool hasDirectY = false;
+        bool hasMaximumY = false;
+        bool hasMinimumZ = false;
+        bool hasDirectZ = false;
+        bool hasMaximumZ = false;
+        double minimumX = kCameraConstraintExtent_guess;
+        double directX = 0.0;
+        double maximumX = -kCameraConstraintExtent_guess;
+        double minimumY = kCameraConstraintExtent_guess;
+        double directY = 0.0;
+        double maximumY = -kCameraConstraintExtent_guess;
+        double minimumZ = kCameraConstraintExtent_guess;
+        double directZ = 0.0;
+        double maximumZ = -kCameraConstraintExtent_guess;
 
-                // Target node: root (node 0). Full impl would look up dtgt.
-                const auto &target = nodes[0];
-
-                // Compute constraintType with flip adjustment (0x6BC1B0..0x6BC1FC)
-                int ctype = cn.cameraConstraintType;
-                if (cn.accumulated.flipX) {
-                    if (ctype == 0) ctype = 2;
-                    else if (ctype == 2) ctype = 0;
-                }
-                if (cn.accumulated.flipY) {
-                    if (ctype == 3) ctype = 5;
-                    else if (ctype == 5) ctype = 3;
-                }
-
-                // 9 cases (0x6BC224..0x6BC358)
-                switch (ctype) {
-                    case 0: { // X min constraint
-                        double d = target.accumulated.posX - cn.accumulated.posX;
-                        if (d < 0 && d < minX) { minX = d; hasMinX = true; }
-                        break;
-                    }
-                    case 1: { // X direct track
-                        trackX = target.accumulated.posX - cn.accumulated.posX;
-                        hasTrackX = true;
-                        break;
-                    }
-                    case 2: { // X max constraint
-                        double d = target.accumulated.posX - cn.accumulated.posX;
-                        if (d > 0 && d > maxX) { maxX = d; hasMaxX = true; }
-                        break;
-                    }
-                    case 3: { // Y min constraint
-                        double d = target.accumulated.posY - cn.accumulated.posY;
-                        if (d < 0 && d < minY) { minY = d; hasMinY = true; }
-                        break;
-                    }
-                    case 4: { // Y direct track
-                        trackY = target.accumulated.posY - cn.accumulated.posY;
-                        hasTrackY = true;
-                        break;
-                    }
-                    case 5: { // Y max constraint
-                        double d = target.accumulated.posY - cn.accumulated.posY;
-                        if (d > 0 && d > maxY) { maxY = d; hasMaxY = true; }
-                        break;
-                    }
-                    case 6: { // Z min constraint
-                        double d = target.accumulated.posZ - cn.accumulated.posZ;
-                        if (d < 0 && d < minZ) { minZ = d; hasMinZ = true; }
-                        break;
-                    }
-                    case 7: { // Z direct track
-                        trackZ = target.accumulated.posZ - cn.accumulated.posZ;
-                        hasTrackZ = true;
-                        break;
-                    }
-                    case 8: { // Z max constraint
-                        double d = target.accumulated.posZ - cn.accumulated.posZ;
-                        if (d > 0 && d > maxZ) { maxZ = d; hasMaxZ = true; }
-                        break;
-                    }
-                    default: break;
-                }
+        for(size_t index = 1; index < nodes.size(); ++index) {
+            auto &constraint = nodes[index];
+            if(constraint.nodeType != 9 || constraint.activeSlot().done) {
+                continue;
             }
-            // Resolve final offset per axis (0x6BC398..0x6BC410)
-            // Priority: track > max > min > 0
-            if (hasTrackX) offsetX = trackX;
-            else if (hasMaxX) offsetX = maxX;
-            else if (hasMinX) offsetX = minX;
-            if (hasTrackY) offsetY = trackY;
-            else if (hasMaxY) offsetY = maxY;
-            else if (hasMinY) offsetY = minY;
-            if (hasTrackZ) offsetZ = trackZ;
-            else if (hasMaxZ) offsetZ = maxZ;
-            else if (hasMinZ) offsetZ = minZ;
 
-            // Apply offset to all nodes (0x6BC450..0x6BC4BC)
-            if (offsetX != 0 || offsetY != 0 || offsetZ != 0) {
-                for (size_t ci = 1; ci < nodes.size(); ++ci) {
-                    nodes[ci].accumulated.posX += offsetX;
-                    nodes[ci].accumulated.posY += offsetY;
-                    nodes[ci].accumulated.posZ += offsetZ;
+            const auto *target = findNodeByRawLabel_guess(
+                constraint.activeSlot().anchorTarget, false);
+            if(target == nullptr) {
+                target = &nodes[0];
+            }
+            const int constraintType = remapCameraConstraintType_guess(
+                constraint.anchorType_guess,
+                constraint.accumulated.flipX,
+                constraint.accumulated.flipY);
+
+            switch(constraintType) {
+            case 0:
+                if(target->accumulated.posX < constraint.accumulated.posX) {
+                    const double offset = target->accumulated.posX
+                        - constraint.accumulated.posX;
+                    if(offset <= minimumX) {
+                        minimumX = offset;
+                    }
+                    hasMinimumX = true;
                 }
+                break;
+            case 1:
+                directX = target->accumulated.posX
+                    - constraint.accumulated.posX;
+                hasDirectX = true;
+                break;
+            case 2:
+                if(target->accumulated.posX > constraint.accumulated.posX) {
+                    const double offset = target->accumulated.posX
+                        - constraint.accumulated.posX;
+                    if(offset >= maximumX) {
+                        maximumX = offset;
+                    }
+                    hasMaximumX = true;
+                }
+                break;
+            case 3:
+                if(target->accumulated.posY < constraint.accumulated.posY) {
+                    const double offset = target->accumulated.posY
+                        - constraint.accumulated.posY;
+                    if(offset <= minimumY) {
+                        minimumY = offset;
+                    }
+                    hasMinimumY = true;
+                }
+                break;
+            case 4:
+                directY = target->accumulated.posY
+                    - constraint.accumulated.posY;
+                hasDirectY = true;
+                break;
+            case 5:
+                if(target->accumulated.posY > constraint.accumulated.posY) {
+                    const double offset = target->accumulated.posY
+                        - constraint.accumulated.posY;
+                    if(offset >= maximumY) {
+                        maximumY = offset;
+                    }
+                    hasMaximumY = true;
+                }
+                break;
+            case 6:
+                if(target->accumulated.posZ < constraint.accumulated.posZ) {
+                    const double offset = target->accumulated.posZ
+                        - constraint.accumulated.posZ;
+                    if(offset <= minimumZ) {
+                        minimumZ = offset;
+                    }
+                    hasMinimumZ = true;
+                }
+                break;
+            case 7:
+                directZ = target->accumulated.posZ
+                    - constraint.accumulated.posZ;
+                hasDirectZ = true;
+                break;
+            case 8:
+                if(target->accumulated.posZ > constraint.accumulated.posZ) {
+                    const double offset = target->accumulated.posZ
+                        - constraint.accumulated.posZ;
+                    if(offset >= maximumZ) {
+                        maximumZ = offset;
+                    }
+                    hasMaximumZ = true;
+                }
+                break;
+            default:
+                break;
             }
         }
 
+        const double offsetX = selectCameraConstraintOffset_guess(
+            hasMinimumX, minimumX,
+            hasDirectX, directX,
+            hasMaximumX, maximumX);
+        const double offsetY = selectCameraConstraintOffset_guess(
+            hasMinimumY, minimumY,
+            hasDirectY, directY,
+            hasMaximumY, maximumY);
+        const double offsetZ = selectCameraConstraintOffset_guess(
+            hasMinimumZ, minimumZ,
+            hasDirectZ, directZ,
+            hasMaximumZ, maximumZ);
+
+        if(offsetX != 0.0 || offsetY != 0.0 || offsetZ != 0.0) {
+            _cameraConstraintDirty_guess = true;
+            for(size_t index = 1; index < nodes.size(); ++index) {
+                nodes[index].accumulated.posX += offsetX;
+                nodes[index].accumulated.posY += offsetY;
+                nodes[index].accumulated.posZ += offsetZ;
+            }
+        }
     }
 
     void Player::updateLayersPhase3_VertexComputation() {
         auto &nodes = _nodes;
-        // --- sub_6BC4F0: Vertex computation ---
-        // Aligned to 0x6BC4F0. Full implementation matching decompilation.
+        // Four-reference vertex computation. Current per-target entry points,
+        // layouts and count sites live in analysis/ rather than source comments.
+        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
+        std::string motionPath;
+        if(logoTraceEnabled) {
+            motionPath = matchedMotionPath();
+        }
+        const bool traceForPath =
+            logoTraceEnabled &&
+            detail::logoChainTraceEnabledForPath(motionPath);
+        std::vector<detail::MeshPoint> combinedPatch;
         for (size_t vi = 1; vi < nodes.size(); ++vi) {
             auto &vn = nodes[vi];
-            const int parentIdx = vn.parentIndex >= 0 ? vn.parentIndex : 0;
-            auto &parentNode = nodes[parentIdx];
-            const int slotIdx = 0;  // current slot index
+            const int parentIdx = vn.parentIndex;
+            auto &parentNode = nodes[static_cast<size_t>(parentIdx)];
 
-            // sub_6BC4F0 @0x6BC6E4..0x6BC704: node+1968 is derived from
-            // the already-processed parent.  A mesh/combine parent becomes
-            // the next ancestor; otherwise its existing +1968 is forwarded.
-            vn.meshAncestor =
-                (parentNode.hasMeshData || parentNode.meshCombineEnabled)
-                    ? &parentNode
-                    : parentNode.meshAncestor;
-
-            // aligned with sub_6BC4F0 @0x6BC648..0x6BC6C4 (node+48 write):
-            //   if (*(node+1996) /* forceVisible */) {
-            //       materialize emoteEdit dispatch from node+1980;
-            //       node+48 = sub_6636D4("priorDraw") & 1;   // 0x6bc6c4
-            //   } else {
-            //       node+48 = 0;                              // 0x6bc67c
-            //   }
-            // sub_6636D4 @0x6636D4 is a BOOL property getter: for every TJS
-            // variant type it returns (value != 0) collapsed to 0/1, and the
-            // 0x6BC6C4 call site masks & 1. Android copies node+1980 to a
-            // temporary tTJSVariant before materializing the dispatch accessor.
+            // The property callback runs before the parent mesh-state bytes are
+            // consumed. It receives an independently retained Variant copy.
             if (vn.forceVisible) {
                 const tTJSVariant emoteEdit = vn.emoteEditVariant;
                 vn.priorDraw = detail::motionPropGetBool(
-                    emoteEdit, TJS_W("priorDraw")) & 1;
+                    emoteEdit, TJS_W("priorDraw"), 0,
+                    &detail::emoteEditPriorDrawMemberHint_guess);
             } else {
-                vn.priorDraw = 0;  // 0x6BC67C
+                vn.priorDraw = false;
             }
 
-            // Parent clip chain: node+1962/1963 flags (0x6BC6E4..0x6BC818)
-            // node+1962 = has mesh data, node+1963 = mesh combine enabled
-            // node+1968 carries the mesh-transform ancestor chain.  It is
-            // independent from node+1936, which points to a clip AABB.
-            // Set mesh flags: hasMeshData when meshType!=0 and control points exist;
-            // meshCombineEnabled when mesh is active for child deformation.
-            // These flags gate the visibleAncestor conditional in sub_6BE0C0 (label_18).
-            vn.hasMeshData = (vn.meshType != 0 && !vn.meshControlPoints.empty());
-            vn.meshCombineEnabled = (vn.hasMeshData && vn.meshType == 1 && (vn.meshFlags & 1) != 0);
-
-            // Check visible (0x6BC700..0x6BC74C)
-            if (!vn.accumulated.visible) {
-                // Walk parent for mesh flag
-                goto bc4f0_next;
+            vn.meshAncestor =
+                (parentNode.hasMeshData
+                 || parentNode.meshInheritanceSeparator_guess)
+                    ? &parentNode
+                    : parentNode.meshAncestor;
+            vn.meshVertexPassDirty_guess = vn.accumulated.dirty
+                || (vn.meshAncestor != nullptr
+                    && vn.meshAncestor->meshVertexPassDirty_guess);
+            if(!vn.meshVertexPassDirty_guess) {
+                // Even a skipped node removes raw-combined parents from the
+                // separately linked runtime mesh chain. The per-node mesh
+                // flags deliberately retain their preceding values here.
+                if(vn.meshCombine && vn.hasMeshData) {
+                    detail::MotionNode *combineParent = &parentNode;
+                    while(true) {
+                        if(combineParent->hasMeshData
+                           && combineParent == vn.meshAncestor) {
+                            vn.meshAncestor = combineParent->meshAncestor;
+                        }
+                        if(!combineParent->meshCombine) {
+                            break;
+                        }
+                        combineParent = &nodes[static_cast<size_t>(
+                            combineParent->parentIndex)];
+                    }
+                }
+                continue;
             }
 
-            // Propagate clip origin
-            vn.clipOriginX = vn.activeSlot().ox;
-            vn.clipOriginY = vn.activeSlot().oy;
+            const auto &activeSlot = vn.activeSlot();
+            vn.hasMeshData = !activeSlot.done
+                && vn.meshType != 0
+                && !vn.meshControlPoints.empty()
+                && vn.source.valid
+                && (vn.meshFlags & 8) != 0;
+            vn.meshInheritanceSeparator_guess = vn.meshAncestor != nullptr
+                && (vn.inheritFlags & 0x02000000) == 0;
 
-            // nodeType 1/5 special position via parent mesh chain (0x6BC828..0x6BC8D4)
+            // nodeType 1/5 special position via the parent mesh chain.
             // if ((1 << nodeType) & 0x22) != 0 → nodeType 1 (shape) or 5 (camera)
             if (((1 << vn.nodeType) & 0x22) != 0) {
                 double px = vn.accumulated.posX;
                 double py = vn.accumulated.posY;
-                // Walk parent clip chain, evaluate through each mesh (0x6BC838..0x6BC8B0)
+                // Walk the ancestor chain and evaluate through each live mesh.
                 detail::MotionNode *clipWalk = vn.meshAncestor;
                 while (clipWalk) {
                     auto &cn = *clipWalk;
-                    if (cn.transformedMeshControlPoints.size() >= 16) {
-                        // Apply inverse matrix to get normalized coords (0x6BC858..0x6BC87C)
-                        float tx = static_cast<float>(px) + cn.meshInvOffX;
-                        float ty = static_cast<float>(py) + cn.meshInvOffY;
-                        float ix = static_cast<float>(
-                            cn.meshInvM11 * tx + cn.meshInvM12 * ty);
-                        float iy = static_cast<float>(
-                            cn.meshInvM21 * tx + cn.meshInvM22 * ty);
-                        // Evaluate bezier patch at normalized coords (sub_69B1E8)
-                        const auto *mesh =
-                            cn.transformedMeshControlPoints.data();
-                        const float su = 1.f - ix, sv = 1.f - iy;
-                        const float bu[4] = {su*su*su, 3.f*su*su*ix, 3.f*su*ix*ix, ix*ix*ix};
-                        const float bv[4] = {sv*sv*sv, 3.f*sv*sv*iy, 3.f*sv*iy*iy, iy*iy*iy};
-                        float ox = 0, oy = 0;
-                        for (int bi = 0; bi < 16; ++bi) {
-                            float w = bv[bi >> 2] * bu[bi & 3];
-                            ox += mesh[bi].x * w;
-                            oy += mesh[bi].y * w;
-                        }
-                        px = ox;
-                        py = oy;
+                    if (cn.hasMeshData) {
+                        const auto mapped =
+                            mapMeshPositionThroughAncestor_guess(px, py, cn);
+                        px = mapped.x;
+                        py = mapped.y;
+                        ++_processedMeshVerticesNum;
                     }
                     clipWalk = cn.meshAncestor;
                 }
@@ -208,48 +240,81 @@ namespace motion {
                 vn.vertexPosZ = vn.accumulated.posZ;
             }
 
-            // Non slot-done path: vertex computation (0x6BC8DC..0x6BD730)
+            // A finished active slot skips source-quad and mesh materialization.
             if (!vn.activeSlot().done) {
-                // Second visibility bitmask check (0x6BCE2C..0x6BCE40)
+                // This is the vertex-pass eligibility mask, independent of the
+                // earlier draw-item selection mask.
                 // Normal: 7233 = 0x1C41, preview: 7241 = 0x1C49
                 const int vbm = _preview ? 7241 : 7233;
                 const bool vertexEligible = vn.forceVisible
                     || ((vbm & (1 << vn.nodeType)) != 0);
 
                 if (vertexEligible && vn.source.valid) {
+                    const std::vector<detail::MeshPoint> *effectivePatch =
+                        &vn.meshControlPoints;
+                    if(vn.meshCombine) {
+                        if(vn.hasMeshData) {
+                            combinedPatch = vn.meshControlPoints;
+                            detail::MotionNode *combineParent = &parentNode;
+                            while(true) {
+                                if(combineParent->hasMeshData) {
+                                    if(combineParent == vn.meshAncestor) {
+                                        vn.meshAncestor =
+                                            combineParent->meshAncestor;
+                                    }
+                                    addBezierPatchDelta_guess(
+                                        combinedPatch,
+                                        combineParent->meshControlPoints);
+                                }
+                                if(!combineParent->meshCombine) {
+                                    break;
+                                }
+                                combineParent = &nodes[static_cast<size_t>(
+                                    combineParent->parentIndex)];
+                            }
+                        } else {
+                            // Native vector::clear shape: retain the backing
+                            // allocation for reuse by the next node.
+                            combinedPatch.clear();
+                        }
+                        effectivePatch = &combinedPatch;
+                    }
+
                     const double m11 = vn.accumulated.m11, m12 = vn.accumulated.m12;
                     const double m21 = vn.accumulated.m21, m22 = vn.accumulated.m22;
                     const double posX = vn.accumulated.posX;
                     const double posY = vn.accumulated.posY
                         + vn.accumulated.posZ * _zFactor;
+                    double meshPositionX = posX;
+                    double meshPositionY = posY;
 
-                    // Origin offset (0x6BCB58..0x6BCBA4)
-                    const double totalOX = vn.source.originX + vn.clipOriginX;
-                    const double totalOY = vn.source.originY + vn.clipOriginY;
+                    // Translate the source-space origin through the accumulated
+                    // affine matrix before placing the source quad. Native
+                    // reads ox/oy from the selected slot at this use site; it
+                    // has no separate per-node clip-origin cache.
+                    const double totalOX = vn.source.originX + activeSlot.ox;
+                    const double totalOY = vn.source.originY + activeSlot.oy;
                     const double orgX = posX - (m12 * totalOY + totalOX * m11);
                     const double orgY = posY - (totalOY * m22 + totalOX * m21);
-                    vn.vertexPosX = orgX;
-                    vn.vertexPosY = orgY;
-                    vn.vertexPosZ = vn.accumulated.posZ;
 
                     const double cw = vn.source.width;
                     const double ch = vn.source.height;
 
-                    // Player_updateLayers@0x6BCB94/0x6BCBAC clears the two
-                    // derived vectors without touching the raw +2024 patch.
+                    // Clear both derived vectors while preserving their backing
+                    // allocations and leaving the raw patch untouched.
                     vn.transformedMeshControlPoints.clear();
                     vn.compositeMeshPoints.clear();
 
-                    // 0x6BCBBC..0x6BCE24: materialize node+2072 as the
-                    // own-affine-transformed 4x4 patch from raw node+2024.
-                    if(vn.meshType == 1 && !vn.meshControlPoints.empty()) {
+                    // Materialize the own-affine-transformed 4x4 patch from the
+                    // effective raw/combined control-point vector.
+                    if(vn.meshType == 1 && !effectivePatch->empty()) {
                         const double mw11 = m11 * cw, mw12 = m12 * ch;
                         const double mw21 = m21 * cw, mw22 = m22 * ch;
                         vn.transformedMeshControlPoints.resize(16);
                         for(size_t pointIndex = 0; pointIndex < 16;
                             ++pointIndex) {
                             const auto &sourcePoint =
-                                vn.meshControlPoints[pointIndex];
+                                (*effectivePatch)[pointIndex];
                             vn.transformedMeshControlPoints[pointIndex] = {
                                 static_cast<float>(
                                     orgX + mw11 * sourcePoint.x +
@@ -260,287 +325,244 @@ namespace motion {
                             };
                         }
 
-                        // 0x6BCBD4 gates the inverse write on node+1962.  The
-                        // binary has no singular-matrix guard.
+                        // Only a currently live mesh publishes the inverse map.
+                        // The references have no singular-matrix guard.
                         if(vn.hasMeshData) {
                             const double det = mw11 * mw22 - mw12 * mw21;
-                            vn.meshInvM11 = mw22 / det;   // 0x6BCC0C
-                            vn.meshInvM12 = -(mw12 / det); // 0x6BCC20
-                            vn.meshInvM21 = -(mw21 / det); // 0x6BCC34
-                            vn.meshInvM22 = mw11 / det;    // 0x6BCC14
+                            vn.meshInvM11 = mw22 / det;
+                            vn.meshInvM12 = -(mw12 / det);
+                            vn.meshInvM21 = -(mw21 / det);
+                            vn.meshInvM22 = mw11 / det;
                             vn.meshInvOffX = -static_cast<float>(orgX);
                             vn.meshInvOffY = -static_cast<float>(orgY);
                         }
                     }
 
-                    // 4-corner vertex output (0x6BCE44..0x6BCEC0)
-                    {
-                        const double fx = vn.vertexPosX;
-                        const double fy = vn.vertexPosY;
-                        vn.vertices[0] = static_cast<float>(fx);
-                        vn.vertices[1] = static_cast<float>(fy);
-                        vn.vertices[2] = static_cast<float>(fx + m11*cw);
-                        vn.vertices[3] = static_cast<float>(fy + m21*cw);
-                        vn.vertices[4] = static_cast<float>(fx + m11*cw + m12*ch);
-                        vn.vertices[5] = static_cast<float>(fy + m21*cw + m22*ch);
-                        vn.vertices[6] = static_cast<float>(fx + m12*ch);
-                        vn.vertices[7] = static_cast<float>(fy + m22*ch);
-                        const auto motionPath = matchedMotionPath();
-                        if(detail::logoChainTraceEnabledForPath(motionPath)) {
-                            const std::array<float, 8> expectedVertices = {
-                                static_cast<float>(fx),
-                                static_cast<float>(fy),
-                                static_cast<float>(fx + m11 * cw),
-                                static_cast<float>(fy + m21 * cw),
-                                static_cast<float>(fx + m11 * cw + m12 * ch),
-                                static_cast<float>(fy + m21 * cw + m22 * ch),
-                                static_cast<float>(fx + m12 * ch),
-                                static_cast<float>(fy + m22 * ch)
-                            };
-                            bool ok = true;
-                            for(size_t vi = 0; vi < expectedVertices.size(); ++vi) {
-                                if(std::fabs(vn.vertices[vi] - expectedVertices[vi]) >
-                                   0.01f) {
-                                    ok = false;
-                                    break;
+                    // Raw/combined patch state is updated under the outer
+                    // source-valid gate.  Four-corner and inherited-grid
+                    // materialization have their own narrower type/blank gate.
+                    if(selectVertexQuadMaterialization_guess(
+                            vn.forceVisible, vn.nodeType,
+                            _preview, vn.source.blank)) {
+                        // Affine four-corner quad, ordered TL/TR/BR/BL.
+                        {
+                            const double fx = orgX;
+                            const double fy = orgY;
+                            vn.vertices[0] = static_cast<float>(fx);
+                            vn.vertices[1] = static_cast<float>(fy);
+                            vn.vertices[2] = static_cast<float>(fx + m11*cw);
+                            vn.vertices[3] = static_cast<float>(fy + m21*cw);
+                            vn.vertices[4] = static_cast<float>(fx + m11*cw + m12*ch);
+                            vn.vertices[5] = static_cast<float>(fy + m21*cw + m22*ch);
+                            vn.vertices[6] = static_cast<float>(fx + m12*ch);
+                            vn.vertices[7] = static_cast<float>(fy + m22*ch);
+                            if(traceForPath) {
+                                const std::array<float, 8> expectedVertices = {
+                                    static_cast<float>(fx),
+                                    static_cast<float>(fy),
+                                    static_cast<float>(fx + m11 * cw),
+                                    static_cast<float>(fy + m21 * cw),
+                                    static_cast<float>(fx + m11 * cw + m12 * ch),
+                                    static_cast<float>(fy + m21 * cw + m22 * ch),
+                                    static_cast<float>(fx + m12 * ch),
+                                    static_cast<float>(fy + m22 * ch)
+                                };
+                                bool ok = true;
+                                for(size_t vi = 0; vi < expectedVertices.size(); ++vi) {
+                                    if(std::fabs(vn.vertices[vi] - expectedVertices[vi]) >
+                                       0.01f) {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                                detail::logoChainTraceCheck(
+                                    motionPath, "updateLayers.phase3.vertices",
+                                    "vertex-computation", _clampedEvalTime,
+                                    fmt::format(
+                                        "pos=({:.3f},{:.3f}) clip=({:.3f},{:.3f}) m=({:.6f},{:.6f},{:.6f},{:.6f}) exp=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
+                                        fx, fy, cw, ch, m11, m12, m21, m22,
+                                        expectedVertices[0], expectedVertices[1],
+                                        expectedVertices[2], expectedVertices[3],
+                                        expectedVertices[4], expectedVertices[5],
+                                        expectedVertices[6], expectedVertices[7]),
+                                    fmt::format(
+                                        "src={} act=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
+                                        vn.activeSlot().srcValue.IsEmpty()
+                                            ? std::string("<none>")
+                                            : detail::narrow(
+                                                  vn.activeSlot().srcValue),
+                                        vn.vertices[0], vn.vertices[1],
+                                        vn.vertices[2], vn.vertices[3],
+                                        vn.vertices[4], vn.vertices[5],
+                                        vn.vertices[6], vn.vertices[7]),
+                                    ok,
+                                    "vertex-pass output diverged from expected corners");
+                            }
+                        }
+
+                        if(vn.meshAncestor != nullptr) {
+                            const float *gridCorners = vn.vertices;
+                            std::uint32_t division = 0;
+                            const std::uint32_t width =
+                                meshDoubleToUnsignedTowardZeroSaturated_guess(cw);
+
+                            if(vn.meshType == 1 && !effectivePatch->empty()) {
+                                const std::uint32_t height =
+                                    meshDoubleToUnsignedTowardZeroSaturated_guess(ch);
+                                division = scaledOwnMeshDivision_guess(
+                                    getMeshDivisionRatio(),
+                                    static_cast<std::uint32_t>(vn.meshDivision));
+                                const std::uint32_t denominator = width + height;
+                                const std::uint32_t splitX = unsignedDivideA64Profile_guess(
+                                    division * width, denominator);
+                                vn.meshDivX = meshDivisionCounterWordToInt_guess(
+                                    splitX + 1u);
+                                vn.meshDivY = meshDivisionCounterWordToInt_guess(
+                                    division - splitX + 1u);
+                                gridCorners =
+                                    unitBezierPatchQuad_guess.data();
+                            } else {
+                                const std::uint32_t currentExtent =
+                                    meshDoubleToUnsignedTowardZeroSaturated_guess(
+                                        cw + ch);
+                                if(vn.meshType == 1) {
+                                    division = scaledOwnMeshDivision_guess(
+                                        getMeshDivisionRatio(),
+                                        static_cast<std::uint32_t>(vn.meshDivision));
+                                } else {
+                                    detail::MotionNode *divisionSource =
+                                        vn.meshAncestor;
+                                    while(!divisionSource->hasMeshData) {
+                                        divisionSource =
+                                            divisionSource->meshAncestor;
+                                    }
+                                    const std::uint32_t sourceExtent =
+                                        meshDoubleToUnsignedTowardZeroSaturated_guess(
+                                            divisionSource->source.width
+                                            + divisionSource->source.height);
+                                    const std::uint32_t sourceDivision =
+                                        scaledInheritedMeshDivision_guess(
+                                            getMeshDivisionRatio(),
+                                            static_cast<std::uint32_t>(
+                                                divisionSource->meshDivision));
+                                    division = unsignedDivideA64Profile_guess(
+                                        sourceDivision * currentExtent,
+                                        sourceExtent);
+                                    if(division >= 50u) {
+                                        division = 50u;
+                                    }
+                                }
+                                const std::uint32_t splitX = unsignedDivideA64Profile_guess(
+                                    division * width, currentExtent);
+                                vn.meshDivX = meshDivisionCounterWordToInt_guess(
+                                    splitX + 1u);
+                                vn.meshDivY = meshDivisionCounterWordToInt_guess(
+                                    division - splitX + 1u);
+                            }
+
+                            buildBilinearMeshGrid_guess(
+                                vn.meshDivX, vn.meshDivY,
+                                vn.compositeMeshPoints, gridCorners);
+                            if(gridCorners ==
+                               unitBezierPatchQuad_guess.data()) {
+                                for(auto &point : vn.compositeMeshPoints) {
+                                    point = evaluateBezierPatchVector_guess(
+                                        vn.transformedMeshControlPoints,
+                                        point.x, point.y);
                                 }
                             }
-                            detail::logoChainTraceCheck(
-                                motionPath, "updateLayers.phase3.vertices",
-                                "0x6BC4F0", _clampedEvalTime,
-                                fmt::format(
-                                    "pos=({:.3f},{:.3f}) clip=({:.3f},{:.3f}) m=({:.6f},{:.6f},{:.6f},{:.6f}) exp=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                    fx, fy, cw, ch, m11, m12, m21, m22,
-                                    expectedVertices[0], expectedVertices[1],
-                                    expectedVertices[2], expectedVertices[3],
-                                    expectedVertices[4], expectedVertices[5],
-                                    expectedVertices[6], expectedVertices[7]),
-                                fmt::format(
-                                    "src={} act=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                    vn.activeSlot().srcValue.IsEmpty()
-                                        ? std::string("<none>")
-                                        : detail::narrow(
-                                              vn.activeSlot().srcValue),
-                                    vn.vertices[0], vn.vertices[1],
-                                    vn.vertices[2], vn.vertices[3],
-                                    vn.vertices[4], vn.vertices[5],
-                                    vn.vertices[6], vn.vertices[7]),
-                                ok,
-                                "sub_6BC4F0 vertex output diverged from expected corners");
-                        }
-                    }
 
-                    // 0x6BCEF0..0x6BD380: node+2048 only exists when this
-                    // node has a mesh ancestor. sub_6BAF68@0x6BAF68 builds a
-                    // normalized unit-square grid of
-                    // (meshDivX+1)*(meshDivY+1) points, then sub_69B1E8 maps
-                    // every point through the world patch at node+2072.
-                    if(vn.meshAncestor != nullptr && vn.meshType == 1 &&
-                       !vn.meshControlPoints.empty()) {
-                        const auto evaluatePatch = [](
-                            const std::vector<detail::MeshPoint> &patch,
-                            float u, float v) {
-                            const float oneMinusU = 1.0f - u;
-                            const float oneMinusV = 1.0f - v;
-                            const float bu[4] = {
-                                oneMinusU * oneMinusU * oneMinusU,
-                                3.0f * oneMinusU * oneMinusU * u,
-                                3.0f * oneMinusU * u * u,
-                                u * u * u,
-                            };
-                            const float bv[4] = {
-                                oneMinusV * oneMinusV * oneMinusV,
-                                3.0f * oneMinusV * oneMinusV * v,
-                                3.0f * oneMinusV * v * v,
-                                v * v * v,
-                            };
-                            detail::MeshPoint result{};
-                            for(size_t patchIndex = 0; patchIndex < 16;
-                                ++patchIndex) {
-                                const float weight =
-                                    bv[patchIndex >> 2] *
-                                    bu[patchIndex & 3];
-                                result.x += patch[patchIndex].x * weight;
-                                result.y += patch[patchIndex].y * weight;
-                            }
-                            return result;
-                        };
-
-                        auto division = static_cast<unsigned int>(
-                            meshDivisionRatioDupLike_0x6BCF3C() *
-                            static_cast<double>(
-                                static_cast<unsigned int>(vn.meshDivision)));
-                        if(division >= 50u) {
-                            division = 50u;
-                        }
-                        const auto width =
-                            static_cast<unsigned int>(cw);
-                        const auto height =
-                            static_cast<unsigned int>(ch);
-                        const auto denominator = height + width;
-                        // sub_6BC4F0 @0x6BCF4C uses AArch64 UDIV, whose
-                        // zero-divisor result is 0. Preserve that boundary on
-                        // wasm, where native integer division would trap.
-                        const auto splitX = denominator != 0u
-                            ? division * width / denominator
-                            : 0u;
-                        vn.meshDivX = static_cast<int>(splitX + 1u);
-                        vn.meshDivY = static_cast<int>(
-                            division - splitX + 1u);
-
-                        const auto pointColumns =
-                            static_cast<size_t>(vn.meshDivX + 1);
-                        const auto pointRows =
-                            static_cast<size_t>(vn.meshDivY + 1);
-                        vn.compositeMeshPoints.resize(
-                            pointColumns * pointRows);
-                        for(int y = 0; y <= vn.meshDivY; ++y) {
-                            const float v = static_cast<float>(
-                                static_cast<double>(y) /
-                                static_cast<double>(vn.meshDivY));
-                            for(int x = 0; x <= vn.meshDivX; ++x) {
-                                const float u = static_cast<float>(
-                                    static_cast<double>(x) /
-                                    static_cast<double>(vn.meshDivX));
-                                vn.compositeMeshPoints[
-                                    static_cast<size_t>(y) * pointColumns +
-                                    static_cast<size_t>(x)] = evaluatePatch(
-                                        vn.transformedMeshControlPoints, u, v);
-                            }
-                        }
-
-                        const auto mapThroughAncestor = [
-                            &evaluatePatch](detail::MeshPoint point,
-                                            const detail::MotionNode &ancestor) {
-                            const float translatedX =
-                                point.x + ancestor.meshInvOffX;
-                            const float translatedY =
-                                point.y + ancestor.meshInvOffY;
-                            const float u = static_cast<float>(
-                                ancestor.meshInvM11 * translatedX +
-                                ancestor.meshInvM12 * translatedY);
-                            const float v = static_cast<float>(
-                                ancestor.meshInvM21 * translatedX +
-                                ancestor.meshInvM22 * translatedY);
-                            return evaluatePatch(
-                                ancestor.transformedMeshControlPoints, u, v);
-                        };
-
-                        detail::MotionNode *ancestor = vn.meshAncestor;
-                        double cascadeOrgX = orgX;
-                        double cascadeOrgY = orgY;
-                        if(!vn.meshCombineEnabled) {
-                            while(ancestor != nullptr &&
-                                  !ancestor->meshCombineEnabled) {
-                                if(ancestor->hasMeshData) {
-                                    for(auto &point :
-                                        vn.compositeMeshPoints) {
-                                        point = mapThroughAncestor(
-                                            point, *ancestor);
+                            detail::MotionNode *ancestor = vn.meshAncestor;
+                            if(!vn.meshInheritanceSeparator_guess) {
+                                while(ancestor != nullptr
+                                      && !ancestor->meshInheritanceSeparator_guess) {
+                                    if(ancestor->hasMeshData) {
+                                        for(auto &point : vn.compositeMeshPoints) {
+                                            point = mapMeshPointThroughAncestor_guess(
+                                                point, *ancestor);
+                                        }
+                                        const auto mappedPosition =
+                                            mapMeshPositionThroughAncestor_guess(
+                                                meshPositionX, meshPositionY,
+                                                *ancestor);
+                                        meshPositionX = mappedPosition.x;
+                                        meshPositionY = mappedPosition.y;
+                                        _processedMeshVerticesNum +=
+                                            static_cast<std::uint32_t>(
+                                                vn.compositeMeshPoints.size()) + 1u;
                                     }
-                                    const auto mappedOrigin =
-                                        mapThroughAncestor(
-                                            {static_cast<float>(cascadeOrgX),
-                                             static_cast<float>(cascadeOrgY)},
+                                    ancestor = ancestor->meshAncestor;
+                                }
+                            }
+
+                            const double shiftBaseX = meshPositionX;
+                            const double shiftBaseY = meshPositionY;
+                            while(ancestor != nullptr) {
+                                if(ancestor->hasMeshData) {
+                                    const auto mappedPosition =
+                                        mapMeshPositionThroughAncestor_guess(
+                                            meshPositionX, meshPositionY,
                                             *ancestor);
-                                    cascadeOrgX = mappedOrigin.x;
-                                    cascadeOrgY = mappedOrigin.y;
-                                    _processedMeshVerticesNum +=
-                                        static_cast<int>(
-                                            vn.compositeMeshPoints.size()) + 1;
+                                    meshPositionX = mappedPosition.x;
+                                    meshPositionY = mappedPosition.y;
+                                    ++_processedMeshVerticesNum;
                                 }
                                 ancestor = ancestor->meshAncestor;
                             }
-                        }
-                        while(ancestor != nullptr) {
-                            if(ancestor->hasMeshData) {
-                                const auto mappedOrigin = mapThroughAncestor(
-                                    {static_cast<float>(cascadeOrgX),
-                                     static_cast<float>(cascadeOrgY)},
-                                    *ancestor);
-                                cascadeOrgX = mappedOrigin.x;
-                                cascadeOrgY = mappedOrigin.y;
-                                ++_processedMeshVerticesNum;
+
+                            if(shiftBaseX != meshPositionX
+                               || shiftBaseY != meshPositionY) {
+                                const float deltaX = static_cast<float>(
+                                    meshPositionX - shiftBaseX);
+                                const float deltaY = static_cast<float>(
+                                    meshPositionY - shiftBaseY);
+                                for(auto &point : vn.compositeMeshPoints) {
+                                    point.x += deltaX;
+                                    point.y += deltaY;
+                                }
                             }
-                            ancestor = ancestor->meshAncestor;
+                        } else if(vn.meshType == 1) {
+                            // A top-level mesh does not materialize the composite
+                            // point vector here, but the references still charge
+                            // the tessellation grid that rendering will process.
+                            const auto division = scaledOwnMeshDivision_guess(
+                                getMeshDivisionRatio(),
+                                static_cast<std::uint32_t>(vn.meshDivision));
+                            const auto width =
+                                meshDoubleToUnsignedTowardZeroSaturated_guess(cw);
+                            const auto height =
+                                meshDoubleToUnsignedTowardZeroSaturated_guess(ch);
+                            const auto denominator = width + height;
+                            const auto splitX = unsignedDivideA64Profile_guess(
+                                division * width, denominator);
+                            _processedMeshVerticesNum +=
+                                (division - splitX + 2u) * (splitX + 2u);
                         }
 
-                        if(cascadeOrgX != orgX || cascadeOrgY != orgY) {
-                            vn.vertexPosX = cascadeOrgX;
-                            vn.vertexPosY = cascadeOrgY;
-                            const float deltaX = static_cast<float>(
-                                cascadeOrgX - orgX);
-                            const float deltaY = static_cast<float>(
-                                cascadeOrgY - orgY);
-                            for(auto &point : vn.compositeMeshPoints) {
-                                point.x += deltaX;
-                                point.y += deltaY;
-                            }
+                        // A forced-visible node mirrors evaluated geometry into
+                        // its retained emoteEdit object. Conversion/property
+                        // exceptions unwind through the retained dispatches.
+                        if(vn.forceVisible) {
+                            mirrorForceVisibleGeometry_guess(
+                                vn.emoteEditVariant,
+                                meshPositionX, meshPositionY,
+                                m11, m12, m21, m22,
+                                cw, ch, totalOX, totalOY,
+                                vn.accumulated.flipX,
+                                vn.accumulated.flipY,
+                                vn.accumulated.scaleX,
+                                vn.accumulated.scaleY,
+                                vn.accumulated.slantX,
+                                vn.accumulated.angle);
                         }
-                    }
-
-                    // forceVisible TJS property writing (0x6BD38C..0x6BD72C)
-                    // When node+1996 (forceVisible) is set, write node properties
-                    // to a TJS dictionary for sub-motion evaluation.
-                    // forceVisible TJS property writing (0x6BD38C..0x6BD72C)
-                    // Write node properties to TJS dict for sub-motion evaluation.
-                    if (vn.forceVisible && vn.tjsLayerObject) {
-                        auto *tjsObj = static_cast<iTJSDispatch2 *>(vn.tjsLayerObject);
-                        try {
-                            // "c" array: [posX, posY] (0x6BD480..0x6BD494)
-                            tTJSVariant posXv(vn.vertexPosX);
-                            tTJSVariant posYv(vn.vertexPosY);
-                            // "mtx" array: [m11,m12,m21,m22] (0x6BD534..0x6BD570)
-                            tTJSVariant m11v(m11), m12v(m12), m21v(m21), m22v(m22);
-                            // "width" (0x6BD590)
-                            tTJSVariant wv(cw);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("width"),
-                                nullptr, &wv, tjsObj);
-                            // "height" (0x6BD5B0)
-                            tTJSVariant hv(ch);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("height"),
-                                nullptr, &hv, tjsObj);
-                            // "originX" (0x6BD5E4)
-                            tTJSVariant oxv(totalOX);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("originX"),
-                                nullptr, &oxv, tjsObj);
-                            // "originY" (0x6BD618)
-                            tTJSVariant oyv(totalOY);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("originY"),
-                                nullptr, &oyv, tjsObj);
-                            // "flipX" (0x6BD638)
-                            tTJSVariant fxv(static_cast<tjs_int>(vn.accumulated.flipX));
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("flipX"),
-                                nullptr, &fxv, tjsObj);
-                            // "flipY" (0x6BD658)
-                            tTJSVariant fyv(static_cast<tjs_int>(vn.accumulated.flipY));
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("flipY"),
-                                nullptr, &fyv, tjsObj);
-                            // "zoomX" (0x6BD678)
-                            tTJSVariant zxv(vn.accumulated.scaleX);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("zoomX"),
-                                nullptr, &zxv, tjsObj);
-                            // "zoomY" (0x6BD698)
-                            tTJSVariant zyv(vn.accumulated.scaleY);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("zoomY"),
-                                nullptr, &zyv, tjsObj);
-                            // "slantX" (0x6BD6B8)
-                            tTJSVariant sxv(vn.accumulated.slantX);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("slantX"),
-                                nullptr, &sxv, tjsObj);
-                            // "angle" (0x6BD6D8)
-                            tTJSVariant av(vn.accumulated.angle);
-                            tjsObj->PropSet(TJS_MEMBERENSURE, TJS_W("angle"),
-                                nullptr, &av, tjsObj);
-                        } catch (...) {}
                     }
                 }
             }
-            bc4f0_next:;
         }
 
-        // Delta position computation (0x6BBB74..0x6BBC54)
-        // if player+480 is set: delta = 0; else: delta = currentPos - prevPos
+        // Preserve the final accumulated position for the next frame's delta.
+        // Queuing suppresses the delta; otherwise compare current and previous
+        // accumulated positions.
         {
             for (size_t di = 1; di < nodes.size(); ++di) {
                 auto &dn = nodes[di];
@@ -558,160 +580,149 @@ namespace motion {
 
     void Player::updateLayersPhase3_Visibility() {
         auto &nodes = _nodes;
-        // Visibility flags — aligned to sub_6BD8DC at 0x6BD8DC.
-        // Root node (index 0) is always visible.
-        if (!nodes.empty()) {
-            nodes[0].drawFlag =
-                nodes[0].accumulated.visible && nodes[0].source.valid;
-        }
-        // Visibility bitmask: which nodeTypes can render
-        // Normal:  6145 = 0x1801 → nodeTypes 0, 11, 12
-        // Preview: 6153 = 0x1809 → nodeTypes 0, 3, 11, 12
-        // Aligned to sub_6BD8DC (0x6BD8DC): the visibility mask reads the
-        // Player+1092 preview property.
-        const int visBitmask = _preview ? 6153 : 6145;
+        // Root is not visited. Its constructor-zeroed draw flag and null
+        // visible-ancestor state are deliberately left untouched.
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
 
-            // Find visible ancestor (walk parent chain, 0x6BD9D8)
-            int pIdx = node.parentIndex;
-            if (pIdx >= 0 && pIdx < static_cast<int>(nodes.size())) {
-                if (!nodes[pIdx].drawFlag) {
-                    node.visibleAncestorIndex = nodes[pIdx].visibleAncestorIndex;
-                } else {
-                    node.visibleAncestorIndex = pIdx;
-                }
-            }
+            // Native parent indices are consumed without a bounds guard.
+            const int parentIndex = node.parentIndex;
+            const auto &parent = nodes[static_cast<size_t>(parentIndex)];
+            node.visibleAncestorIndex = selectVisibleAncestorIndex_guess(
+                parentIndex, parent.drawFlag,
+                parent.visibleAncestorIndex);
 
-            // Visibility logic — exact replica of sub_6BD8DC (0x6BD958..0x6BDA00):
-            //   if (slotDone) { v9 = 0; }
-            //   else { v9 = stencilType; if (v9) { v9 = active; if (v9) {
-            //     if (forceVisible || (bitmask & (1<<nodeType))) v9 = hasSource; } } }
-            //   drawFlag = v9;
-            if (node.activeSlot().done) {
-                node.drawFlag = false;
-            } else if (node.stencilType == 0) {
-                // node+52 == 0 → invisible (0x6BD958)
-                node.drawFlag = false;
-            } else if (!node.accumulated.active) {
-                node.drawFlag = false;
-            } else if (node.forceVisible
-                       || (visBitmask & (1 << node.nodeType)) != 0) {
-                node.drawFlag = node.source.valid;
-            } else {
-                // Active node, not in renderable bitmask, not forceVisible:
-                // v9 stays as active (non-zero) → drawFlag = true
-                node.drawFlag = true;
-            }
+            node.drawFlag = selectNodeDrawFlag_guess(
+                node.activeSlot().done,
+                node.stencilType,
+                node.accumulated.active,
+                node.forceVisible,
+                node.nodeType,
+                _preview,
+                node.source.valid);
         }
 
     }
 
     void Player::updateLayersPhase3_CameraNode() {
         auto &nodes = _nodes;
-        // Camera node processing — aligned to sub_6BDA28 (0x6BDA28).
-        // Find first nodeType=5 (camera) that is active, compute cameraOffset.
+        // The first active type-5 node wins. A missing camera does not clear
+        // the previously computed offsets or camera-query state.
         _hasCamera = false;
         for (size_t i = 1; i < nodes.size(); ++i) {
             const auto &camNode = nodes[i];
             if (camNode.nodeType != 5 || !camNode.accumulated.active) continue;
             _hasCamera = true;
 
-            // Compute delta from root node position
-            const auto &rootAcc = nodes[0].accumulated;
-            const double dx = -(camNode.accumulated.posX - rootAcc.posX);
-            const double dy = -(camNode.accumulated.posY * _zFactor
-                + camNode.accumulated.posZ
-                - (rootAcc.posY * _zFactor + rootAcc.posZ));
-
-            // sub_6BDA28@0x6BDB88 dereferences Player+0, then
-            // 0x6BDB9C..0x6BDBC0 reads +808..832, matching the render path's
-            // shared owner.
-            const auto &drawAffineOwner = *_rootPlayer;
-            _cameraOffsetX = static_cast<float>(
-                static_cast<int>(drawAffineOwner._drawAffineM11 * dx +
-                                 drawAffineOwner._drawAffineM12 * dy + 0.5));
-            _cameraOffsetY = static_cast<float>(
-                static_cast<int>(drawAffineOwner._drawAffineM21 * dx +
-                                 drawAffineOwner._drawAffineM22 * dy + 0.5));
-
-            // Camera-to-target angle (0x6BDC04..0x6BDCB0)
-            // When stereovisionActive (a1+1094): compute camera angle for 3D effect.
-            if (_stereovisionActive) {
-                // 0x6BDC08..0x6BDC0C: player+1104 <- camera node+2368.
-                _cameraFov = camNode.cameraFov;
-                // Store camera/target positions (a1+72..112)
-                _cameraPosX = camNode.accumulated.posX;
-                _cameraPosY = camNode.accumulated.posY;
-                _cameraPosZ = camNode.accumulated.posZ;
-                // Look up target node via clip slot action path
-                // For now, target defaults to previous positions
-                // Compute angle: atan2(camPosZ - targetZ, camPosX - targetX)
-                double angleRad = std::atan2(
-                    camNode.accumulated.posZ - _cameraTargetZ,
-                    camNode.accumulated.posX - _cameraTargetX);
-                double angleDeg = angleRad * -57.2957795 + 90.0;
-                while (angleDeg < 0.0) angleDeg += 360.0;
-                while (angleDeg >= 360.0) angleDeg -= 360.0;
-                _cameraAngle = angleDeg;  // a1+472
-                _cameraTargetX = _cameraPosX;
-                _cameraTargetY = _cameraPosY;
-                _cameraTargetZ = _cameraPosZ;
+            const detail::MotionNode *targetNode = nullptr;
+            const detail::MotionNode *focusNode = &camNode;
+            const auto &cameraTarget = camNode.activeSlot().cameraTarget;
+            if(!cameraTarget.IsEmpty()) {
+                targetNode = findNodeByRawLabel_guess(cameraTarget, false);
             }
-            break;  // only first camera node
+            if(targetNode != nullptr) {
+                focusNode = targetNode;
+            }
+
+            // Camera focus consumes the vertex-computation output, not the
+            // accumulated transform. Both projected deltas narrow to float
+            // before the root Player's affine transform is applied.
+            const auto &rootNode = nodes[0];
+            const float deltaX = narrowAndNegateCameraNodeDelta_guess(
+                focusNode->vertexPosX - rootNode.vertexPosX);
+            const float deltaY = narrowAndNegateCameraNodeDelta_guess(
+                focusNode->vertexPosZ * _zFactor + focusNode->vertexPosY
+                - (_zFactor * rootNode.vertexPosZ + rootNode.vertexPosY));
+
+            const auto &drawAffineOwner = *_rootPlayer;
+            _cameraOffsetX = quantizeCameraNodeOffset_guess(
+                drawAffineOwner._drawAffineM11,
+                drawAffineOwner._drawAffineM12,
+                deltaX, deltaY);
+            _cameraOffsetY = quantizeCameraNodeOffset_guess(
+                drawAffineOwner._drawAffineM21,
+                drawAffineOwner._drawAffineM22,
+                deltaX, deltaY);
+
+            if (_cameraActive) {
+                _cameraFov = camNode.cameraFov;
+                _cameraPosX = camNode.vertexPosX;
+                _cameraPosY = camNode.vertexPosY;
+                _cameraPosZ = camNode.vertexPosZ;
+                // Empty target and lookup miss deliberately retain the previous
+                // cross-frame target coordinates.
+                if(targetNode != nullptr) {
+                    _cameraTargetX = targetNode->vertexPosX;
+                    _cameraTargetY = targetNode->vertexPosY;
+                    _cameraTargetZ = targetNode->vertexPosZ;
+                }
+                _cameraAngle = cameraNodeAngleDegrees_guess(
+                    _cameraPosX, _cameraPosZ,
+                    _cameraTargetX, _cameraTargetZ);
+            }
+            break;
         }
 
     }
 
     void Player::updateLayersPhase3_ShapeAABB() {
         auto &nodes = _nodes;
-        // --- sub_6BDCC0: Shape AABB computation (nodeType=7) ---
-        // Aligned to 0x6BDCC0. For nodeType=7 active nodes, compute AABB
-        // from 2x2 matrix × 16-unit extent, origin offset, parent clip clamping.
+        const bool logoSnapshotEnabled =
+            detail::logoSnapshotMarkEnabled();
+        std::string motionPath;
+        if(logoSnapshotEnabled) {
+            motionPath = matchedMotionPath();
+        }
+        const bool snapshotWindow =
+            logoSnapshotEnabled &&
+            detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+            motionPath.find("m2logo.mtn") != std::string::npos &&
+            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0;
         for (size_t si = 1; si < nodes.size(); ++si) {
             auto &sn = nodes[si];
-            // Propagate the parent's clip-AABB pointer (node+1936).  This is a
-            // direct pointer to float[4], not the node+1968 mesh chain.
-            if (sn.parentIndex >= 0 && sn.parentIndex < static_cast<int>(nodes.size())) {
-                sn.clipAABB = nodes[sn.parentIndex].clipAABB;
+            // Native parent indices are consumed without a bounds guard.
+            const auto &parent = nodes[static_cast<size_t>(sn.parentIndex)];
+            if (sn.nodeType != 7 || !sn.accumulated.active) {
+                sn.clipAABB = parent.clipAABB;
+                continue;
             }
-            if (sn.nodeType != 7 || !sn.accumulated.active) continue;
 
             const double m11 = sn.accumulated.m11, m12 = sn.accumulated.m12;
             const double m21 = sn.accumulated.m21, m22 = sn.accumulated.m22;
             const double px = sn.accumulated.posX, py = sn.accumulated.posY;
-            const double pzs = sn.accumulated.posZ * _zFactor + py;
-            const double ox = sn.clipOriginX, oy = sn.clipOriginY;
-            const double oox = ox * m11 + oy * m12;
-            const double ooy = ox * m21 + oy * m22;
-            // Extent = matrix × 16
-            const double ex1 = m11 * 16.0, ex2 = m12 * 16.0;
-            const double ey1 = m21 * 16.0, ey2 = m22 * 16.0;
-            double xMin = px - ex1 - ex2 - oox;
-            double xMax = px + ex1 + ex2 - oox;
-            double yMin = pzs - ey1 - ey2 - ooy;
-            double yMax = pzs + ey1 + ey2 - ooy;
-            if (xMin > xMax) std::swap(xMin, xMax);
-            if (yMin > yMax) std::swap(yMin, yMax);
-            sn.shapeAABB[0] = static_cast<float>(xMin);
-            sn.shapeAABB[1] = static_cast<float>(yMin);
-            sn.shapeAABB[2] = static_cast<float>(xMax);
-            sn.shapeAABB[3] = static_cast<float>(yMax);
-            // Clamp to parent clip (0x6BDE40..0x6BDE80)
-            if (sn.clipAABB) {
-                const float *pc = sn.clipAABB;
-                if (pc[0] > sn.shapeAABB[0]) sn.shapeAABB[0] = pc[0];
-                if (pc[1] > sn.shapeAABB[1]) sn.shapeAABB[1] = pc[1];
-                if (pc[2] < sn.shapeAABB[2]) sn.shapeAABB[2] = pc[2];
-                if (pc[3] < sn.shapeAABB[3]) sn.shapeAABB[3] = pc[3];
+            const auto &slot = sn.activeSlot();
+            const double originX = slot.oy * m12 + slot.ox * m11;
+            const double originY = slot.oy * m22 + slot.ox * m21;
+
+            const auto xBounds = orderShapeAxis_guess(
+                px - m12 * 16.0 - m11 * 16.0 - originX,
+                m12 * 16.0 + px + m11 * 16.0 - originX);
+            const auto yBounds = orderShapeAxis_guess(
+                py - m22 * 16.0 - m21 * 16.0 - originY,
+                m22 * 16.0 + py + m21 * 16.0 - originY);
+            const double projectedZ = _zFactor * sn.accumulated.posZ;
+
+            sn.shapeAABB[0] = static_cast<float>(xBounds.minimum);
+            sn.shapeAABB[1] = static_cast<float>(
+                projectedZ + yBounds.minimum);
+            sn.shapeAABB[2] = static_cast<float>(xBounds.maximum);
+            sn.shapeAABB[3] = static_cast<float>(
+                projectedZ + yBounds.maximum);
+
+            if (parent.clipAABB != nullptr) {
+                const float *parentClip = parent.clipAABB;
+                sn.shapeAABB[0] = clampShapeMinimumToParent_guess(
+                    sn.shapeAABB[0], parentClip[0]);
+                sn.shapeAABB[1] = clampShapeMinimumToParent_guess(
+                    sn.shapeAABB[1], parentClip[1]);
+                sn.shapeAABB[2] = clampShapeMaximumToParent_guess(
+                    sn.shapeAABB[2], parentClip[2]);
+                sn.shapeAABB[3] = clampShapeMaximumToParent_guess(
+                    sn.shapeAABB[3], parentClip[3]);
             }
             sn.clipAABB = sn.shapeAABB;
 
-            const auto motionPath = matchedMotionPath();
-            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-               motionPath.find("m2logo.mtn") != std::string::npos &&
-               _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
-               sn.index == 18) {
+            if(snapshotWindow && sn.index == 18) {
                 const std::string label = detail::narrow(sn.layerName);
                 std::fprintf(
                     stderr,
@@ -721,7 +732,7 @@ namespace motion {
                     sn.layerName.IsEmpty() ? "<none>" : label.c_str(),
                     sn.activeSlot().ox, sn.activeSlot().oy,
                     sn.activeSlot().ox, sn.activeSlot().oy,
-                    sn.clipOriginX, sn.clipOriginY,
+                    slot.ox, slot.oy,
                     sn.accumulated.posX, sn.accumulated.posY, sn.accumulated.posZ,
                     sn.accumulated.m11, sn.accumulated.m12,
                     sn.accumulated.m21, sn.accumulated.m22,
@@ -735,56 +746,25 @@ namespace motion {
 
     void Player::updateLayersPhase3_ShapeGeometry() {
         auto &nodes = _nodes;
-        // --- sub_6BDE94: Shape geometry computation (nodeType=1) ---
-        // Aligned to 0x6BDE94. For nodeType=1 nodes with active slot,
-        // compute shape vertices based on shapeType (0=point,1=circle,2=rect,3=quad).
+        // Eligible type-1 nodes update only the slots owned by their current
+        // shape kind. Skipped and unused slots retain their prior bytes.
         for (size_t si = 1; si < nodes.size(); ++si) {
             auto &sn = nodes[si];
             if (sn.nodeType != 1 || sn.activeSlot().done) continue;
-            sn.shapeGeomType = sn.shapeType;
-            switch (sn.shapeType) {
-                case 0: // point (0x6BDF40)
-                    sn.shapeVertices[0] = sn.vertexPosX;
-                    sn.shapeVertices[1] = sn.vertexPosY;
-                    break;
-                case 1: { // circle (0x6BDF50)
-                    sn.shapeVertices[0] = sn.vertexPosX;
-                    sn.shapeVertices[1] = sn.vertexPosY;
-                    sn.shapeVertices[2] = sn.accumulated.scaleX * 16.0 * 0.5;
-                    break;
-                }
-                case 2: { // rect (0x6BDF70)
-                    const double hw = sn.accumulated.scaleX * 16.0 * 0.5;
-                    const double hh = sn.accumulated.scaleY * 16.0 * 0.5;
-                    sn.shapeVertices[3] = sn.vertexPosX - hw;
-                    sn.shapeVertices[4] = sn.vertexPosY - hh;
-                    sn.shapeVertices[5] = sn.vertexPosX + hw;
-                    sn.shapeVertices[6] = sn.vertexPosY + hh;
-                    break;
-                }
-                case 3: { // quad (0x6BDFA8)
-                    const double m11 = sn.accumulated.m11, m12 = sn.accumulated.m12;
-                    const double m21 = sn.accumulated.m21, m22 = sn.accumulated.m22;
-                    const double ox = sn.clipOriginX, oy = sn.clipOriginY;
-                    const double oox = ox * m11 + oy * m12;
-                    const double ooy = ox * m21 + oy * m22;
-                    const double px = sn.vertexPosX, py = sn.vertexPosY;
-                    const double ax = m11 * -8.0, bx = m12 * -8.0;
-                    const double cx = m11 * 8.0,  dx = m12 * 8.0;
-                    const double ay = m21 * -8.0, by = m22 * -8.0;
-                    const double cy = m21 * 8.0,  dy = m22 * 8.0;
-                    sn.shapeVertices[7]  = px + ax + bx - oox;
-                    sn.shapeVertices[8]  = py + ay + by - ooy;
-                    sn.shapeVertices[9]  = px + cx + bx - oox;
-                    sn.shapeVertices[10] = py + cy + by - ooy;
-                    sn.shapeVertices[11] = px + cx + dx - oox;
-                    sn.shapeVertices[12] = py + cy + dy - ooy;
-                    sn.shapeVertices[13] = px + ax + dx - oox;
-                    sn.shapeVertices[14] = py + ay + dy - ooy;
-                    break;
-                }
-                default: break;
-            }
+            const auto &slot = sn.activeSlot();
+            updateShapeGeometryRecord_guess(
+                sn.shapeGeometry,
+                sn.shapeType,
+                sn.vertexPosX,
+                sn.vertexPosY,
+                sn.accumulated.scaleX,
+                sn.accumulated.scaleY,
+                sn.accumulated.m11,
+                sn.accumulated.m12,
+                sn.accumulated.m21,
+                sn.accumulated.m22,
+                slot.ox,
+                slot.oy);
         }
 
     }

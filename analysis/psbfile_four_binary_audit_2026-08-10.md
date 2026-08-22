@@ -526,14 +526,18 @@ outer map 的 mapped record 构造也已从旧地址重定位。Android arm64 �
 `sub_6E8DC4 -> sub_6E8EEC -> sub_6E90DC`，Android armv7 为
 `sub_5A7488 -> sub_5A751C -> sub_5A762C`；iOS arm64 在 `sub_100101798` 内联，
 iOS armv7 在 `sub_FE940` 内联。四份共同的源码成员顺序是保留的 PSB owner、Win
-texture map、KRKR atlas map；两个内层 map 各自按初始 bucket 请求 10 初始化。普通 C++
-逆序析构因此为 KRKR map、Win map、PSB owner，本地 `LoadedResourceRecord` 的声明顺序
-与之相同。
+texture map、KRKR atlas map。这里后续四端复核纠正了“源码显式请求 10 个 bucket”的
+旧结论：两个 Android 的旧 libstdc++ 默认构造策略自身带着 10 的初始策略并立即分配，
+两个 iOS 的 libc++ 默认构造则把 bucket header 清零、延迟到第一次插入才分配；四端都
+没有插件源码级 `rehash(10)`。普通 C++ 逆序析构为 KRKR map、Win map、PSB owner，本地
+`LoadedResourceRecord` 的声明顺序与之相同。完整容器生命周期审计见
+`motionplayer_resource_manager_module_map_lifecycle_four_binary_2026-08-14.md`。
 
 cache miss 时 loader 调用 storage load，验证根 `id == "motion"`，把 `spec` 的
 `"krkr"/"win"` 映射为模式 1/2，并拒绝高于约 `3.0300001` 的 `version`。随后通过
 Transfer 把 owner holder 放入 unordered_map：覆盖时先 Release 旧 owner，赋值后对新
-owner AddRef。cache hit 先为局部 holder AddRef。最终 root dispatch 构造再次持有 owner；
+owner AddRef；但正常 loader 只在先前查找 miss 后执行 `map[path]`，所以该路径不会替换
+既有 record。cache hit 先为局部 holder AddRef。最终 root dispatch 构造再次持有 owner；
 写入 TJS object variant 时同一 dispatch 作为 object/this 各持有一个引用，局部初始引用
 随后 Release。因此 map 替换或 loader 临时对象销毁不会使已返回 dispatch 悬空。
 
@@ -550,6 +554,11 @@ Player 的 `isExistMotion` 四个包装回调分别为
 `{findMotionContextVariant, path}` 两个参数调用所持有 ResourceManager dispatch 的
 `isExistMotion` 成员并把 Variant 转为 bool；它们不直接探测 storage，也不建立
 Player-local cache。本地旧 `Player_isExistMotion@0x6D07F4` 注释已据此移除。
+
+2026-08-14 进一步复核参数数组与状态路径：第一个参数直接别名持久 context 成员而非
+局部 CopyRef；ResourceManager Variant 被无保护地转换为 Object，`FuncCall` 状态被忽略，
+result 始终执行 bool 转换。完整边界与回归探针见
+`motionplayer_player_is_exist_motion_four_binary_2026-08-14.md`。
 
 ### Emote PSB 解密过滤器
 
@@ -571,9 +580,11 @@ UTF-16LE、UTF-32LE 全编码搜索并跑完分页。两组当前 NCB 回调与�
 
 seed setter 只要求至少一个参数，对 `p[0]` 做普通 TJS Integer 转换并捕获完整
 64 位值；实际流状态使用其低 32 位。四份 invoker 都以
-`123456789/362436069/521288629/seed` 初始化四字状态，以同一个 xorshift 公式每四个
-字节生成一次新字，并异或 `[encryptData, chunkOffsets)`；长度先截为有符号 32 位，
-小于一时直接返回。
+`123456789/362436069/521288629/seed` 初始化四字状态，并异或
+`[encryptData, chunkOffsets)`；长度先截为有符号 32 位，小于一时直接返回。
+每处理一个 byte 前都会把“剩余 keystream word 是否为零”当作 refill gate：为零才运行
+下一次 xorshift，异或低 byte 后右移八位。因此通常一个非零 word 消费四个 byte，
+但若其尚未消费的高位后缀全为零，会提前 refill；不能把实现简化成固定的四字节分组。
 
 function setter 同样接受额外参数，只把 `p[0]` 转为 Object/ObjThis closure。64 位闭包
 保存两个 8 字节 dispatch 指针，32 位保存两个 4 字节指针；引用计数 control block
@@ -589,6 +600,13 @@ Android arm64 IDB 原先把两个 setter 错并为 `sub_683110: 0x683110..0x6835
 `sub_6838A0: 0x6838A0..0x6838A8`、`sub_6838A8: 0x6838A8..0x683994`、
 `sub_683994: 0x683994..0x683AD0`。fresh decompile 分别恢复 target 管理与
 CBinaryAccessor 调用，修复已保存回 IDB。
+
+2026-08-15 又从四份 recovery IDB 对 setter、invoker 和 process-wide replacement
+逐函数 fresh decompile。共同结果仍是：额外参数被忽略；function closure 同时保有
+Object/ObjThis；invoker 按 `{accessor,size}` 顺序传两个 Variant、以 closure 自身的
+ObjThis 调用并忽略返回值；替换先复制新 target、交换全局 target、再销毁旧 target。
+本次复核同时纠正了上文“固定每四字节生成新字”的过度概括，并把编译源码与测试名中
+残留的单 Android/绝对地址叙事迁成四参考语义说明。绝对地址继续只保存在本分析文件。
 
 texture/icon 消费者只借用 raw string/resource 指针，并在对应 owner holder 仍存活时
 立即比较、解码或复制，没有把裸指针越过调用返回保存。pixel/palette 解码器读取

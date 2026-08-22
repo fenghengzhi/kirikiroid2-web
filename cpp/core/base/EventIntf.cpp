@@ -12,10 +12,15 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#if defined(EMSCRIPTEN) &&                                             \
+    defined(TVP_ENABLE_WCHAIN_CONTINUOUS_EVENT_TRACE) &&              \
+    TVP_ENABLE_WCHAIN_CONTINUOUS_EVENT_TRACE
 #include <string>
 #include <spdlog/spdlog.h>
-#ifdef EMSCRIPTEN
 #include <emscripten.h>
+#define TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE 1
+#else
+#define TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE 0
 #endif
 #include "SysInitIntf.h"
 #include "EventIntf.h"
@@ -202,7 +207,9 @@ static tTVPAtExit TVPDestroyEventQueueAtExit(TVP_ATEXIT_PRI_PREPARE,
 bool TVPEventDisabled = false;
 bool TVPEventInterrupting = false;
 
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
 static void TVPTraceContinuousPumpPoint(const char *stage);
+#endif
 
 // #define TVP_EVENT_TASK_RETURN_TICK 100000
 /* TVP event system once returns to Operation system when
@@ -532,7 +539,9 @@ void TVPDeliverAllEvents() {
 
         // process continuous events
         if(TVPProcessContinuousHandlerEventFlag) {
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
             TVPTraceContinuousPumpPoint("event.deliverAll.continuous-flag");
+#endif
             TVPProcessContinuousHandlerEventFlag = false; // processed
             // XXX: strictly saying, we need something like
             // InterlockedExchange to look/set this flag, because
@@ -541,9 +550,12 @@ void TVPDeliverAllEvents() {
             // does care of missing one event in rare race condition.
 
             TVPDeliverContinuousEvent();
-        } else {
+        }
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
+        else {
             TVPTraceContinuousPumpPoint("event.deliverAll.no-continuous-flag");
         }
+#endif
         try {
             try {
                 // for window content updating
@@ -755,12 +767,22 @@ ttstr TVPActionName(TJS_W("action"));
 // Continuous Event Delivering related
 //---------------------------------------------------------------------------
 bool TVPProcessContinuousHandlerEventFlag = false;
+// The first vector is a non-owning raw-pointer registry.  Removal writes null
+// tombstones; delivery performs the eventual erase.  The closure vector owns
+// exactly the references acquired by TVPAddContinuousHandler and releases them
+// manually because tTJSVariantClosure itself is a raw two-pointer value.
 static std::vector<tTVPContinuousEventCallbackIntf *> TVPContinuousEventVector;
 static std::vector<tTJSVariantClosure> TVPContinuousHandlerVector;
+// This is a same-thread reentry guard, not a lock or an atomic synchronization
+// primitive.  A nested TVPDeliverContinuousEvent call is deliberately a no-op.
 static bool TVPContinuousEventProcessing = false;
 
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
+// This diagnostic block is intentionally absent from normal builds.  The four
+// reference binaries have no URL/JS query, stack capture, logger lookup or
+// diagnostic counter on continuous-event paths.  Enabling it is therefore an
+// explicit Emscripten debugging mode, not part of the reconstructed behavior.
 static bool TVPLogoChainTraceEnabledForEvents() {
-#ifdef EMSCRIPTEN
     return EM_ASM_INT({
         try {
             if(typeof window !== 'undefined' &&
@@ -777,9 +799,6 @@ static bool TVPLogoChainTraceEnabledForEvents() {
             return 0;
         }
     }) != 0;
-#else
-    return false;
-#endif
 }
 
 static bool TVPTraceContinuousSeqAllowed(tjs_uint64 seq) {
@@ -835,8 +854,12 @@ static void TVPTraceContinuousRegistration(const char *stage,
             TVPShortTJSStackTrace());
     }
 }
+#endif
 
 static void TVPDestroyContinuousHandlerVector() {
+    // Registered at TVP_ATEXIT_PRI_PREPARE.  This logical destruction pass
+    // releases the closure pairs before the vector's static storage destructor
+    // later frees only the backing allocation.
     std::vector<tTJSVariantClosure>::iterator i;
     for(i = TVPContinuousHandlerVector.begin();
         i != TVPContinuousHandlerVector.end(); i++) {
@@ -851,13 +874,21 @@ static tTVPAtExit
 
 //---------------------------------------------------------------------------
 void TVPAddContinuousEventHook(tTVPContinuousEventCallbackIntf *cb) {
+    // Reference order is significant: scheduling begins before vector growth.
+    // Null and duplicate pointers are accepted, and a growth exception does not
+    // roll back TVPBeginContinuousEvent.
     TVPBeginContinuousEvent();
     TVPContinuousEventVector.push_back(cb);
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
     TVPTraceContinuousRegistration("event.addContinuousEventHook", nullptr, cb);
+#endif
 }
 
 //---------------------------------------------------------------------------
 void TVPRemoveContinuousEventHook(tTVPContinuousEventCallbackIntf *cb) {
+    // Null every match.  Do not erase, shrink, release the callback, or call
+    // TVPEndContinuousEvent here; a later successful delivery owns compaction
+    // and the empty-registry stop transition.
     std::vector<tTVPContinuousEventCallbackIntf *>::iterator i;
     for(i = TVPContinuousEventVector.begin();
         i != TVPContinuousEventVector.end();) {
@@ -865,8 +896,10 @@ void TVPRemoveContinuousEventHook(tTVPContinuousEventCallbackIntf *cb) {
             *i = nullptr; // simply assign a nullptr
         i++;
     }
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
     TVPTraceContinuousRegistration("event.removeContinuousEventHook", nullptr,
                                    cb);
+#endif
 }
 
 //---------------------------------------------------------------------------
@@ -875,6 +908,7 @@ static void _TVPDeliverContinuousEvent() // internal
     TVPStartTickCount();
     tjs_uint64 tick = TVPGetTickCount();
 
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
     static tjs_uint64 deliverSeq = 0;
     const tjs_uint64 seq = ++deliverSeq;
     const bool trace =
@@ -891,19 +925,28 @@ static void _TVPDeliverContinuousEvent() // internal
                 TVPContinuousHandlerVector.size(), TVPEventDisabled ? 1 : 0);
         }
     }
+#endif
 
     if(TVPContinuousEventVector.size()) {
         bool emptyflag = false;
+        // size() and operator[] are deliberately re-evaluated after callbacks.
+        // An append (including one that reallocates) is visible in this same
+        // pass.  If the current callback removes itself, this iteration already
+        // observed a non-null slot and therefore does not set emptyflag; that
+        // tombstone can survive until a later delivery.
         for(tjs_uint32 i = 0; i < TVPContinuousEventVector.size(); i++) {
             // note that the handler can remove itself while the event
             if(TVPContinuousEventVector[i]) {
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                 ++hookCalls;
+#endif
                 TVPContinuousEventVector[i]->OnContinuousCallback(tick);
             } else {
                 emptyflag = true;
             }
 
             if(TVPExclusiveEventPosted) {
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                 if(trace) {
                     if(auto logger = spdlog::get("core")) {
                         logger->warn(
@@ -911,6 +954,9 @@ static void _TVPDeliverContinuousEvent() // internal
                             seq, hookCalls, handlerCalls);
                     }
                 }
+#endif
+                // This early return intentionally skips both tombstone
+                // compaction and the empty-registry TVPEndContinuousEvent call.
                 return; // check exclusive events
             }
         }
@@ -934,11 +980,16 @@ static void _TVPDeliverContinuousEvent() // internal
         bool emptyflag = false;
         tTJSVariant vtick((tjs_int64)tick);
         tTJSVariant *pvtick = &vtick;
+        // As for hooks, the loop bound and indexed closure are live vector
+        // accesses.  Successful self-removal of the current handler does not
+        // set emptyflag here; removal of a future handler is observed later.
         for(tjs_uint i = 0; i < TVPContinuousHandlerVector.size(); i++) {
             if(TVPContinuousHandlerVector[i].Object) {
                 tjs_error er;
                 try {
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                     ++handlerCalls;
+#endif
                     er = TVPContinuousHandlerVector[i].FuncCall(
                         0, nullptr, nullptr, nullptr, 1, &pvtick, nullptr);
                 } catch(...) {
@@ -950,13 +1001,16 @@ static void _TVPDeliverContinuousEvent() // internal
                 }
                 if(TJS_FAILED(er)) {
                     // failed
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                     ++handlerFailures;
+#endif
                     TVPContinuousHandlerVector[i].Release();
                     TVPContinuousHandlerVector[i].Object =
                         TVPContinuousHandlerVector[i].ObjThis = nullptr;
                     emptyflag = true;
                 }
                 if(TVPExclusiveEventPosted) {
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                     if(trace) {
                         if(auto logger = spdlog::get("core")) {
                             logger->warn(
@@ -965,6 +1019,8 @@ static void _TVPDeliverContinuousEvent() // internal
                                 handlerFailures);
                         }
                     }
+#endif
+                    // As on the hook side, abort precedes compaction and End.
                     return; // check exclusive events
                 }
             } else {
@@ -992,6 +1048,7 @@ static void _TVPDeliverContinuousEvent() // internal
     if(!TVPContinuousEventVector.size() && !TVPContinuousHandlerVector.size())
         TVPEndContinuousEvent();
 
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
     if(trace) {
         if(auto logger = spdlog::get("core")) {
             logger->warn(
@@ -1001,6 +1058,7 @@ static void _TVPDeliverContinuousEvent() // internal
                 TVPContinuousHandlerVector.size());
         }
     }
+#endif
 }
 
 //---------------------------------------------------------------------------
@@ -1031,11 +1089,18 @@ void TVPAddContinuousHandler(tTJSVariantClosure clo) {
     i = std::find(TVPContinuousHandlerVector.begin(),
                   TVPContinuousHandlerVector.end(), clo);
     if(i == TVPContinuousHandlerVector.end()) {
+        // The reference binaries perform Begin and both AddRefs before a slow
+        // vector growth.  They contain no rollback catch: allocation failure
+        // can leave scheduling active and the newly acquired references
+        // unowned.  Preserve that boundary rather than making this transaction
+        // appear exception-safe.
         TVPBeginContinuousEvent();
         clo.AddRef();
         TVPContinuousHandlerVector.emplace_back(clo);
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
         TVPTraceContinuousRegistration("event.addContinuousHandler", &clo,
                                        nullptr);
+#endif
     }
 }
 
@@ -1045,8 +1110,12 @@ void TVPRemoveContinuousHandler(tTJSVariantClosure clo) {
     i = std::find(TVPContinuousHandlerVector.begin(),
                   TVPContinuousHandlerVector.end(), clo);
     if(i != TVPContinuousHandlerVector.end()) {
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
         TVPTraceContinuousRegistration("event.removeContinuousHandler",
                                        &(*i), nullptr);
+#endif
+        // Removal releases the first exact pair and leaves an all-null
+        // tombstone.  It neither erases the slot nor stops scheduling.
         i->Release();
         i->Object = i->ObjThis = nullptr;
     }

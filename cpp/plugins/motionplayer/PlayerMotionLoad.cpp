@@ -5,6 +5,8 @@
 #include "MotionDispatch.h"
 #include "MotionTraceWeb.h"
 
+#include <memory>
+
 using namespace motion::internal;
 
 namespace motion {
@@ -16,106 +18,150 @@ namespace motion {
         const char *diagBool(bool v) {
             return v ? "true" : "false";
         }
+
+        struct DispatchRelease {
+            void operator()(iTJSDispatch2 *dispatch) const {
+                if(dispatch) {
+                    dispatch->Release();
+                }
+            }
+        };
+
+        using RetainedDispatch =
+            std::unique_ptr<iTJSDispatch2, DispatchRelease>;
     }
 
-    // Child-motion call sites use this native helper as the source-level
-    // Player_play entry. Keep one state machine: Player_play @0x6B21E8 owns
-    // pending +768, then Player_playImpl @0x6B2284 owns load/init and the live
-    // +976/+984 slots.
-    void Player::onFindMotion(ttstr name, int flags) {
-        (void)playMotionLike_0x6B2284(std::move(name), flags);
+    // The script-visible default callback is an identity function in all four
+    // references. Motion loading invokes it through the current TJS dispatch,
+    // so scripts may replace the returned request dictionary.
+    tTJSVariant Player::onFindMotion(tTJSVariant request) {
+        // Returning through a const lvalue forces the copy performed by all
+        // four native bodies instead of allowing an implicit move from the
+        // by-value parameter.
+        return static_cast<const tTJSVariant &>(request);
     }
 
-    // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Called
-    // synchronously from the play path after Player_buildNodeTree (0x6B51F0)
-    // and before the (flags & Chain) playback-state gate. Reads the PSB
-    // "variable" array (from Player+528) and pushes one
-    // VariableLabelScope (the 160B var-track item) per dict entry onto the
-    // Player+1296 deque:
-    //   cascadeKey (item+0)  <- scope present ? scope+"::"+label : label
-    //       (binary 0x6CDAEC..0x6CDBB4: v25 = sub_A1359C(scope, "::");
-    //        item+0 = sub_A1359C(v25, label) — concat, NOT scope-suffix split)
-    //   frameSource (item+24) <- entry["label"] raw value (sub_A0FB64 @0x6CDA98) —
-    //       the keyframe list stream③ iterates; SAME value as item+0
-    //   value (item+16)      <- 0  (interpolated later; HM4 reads it)
-    //   cursor (item+8)      <- 0
-    //   slot[0/1].typeZeroFlag <- 1  (binary item+68/+124 seeded =1 @0x6CD9C0)
+    // Four-reference variable-track builder. It runs synchronously after the
+    // node tree is built and before the chain-playback state gate. Each source
+    // item is appended to the deque before any of its named properties are
+    // read. That ordering is observable when a getter throws: the partially
+    // initialized deque element remains present, with only the fields reached
+    // before the exception written.
     void Player::initVariables() {
         _variableLabelScopes.clear();
-        if(_motionContentVariant.Type() != tvtObject) {
-            return;
-        }
 
-        // Player_initVariables @0x6CD750 reads Player+528 directly through TJS
-        // dispatch. Do not substitute MotionSnapshot::moduleValue here: that
-        // compatibility value owns the decoded file root, not necessarily the
-        // selected motion content returned by ResourceManager.findMotion.
-        const tTJSVariant variableList = detail::motionPropGet(
-            _motionContentVariant, TJS_W("variable"));
+        // The copied motion accessor is a full-expression temporary. It keeps
+        // the selected content alive through the typed `variable` read, then
+        // releases it before the Void gate and list traversal.
+        const tTJSVariant variableList =
+            ncbPropAccessor(tTJSVariant(_motionContentVariant)).GetValue(
+                TJS_W("variable"),
+                ncbTypedefs::Tag<tTJSVariant>(), 0);
         if(variableList.Type() == tvtVoid) {
             return;
         }
 
-        const tjs_int count = detail::motionPropGetCount(variableList);
+        ncbPropAccessor variableListObject{tTJSVariant(variableList)};
+        const tjs_int count = variableListObject.GetArrayCount();
         for(tjs_int i = 0; i < count; ++i) {
-            const tTJSVariant item = detail::motionPropGetByNum(variableList, i);
-            detail::VariableLabelScope entry;
+            ncbPropAccessor itemObject{variableListObject.GetValue(
+                i, ncbTypedefs::Tag<tTJSVariant>(), 0)};
+            auto &entry = _variableLabelScopes.emplace_back();
 
-            // 0x6CD9F0 stores the converted label string at item+0, while
-            // 0x6CDA58..0x6CDA98 performs a second PropGet and CopyRef into
-            // item+24. Preserve both accesses and the independent Variant owner.
-            entry.cascadeKey = detail::motionPropGetString(
-                item, TJS_W("label"));
-            entry.frameSource = detail::motionPropGet(item, TJS_W("label"));
+            // The first access converts the label to the cascade key. Native
+            // construction then seeds the two type-zero sentinels and cursor;
+            // only after that does a second, independent access retain the raw
+            // label value as the keyframe source.
+            entry.cascadeKey = itemObject.GetValue(
+                TJS_W("label"), ncbTypedefs::Tag<ttstr>(), 0);
+            entry.value = 0.0;
+            entry.slot[0].typeZeroFlag = true;
+            entry.slot[1].typeZeroFlag = true;
+            entry.activeSlotCursor = 0;
+            entry.frameSource = itemObject.GetValue(
+                TJS_W("label"), ncbTypedefs::Tag<tTJSVariant>(), 0);
 
-            const tTJSVariant scope = detail::motionPropGet(
-                item, TJS_W("scope"));
-            if(scope.Type() != tvtVoid) {
-                entry.cascadeKey = ttstr(scope) + TJS_W("::") +
+            const ttstr scope(itemObject.GetValue(
+                TJS_W("scope"), ncbTypedefs::Tag<tTJSVariant>(), 0));
+            if(!scope.IsEmpty()) {
+                entry.cascadeKey = scope + TJS_W("::") +
                                    entry.cascadeKey;
             }
-
-            // value/cursor default 0; slot gate flags default 1 (struct
-            // in-class initialisers mirror the binary memset+seed).
-            _variableLabelScopes.push_back(std::move(entry));
         }
     }
 
-    void Player::resetNodeTreeForBuildLike_0x6B56F8() {
-        if(false) {
-            return;
+    void Player::resetAndReleaseOldNodeTree_guess() {
+        // Retain the canonical ResourceManager dispatch before invoking child
+        // objects. Re-entrant callbacks therefore cannot redirect the release
+        // phase by replacing the Player's Variant owner.
+        tTJSVariant resourceManagerCopy(_resourceManager);
+        RetainedDispatch resourceManager(
+            resourceManagerCopy.AsObject());
+        resourceManagerCopy.Clear();
+
+        (void)detail::visitNodeOwnedPlayerVariants_guess(
+            _nodes, [](const tTJSVariant &child) {
+                iTJSDispatch2 *object = child.AsObjectNoAddRef();
+                (void)object->Invalidate(
+                    0, nullptr, nullptr, object);
+                return true;
+            });
+
+        // Rebuild preserves HM1 entries but resets their live write value and
+        // drops every cached, non-owning node pointer.
+        for(auto &entry : _evalCascadeMap) {
+            entry.second.writeVal = 1.0;
+            entry.second.heapResult.clear();
         }
-        detail::ensureRootNodeLike_0x6CED30(*this);
-        for(size_t i = 1; i < _nodes.size(); ++i) {
-            auto &node = _nodes[i];
-            // P3-B (d): release via Player+992 dispatch FuncCall (binary
-            //   resetAndReleaseNodes@0x6B56F8), not a native call.
-            dispatchReleaseLayerId(node.layerId1);
-            dispatchReleaseLayerId(node.layerId2);
+
+        const auto releaseLayerId = [&](tjs_int id) {
+            tTJSVariant idValue(id);
+            tTJSVariant *arguments[1] = {&idValue};
+            (void)resourceManager->FuncCall(
+                0, TJS_W("releaseLayerId"),
+                &detail::releaseLayerIdMemberHint_guess,
+                nullptr, 1, arguments, resourceManager.get());
+        };
+
+        for(size_t index = 1; index < _nodes.size(); ++index) {
+            detail::MotionNode &node = _nodes[index];
+            releaseLayerId(node.layerId1);
+            releaseLayerId(node.layerId2);
+            // This third release is gated only by the persistent item latch;
+            // draw/rawFlag21 and the numeric value do not participate. Native
+            // does not clear either field before the re-entrant dispatch, so an
+            // exception stops before suffix erase and leaves the old item/tree
+            // published for a later retry.
+            if(node.preparedRenderItem &&
+               node.preparedRenderItem->rawFlag20) {
+                releaseLayerId(
+                    node.preparedRenderItem->renderLayerId);
+            }
         }
-        detail::resetNodeTreeKeepRootLike_0x6B56F8(*this);
+
+        detail::eraseNonRootNodesAndClearLabelMap_guess(*this);
     }
 
-    void Player::linkType3ChildPlayerLike_0x6B43DC(Player &child) {
-        // 0x6B43D0..0x6B43DC precedes the
-        // "motionIndependentLayerInherit" PropGet at 0x6B4404.
+    void Player::linkType3ChildPlayer_guess(Player &child) {
+        // These non-owning links are installed before the first child-specific
+        // property lookup.
         child._rootPlayer = _rootPlayer;
         child._parentPlayer = this;
     }
 
-    void Player::initializeType3ChildStateLike_0x6B4604(
+    void Player::initializeType3ChildState_guess(
         Player &child, detail::MotionNode &node,
         bool independentLayerInherit) {
-        // Player_initNodeFields@0x6B4604..0x6B4688 performs the remaining
-        // native-Player initialization before CreateAdaptor.  This path
-        // directly writes +1097 after dirtying the sole root node; it does not
-        // call the public NCB setter callback at 0x6CC9D4.
+        // This construction-only path writes the inherit flag directly after
+        // dirtying the child's sole root; it does not use the public setter.
         auto &root = child._nodes.front();
         if(child._independentLayerInherit != independentLayerInherit) {
             root.delta.dirty = true;
             child._independentLayerInherit = independentLayerInherit;
         }
         child._type3RootTransformAlreadyPropagated = true;
+        // Type-3 children inherit an independently owning context copy. Their
+        // later successful/failed loads replace or clear only the child field.
         child._findMotionContextVariant = _findMotionContextVariant;
         root.coordinateMode = node.coordinateMode;
         child.setZFactor(_zFactor);
@@ -124,74 +170,61 @@ namespace motion {
         }
     }
 
-    // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). The binary calls
-    // this unconditionally from Player_initNonEmoteMotion (0x6B365C) after
-    // Player_loadMotion succeeds — there is no lazy gate. The caller is
-    // responsible for having loaded the motion first; we keep a minimal null
-    // check so calls on a Player without a loaded motion become a no-op
-    // instead of crashing, but we do NOT call ensureMotionLoaded here.
-    void Player::buildNodeTree() {
+    void Player::buildNodeTree_guess() {
         static std::uint32_t s_buildDiagSeq = 0;
-        const auto diagSeq = ++s_buildDiagSeq;
-        const bool emitDiag = shouldEmitMotionLoadDiag(diagSeq);
-        if(_motionContentVariant.Type() != tvtObject) {
-            if(emitDiag && LOGGER) {
-                LOGGER->info(
-                    "PRTDIAG Player::buildNodeTree no-raw-content-return seq={} this={} motionKey='{}' chara='{}'",
-                    diagSeq, static_cast<const void *>(this),
-                    detail::narrow(_motionKey), detail::narrow(_chara));
-            }
-            return;
+        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
+        std::uint32_t diagSeq = 0;
+        bool emitDiag = false;
+        if(logoTraceEnabled && LOGGER) {
+            diagSeq = ++s_buildDiagSeq;
+            emitDiag = shouldEmitMotionLoadDiag(diagSeq);
         }
 
-        const auto nodesBefore = _nodes.size();
-        resetNodeTreeForBuildLike_0x6B56F8();
+        // Construct the owning property accessor before old-tree teardown.
+        // A non-object Variant throws here and leaves the existing tree intact.
+        ncbPropAccessor motionContent{
+            tTJSVariant(_motionContentVariant)};
+
+        const auto nodesBefore = emitDiag ? _nodes.size() : 0;
+        resetAndReleaseOldNodeTree_guess();
 
         if(emitDiag && LOGGER) {
+            const auto entryMotionPath = matchedMotionPath();
             LOGGER->info(
                 "PRTDIAG Player::buildNodeTree enter seq={} this={} motionKey='{}' chara='{}' activePath='{}' nodesBefore={} nodesAfterReset={} allplaying={}",
                 diagSeq, static_cast<const void *>(this),
                 detail::narrow(_motionKey), detail::narrow(_chara),
-                matchedMotionPath().empty()
-                    ? std::string("<none>") : matchedMotionPath(),
+                entryMotionPath.empty()
+                    ? std::string("<none>") : entryMotionPath,
                 nodesBefore, _nodes.size(),
                 diagBool(_allplaying));
         }
 
-        detail::buildNodeTree(
-            *this, _motionContentVariant,
-            _preview);  // binary buildNodeTree (0x6B43A4) gates on +1092 (preview)
+        detail::buildNodeTree(*this, motionContent);
 
+        // Both the sampled PRTDIAG projection and the per-node trace consume
+        // the same post-build path. Do not materialize it when trace is off.
+        std::string motionPath;
+        if(logoTraceEnabled) {
+            motionPath = matchedMotionPath();
+        }
         if(emitDiag && LOGGER) {
             LOGGER->info(
                 "PRTDIAG Player::buildNodeTree after-detail seq={} this={} activePath='{}' nodeCount={} labelMap={} preview={}",
                 diagSeq, static_cast<const void *>(this),
-                matchedMotionPath().empty()
-                    ? std::string("<none>") : matchedMotionPath(),
+                motionPath.empty()
+                    ? std::string("<none>") : motionPath,
                 _nodes.size(), _nodeLabelMap.size(), diagBool(_preview));
         }
 
-        if(!_nodes.empty()) {
-            auto &root = _nodes[0];
-            // Aligned to libkrkr2.so Player_setRootFlipX/X/Y
-            // (0x6CD028/0x6CD048/0x6CD068): these setters write the delta block
-            // at node+1584..+1660, not the local post-interpolation mirror.
-            root.delta.flipX = _rootFlipX;
-            if(_hasPendingRootPos) {
-                root.delta.posX = _pendingRootX;
-                root.delta.posY = _pendingRootY;
-            }
-            root.delta.dirty = true;
-        }
-
-        const auto motionPath = matchedMotionPath();
-        if(detail::logoChainTraceEnabledForPath(motionPath)) {
+        if(logoTraceEnabled &&
+           detail::logoChainTraceEnabledForPath(motionPath)) {
             detail::logoChainTraceLogf(
-                motionPath, "buildNodeTree", "0x6B51F0", _clampedEvalTime,
+                motionPath, "buildNodeTree", "buildNodeTree", _clampedEvalTime,
                 "nodeCount={}", _nodes.size());
             for(const auto &node : _nodes) {
                 detail::logoChainTraceLogf(
-                    motionPath, "buildNodeTree.node", "0x6B51F0",
+                    motionPath, "buildNodeTree.node", "buildNodeTree",
                     _clampedEvalTime,
                     "nodeIndex={} label={} type={} parent={} hasSource={} meshType={} inheritFlags=0x{:x} parameterizeIndex={} objTriPriority={} clipAABB={} meshAncestor={} stencilType={}",
                     node.index,

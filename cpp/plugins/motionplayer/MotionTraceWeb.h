@@ -44,7 +44,7 @@ namespace motion::detail {
         void recordTargetCheckSLA(bool hit);
         void recordPrepareResult(bool ok);
         void recordBranchAfterPrepare(bool d3dDrawMode);
-        void recordApplyTranslateOffset();
+        void recordApplyPreparedProjection();
         void recordRenderToCanvas(bool ok);
         void recordUpdateLayerAfterDraw(bool internalAssignRequested, bool ok);
 
@@ -96,8 +96,8 @@ namespace motion::detail {
         Player *player, bool ok,
         const std::vector<PreparedRenderItem *> &mainList,
         const std::vector<PreparedRenderItem *> &auxList);
-    void motionTraceRenderApplyTranslateEnter(Player *player);
-    void motionTraceRenderApplyTranslateLeave(
+    void motionTraceRenderApplyProjectionEnter(Player *player);
+    void motionTraceRenderApplyProjectionLeave(
         Player *player,
         const std::vector<PreparedRenderItem *> &mainList);
     void motionTraceRenderBuildItemsEnter(Player *player,

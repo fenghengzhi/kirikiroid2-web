@@ -47,6 +47,8 @@ target_sources(${PROJECT_NAME} PRIVATE
     NodeTree.cpp
     MotionNodeBridge.cpp
     MotionTraceWeb.cpp
+    MotionRenderBackend.cpp
+    MotionLayerExtensions.cpp
     PrivateMotionGLL.cpp
     SeparateLayerAdaptor.cpp
 )

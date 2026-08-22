@@ -1,261 +1,243 @@
-// EmoteBlinkController — ctor (0x662968) + step (sub_663BDC) faithful port.
+// Four-reference EmoteBlinkController constructor and per-slice step.
 
 #include "EmoteBlinkController.h"
 #include "EmoteBlinkRng.h"
 #include "MotionDispatch.h"
+#include "ncbind.hpp"
 
 #include <cmath>
 #include <cstring> // std::memcpy for the raw-bits trackPow reinterpret
+#include <limits>
 
 namespace motion {
 
-    // Aligned with libkrkr2.so EmoteBlinkController_ctor @ 0x662968.
-    // Decompiled pseudocode (this conversation):
-    //   memset(self,0,0x50); EmoteAngleController_ctor_12Bdeque(self,0); // +0 track
-    //   memset(self+80,0,0x50); sub_6827A8(self+80,0);                   // +80 track
-    //   memset(self+160,0,0x68); sub_6828FC(self+184,0);                 // edge/node
-    //   beginFrame = propGetInt("beginFrame");   // +328  (idx 82)
-    //   endFrame   = propGetInt("endFrame");      // +332  (idx 83)
-    //   blinkIntervalMin = (float)propGetDouble("blinkIntervalMin"); // +340 (idx85)
-    //   blinkIntervalMax = (float)propGetDouble("blinkIntervalMax"); // +344 (idx86)
-    //   blinkFrameCount  = (float)propGetDouble("blinkFrameCount");  // +348 (idx87)
-    //   blinkEnabled = propGetBool("blinkEnabled") & 1;              // +360
-    //   trackValue = blinkPos = (float)beginFrame;        // +300 (idx75) / +356 (idx89)
-    //   blinkTimer = min + (max-min)*rand();              // +352 (idx88)  rand=sub_9F17D0(sub_9F1A08())
-    //   for each "edge" elem: edgeTable.push({(float)elem[0], (float)elem[1]});
-    //   for each "node" elem: nodeRows.push(vector<float>{ (float)elem[i] ... });
-    void EmoteBlinkController_ctor(EmoteBlinkController* self,
-                                   const tTJSVariant& dict) {
-        // Embedded value-track deques default-construct empty (the binary's
-        //   memset + EmoteAngleController_ctor_12Bdeque / sub_6827A8 / sub_6828FC
-        //   leave them empty; std::deque/std::vector default ctors replicate this
-        //   under the PLATFORM_BOUNDARY ABI note). valueTrack12B is constructed
-        //   by its in-class member; mirror the ctor's explicit init:
-        EmoteAngleController_ctor(&self->valueTrack12B, 0); // 0x6629b8
-
-        // Blink scalar fields.
-        self->beginFrame = detail::motionPropGetInt(
-            dict, TJS_W("beginFrame"));                          // +328
-        self->endFrame = detail::motionPropGetInt(
-            dict, TJS_W("endFrame"));                            // +332
-        self->blinkIntervalMin =
-            static_cast<float>(detail::motionPropGetDouble(
-                dict, TJS_W("blinkIntervalMin")));               // +340
-        self->blinkIntervalMax =
-            static_cast<float>(detail::motionPropGetDouble(
-                dict, TJS_W("blinkIntervalMax")));               // +344
-        self->blinkFrameCount =
-            static_cast<float>(detail::motionPropGetDouble(
-                dict, TJS_W("blinkFrameCount")));                // +348
-        self->blinkEnabled =
-            detail::motionPropGetBool(dict, TJS_W("blinkEnabled"))
-                ? 1u : 0u;                                      // +360 (v9 & 1)
-
-        const float v10 = self->blinkIntervalMin; // *((float*)v3+85)
-        const float v11 = self->blinkIntervalMax; // *((float*)v3+86)
-        const float v12 = static_cast<float>(self->beginFrame); // (float)*((int*)v3+82)
-        self->trackValue = v12;  // *((float*)v3+75)  (+300)
-        self->blinkPos   = v12;  // *((float*)v3+89)  (+356)
-
-        // nextBlink countdown = min + (max-min)*rand, rand in [0,1).
-        const float rnd = static_cast<float>(
-            EmoteBlinkRng_next(EmoteBlinkRng_get())); // sub_9F17D0(sub_9F1A08())
-        self->blinkTimer = v10 + (v11 - v10) * rnd;   // *((float*)v3+88)  (+352)
-
-        // "edge" array -> edgeTable of {x,y} pairs (each elem a 2-int sub-array).
-        const tTJSVariant edge = detail::motionPropGet(
-            dict, TJS_W("edge"));                               // 0x662bc4
-        const int edgeCount = detail::motionPropGetCount(edge); // 0x662c30
-        self->mesh.edgeTable.reserve(static_cast<size_t>(edgeCount));
-        for (int i = 0; i < edgeCount; ++i) {
-            const tTJSVariant pair = detail::motionPropGetByNum(edge, i);
-            const int x = detail::motionPropGetIntByNum(pair, 0); // 0x662d5c
-            const int y = detail::motionPropGetIntByNum(pair, 1); // 0x662d70
-            self->mesh.edgeTable.emplace_back(static_cast<float>(x),
-                                              static_cast<float>(y));
+    namespace {
+        bool blinkTrackOvershoots_guess(float direction, float target,
+                                        float nextValue) {
+            // The positive half uses an ordered LS test. The negative half is
+            // expressed as complements of GE and LT, so unordered direction or
+            // target comparisons reach overshoot instead of falling through.
+            if(direction > 0.0f) {
+                return target <= nextValue;
+            }
+            if(!(direction >= 0.0f)) {
+                return !(target < nextValue);
+            }
+            return false;
         }
 
-        // "node" array -> nodeRows: each elem is a sub-array; push a row of its
-        //   int->float values (the binary builds a vector<float> per node into
-        //   the 504-block deque @+184).
-        const tTJSVariant node = detail::motionPropGet(
-            dict, TJS_W("node"));                               // 0x662eb4
-        const int nodeCount = detail::motionPropGetCount(node); // 0x662f20
-        for (int i = 0; i < nodeCount; ++i) {
-            const tTJSVariant sourceRow =
-                detail::motionPropGetByNum(node, i);             // 0x662f60
-            std::vector<float> row;
-            const int rowCount = detail::motionPropGetCount(sourceRow);
-            row.reserve(static_cast<size_t>(rowCount));
-            for (int j = 0; j < rowCount; ++j) {
-                row.push_back(static_cast<float>(
-                    detail::motionPropGetIntByNum(sourceRow, j)));// 0x66310c
+        int blinkPositionToSignedInt32_guess(float value) noexcept {
+            constexpr float lower = -0x1p31f;
+            constexpr float upper = 0x1p31f;
+            if(std::isnan(value)) {
+                return 0;
             }
-            self->mesh.nodeRows.push_back(std::move(row));
+            if(value >= upper) {
+                return std::numeric_limits<std::int32_t>::max();
+            }
+            if(value <= lower) {
+                return std::numeric_limits<std::int32_t>::min();
+            }
+            return static_cast<int>(value);
         }
     }
 
-    // Aligned with libkrkr2.so sub_663BDC EmoteVarController4_step @ 0x663BDC.
-    // Decompiled pseudocode (this conversation):
-    //   v5 = trackState(+296);
-    //   if (v5 != 2) {                                  // not animating
-    //     LABEL_24: while (v5 == 1) { ... pop 8B-track @+96; set trackValue@+300;
-    //         if (val==target) goto BLINK; v5=2; trackDir = sign(target-val); }
-    //     if (v5) goto BLINK;
-    //     if (12B-track @+16 empty) goto BLINK;          // (a1+16)==(a1+48)
-    //     pop 12B-track elem {endVal,dur,pow}; advance/free block;
-    //     sub_661F7C(self+160, self+80, trackValue, endVal);   // <-- mesh resolver (SCOPE BOUNDARY)
-    //     trackAccum(+316)=0; trackSpan(+312)=trackTarget(+288??)...
-    //     trackInvDur(+320)=1/dur; trackPow(+324)=pow; v5 = trackState+1;
-    //   }
-    //   LABEL_19 (v5==2 animating):
-    //     v23 = pow(trackAccum/trackSpan, 1/pow) + invDur*dt; v24 = pow(v23,pow);
-    //     v27 = v24*trackSpan - trackAccum;
-    //     trackValue += trackDir * v27;
-    //     if (overshoot) { v5=1; trackValue=trackTarget; goto LABEL_24; }
-    //     else trackAccum += v27;
-    //   BLINK (LABEL_28): switch(blinkPhase@+336):
-    //     case 0:  if (blinkEnabled && beginFrame==(int)blinkPos)
-    //                 { blinkTimer-=dt; if(blinkTimer<=0) blinkPhase=10; }
-    //     case 10: blinkPos += (dt*2.5/blinkFrameCount)*(endFrame-beginFrame);
-    //              if (blinkPos>=endFrame){blinkPos=endFrame; blinkPhase=11;
-    //                                       blinkTimer=blinkFrameCount/5;}
-    //     case 11: blinkTimer-=dt; if(blinkTimer<=0){ blinkPhase=12;
-    //                  blinkTimer = min + (max-min)*rand(); }
-    //     case 12: blinkPos += (dt*-2.5/blinkFrameCount)*(endFrame-beginFrame);
-    //              if (blinkPos<=beginFrame){blinkPos=beginFrame; blinkPhase=0;}
-    //   // final remap:
-    //   v43 = trackValue;
-    //   if (v43>=beginFrame && v43<=endFrame)
-    //       v43 = ((endFrame-v43)*(blinkPos-beginFrame))/(endFrame-beginFrame)+v43;
-    //   *out = v43;
+    // The constructor reads the blink scalars, seeds the initial position and
+    // shared-RNG timer, then copies the edge/node arrays into the embedded mesh
+    // resolver. Exact ABI layouts and instruction mappings live in analysis/.
+    EmoteBlinkController::EmoteBlinkController(const tTJSVariant& dict)
+        : trackState(0), trackTarget(0.0f), trackDir(0.0f), blinkPhase(0) {
+        // The first member is the naked 12-byte keyframe deque, not a complete
+        // angle controller. It is already default-constructed empty.
+
+        ncbPropAccessor object{tTJSVariant(dict)};
+
+        // Blink scalar fields.
+        beginFrame = static_cast<int32_t>(object.GetValue(
+            TJS_W("beginFrame"), ncbTypedefs::Tag<tjs_int>(), 0,
+            &detail::emoteControllerBeginFrameHint_guess));
+        endFrame = static_cast<int32_t>(object.GetValue(
+            TJS_W("endFrame"), ncbTypedefs::Tag<tjs_int>(), 0,
+            &detail::emoteControllerEndFrameHint_guess));
+        blinkIntervalMin = static_cast<float>(object.GetValue(
+            TJS_W("blinkIntervalMin"), ncbTypedefs::Tag<tjs_real>(), 0,
+            &detail::emoteControllerBlinkIntervalMinHint_guess));
+        blinkIntervalMax = static_cast<float>(object.GetValue(
+            TJS_W("blinkIntervalMax"), ncbTypedefs::Tag<tjs_real>(), 0,
+            &detail::emoteControllerBlinkIntervalMaxHint_guess));
+        blinkFrameCount = static_cast<float>(object.GetValue(
+            TJS_W("blinkFrameCount"), ncbTypedefs::Tag<tjs_real>(), 0,
+            &detail::emoteControllerBlinkFrameCountHint_guess));
+        blinkEnabled = object.GetValue(
+            TJS_W("blinkEnabled"), ncbTypedefs::Tag<bool>(), 0,
+            &detail::emoteControllerBlinkEnabledHint_guess) ? 1u : 0u;
+
+        const float intervalMin = blinkIntervalMin;
+        const float intervalMax = blinkIntervalMax;
+        const float initialPosition = static_cast<float>(beginFrame);
+        trackValue = initialPosition;
+        blinkPos = initialPosition;
+
+        // nextBlink countdown = min + (max-min)*rand, rand in [0,1).
+        const float random = static_cast<float>(
+            EmoteBlinkRng_nextCanonical_guess(
+                EmoteBlinkRng_getGlobal_guess()));
+        blinkTimer = intervalMin + (intervalMax - intervalMin) * random;
+
+        // "edge" array -> edgeTable of {x,y} pairs (each elem a 2-int sub-array).
+        ncbPropAccessor edge{object.GetValue(
+            TJS_W("edge"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::emoteControllerEdgeHint_guess)};
+        const int edgeCount = static_cast<int>(edge.GetArrayCount());
+        mesh.edgeTable.reserve(static_cast<size_t>(edgeCount));
+        for (int i = 0; i < edgeCount; ++i) {
+            ncbPropAccessor pair{edge.GetValue(
+                i, ncbTypedefs::Tag<tTJSVariant>())};
+            const int x = static_cast<int>(pair.GetValue(
+                0, ncbTypedefs::Tag<tjs_int>()));
+            const int y = static_cast<int>(pair.GetValue(
+                1, ncbTypedefs::Tag<tjs_int>()));
+            mesh.edgeTable.emplace_back(static_cast<float>(x),
+                                        static_cast<float>(y));
+        }
+
+        // "node" array -> nodeRows: each element becomes one int-to-float row.
+        ncbPropAccessor node{object.GetValue(
+            TJS_W("node"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::emoteControllerNodeHint_guess)};
+        const int nodeCount = static_cast<int>(node.GetArrayCount());
+        for (int i = 0; i < nodeCount; ++i) {
+            ncbPropAccessor sourceRow{node.GetValue(
+                i, ncbTypedefs::Tag<tTJSVariant>())};
+            std::vector<float> row;
+            const int rowCount = static_cast<int>(
+                sourceRow.GetArrayCount());
+            row.reserve(static_cast<size_t>(rowCount));
+            for (int j = 0; j < rowCount; ++j) {
+                row.push_back(static_cast<float>(
+                    sourceRow.GetValue(
+                        j, ncbTypedefs::Tag<tjs_int>())));
+            }
+            mesh.nodeRows.push_back(std::move(row));
+        }
+    }
+
+    void EmoteBlinkController_enqueueValue_guess(
+        EmoteBlinkController* self, float value, float duration, float power,
+        bool append) {
+        // Native branches to this path unless duration is ordered-positive;
+        // unordered NaN therefore commits immediately too.
+        if(!(duration > 0.0f)) {
+            self->valueTrack12B.clear();
+            self->valueTrack8B.clear();
+            self->trackValue = value;
+            self->trackState = 0;
+            return;
+        }
+
+        if(!append) {
+            self->valueTrack12B.clear();
+            self->valueTrack8B.clear();
+            self->trackState = 0;
+        }
+
+        EmoteAngleKeyValue12B keyframe;
+        keyframe.endRad = value;
+        keyframe.duration = duration;
+        std::memcpy(&keyframe.powCount, &power, sizeof(float));
+        self->valueTrack12B.push_back(keyframe);
+    }
+
     void EmoteBlinkController_step(EmoteBlinkController* self, float* out,
                                    float dt) {
-        const float a3 = dt;
-        int v5 = self->trackState; // *(a1+296)
+        int state = self->trackState;
 
-        if (v5 != 2) {
-            // LABEL_24: drain the 8B value track while in pop-pending state.
-            while (v5 == 1) {
-                if (self->valueTrack8B.empty()) { // *(a1+128)==*(a1+96)
-                    v5 = 0;
-                    self->trackState = 0;
+        // A completed segment immediately re-enters this loop. If the
+        // secondary path is empty, state 1 becomes state 0 and the next primary
+        // command is resolved in this same slice.
+        for (;;) {
+            while (state != 2) {
+                if (state == 1) {
+                    if (self->valueTrack8B.empty()) {
+                        state = 0;
+                        self->trackState = 0;
+                    } else {
+                        const std::pair<float, float> segment =
+                            self->valueTrack8B.front();
+                        self->valueTrack8B.pop_front();
+                        const float startValue = segment.first;
+                        const float endValue = segment.second;
+                        self->trackValue = startValue;
+                        if (startValue == endValue) {
+                            // A zero-length segment is consumed, but state 1 is
+                            // retained and no later segment is inspected now.
+                            goto blink;
+                        }
+                        state = 2;
+                        self->trackTarget = endValue;
+                        self->trackDir =
+                            ((endValue - startValue) < 0.0f) ? -1.0f : 1.0f;
+                        self->trackState = 2;
+                    }
                 } else {
-                    const std::pair<float, float> elem =
-                        self->valueTrack8B.front(); // v14 = *v13; v15 = v13[1]
-                    self->valueTrack8B.pop_front();  // advance +96 / free block
-                    const float v14 = elem.first;
-                    const float v15 = elem.second;
-                    self->trackValue = v14; // *(a1+300) = v14
-                    if (v14 == v15) {
-                        // val == target: nothing to animate, go to blink phase.
+                    // Unknown nonzero states and an empty primary queue skip
+                    // directly to the independent blink phase.
+                    if (state != 0 || self->valueTrack12B.empty()) {
                         goto blink;
                     }
-                    v5 = 2;
-                    self->trackTarget = v15; // *(a1+304) = v15
-                    self->trackDir = ((v15 - v14) < 0.0f) ? -1.0f : 1.0f; // +308
-                    self->trackState = v5;   // *(a1+296) = v5
-                    // v5==2 -> fall to animating block.
-                    goto animate;
+
+                    const EmoteAngleKeyValue12B keyframe =
+                        self->valueTrack12B.front();
+                    self->valueTrack12B.pop_front();
+                    EmoteMeshResolver_resolve_guess(
+                        &self->mesh, self->trackValue, keyframe.endRad,
+                        &self->valueTrack8B);
+
+                    self->trackAccum = 0.0f;
+                    self->trackSpan = self->mesh.trackResolvedSpan;
+                    self->trackInvDur = 1.0f / keyframe.duration;
+                    // The command's last word is copied as float bits; there is
+                    // no integer-to-float conversion.
+                    std::memcpy(
+                        &self->trackPow, &keyframe.powCount, sizeof(float));
+                    state = self->trackState + 1;
+                    self->trackState = state;
                 }
             }
 
-            if (v5) {
-                goto blink; // v5 != 0 (and != 1 handled) -> skip track setup
+            const float span = self->trackSpan;
+            const float previousAccum = self->trackAccum;
+            const float power = self->trackPow;
+            const float easedPhase =
+                std::pow(previousAccum / span, 1.0f / power) +
+                self->trackInvDur * dt;
+            const float nextAccum = std::pow(easedPhase, power) * span;
+            const float delta = nextAccum - previousAccum;
+            const float direction = self->trackDir;
+            const float nextValue = self->trackValue + direction * delta;
+            self->trackValue = nextValue;
+            const float target = self->trackTarget;
+            const bool overshoot = blinkTrackOvershoots_guess(
+                direction, target, nextValue);
+            if (!overshoot) {
+                self->trackAccum = previousAccum + delta;
+                break;
             }
 
-            // trackState == 0: pop a 12B-track keyframe (if any).
-            if (self->valueTrack12B.queue.empty()) { // *(a1+48)==*(a1+16)
-                goto blink;
-            }
-            {
-                const EmoteAngleKeyValue12B kf =
-                    self->valueTrack12B.queue.front(); // {endRad,duration,powCount}
-                self->valueTrack12B.queue.pop_front();  // advance +16 / free block
-
-                // Mesh resolver (sub_661F7C @0x661F7C -> sub_660028). The binary
-                //   calls sub_661F7C(self+160, self+80, trackValue, kf.endRad) to
-                //   rebuild the 8B value track (valueTrack8B) from the resolved
-                //   eye mesh rows (mesh.edgeTable + mesh.nodeRows) and to write the
-                //   resolved span to mesh.trackResolvedSpan(+288). Faithful port.
-                EmoteMeshResolver_resolve(&self->mesh, &self->valueTrack8B,
-                                          self->trackValue, kf.endRad);
-
-                // trackAccum=0; trackSpan=trackResolvedSpan(+288); invDur=1/dur;
-                //   pow=powCount. +288 was written by sub_661F7C just above.
-                self->trackAccum  = 0.0f;                   // *(a1+316)=0
-                self->trackSpan   = self->mesh.trackResolvedSpan;// *(a1+312)=*(a1+288)
-                self->trackInvDur = 1.0f / kf.duration;     // *(a1+320)=1/v11
-                // trackPow(+324) = keyframe[+8] RAW BITS. The binary copies the
-                //   keyframe's powCount dword (v12 = *(_DWORD*)(v10+8)) into
-                //   *(_DWORD*)(a1+324) and later reads it as *(float*)(a1+324)
-                //   (0x663cf0 store / 0x663d50,0x663d90 LDR S, no SCVTF). It is a
-                //   raw float-bit reinterpret, NOT an int->float conversion.
-                std::memcpy(&self->trackPow, &kf.powCount, sizeof(float)); // *(a1+324)
-                v5 = self->trackState + 1;                  // v19+1
-                self->trackState = v5;                      // *(a1+296)=v5
-                if (v5 != 2) {
-                    goto blink;
-                }
-            }
-
-        animate:
-            // LABEL_19: v5 == 2, advance the power-curve ramp.
-            {
-                const float span = self->trackSpan;
-                const float invDur = self->trackInvDur;
-                const float pw = self->trackPow; // raw float bits, read as-is
-                const float v23 =
-                    std::pow(self->trackAccum / span, 1.0f / pw) + invDur * a3;
-                const float v24 = std::pow(v23, pw);
-                const float v25 = self->trackAccum;          // *(a1+316)
-                const float v26 = self->trackDir;            // *(a1+308)
-                const float v27 = v24 * span - v25;
-                const float v28 = self->trackValue + (v26 * v27);
-                self->trackValue = v28;                      // *(a1+300)=v28
-                const float v29 = self->trackTarget;         // *(a1+304)
-                const bool overshoot =
-                    (v26 > 0.0f && v29 <= v28) || (v26 < 0.0f && v29 >= v28);
-                if (overshoot) {
-                    v5 = 1;
-                    self->trackState = 1;                    // *(a1+296)=1
-                    self->trackValue = v29;                  // *(a1+300)=v29
-                    // goto LABEL_24 (re-drive the 8B track next).
-                    while (v5 == 1) {
-                        if (self->valueTrack8B.empty()) {
-                            v5 = 0;
-                            self->trackState = 0;
-                        } else {
-                            const std::pair<float, float> elem =
-                                self->valueTrack8B.front();
-                            self->valueTrack8B.pop_front();
-                            const float a = elem.first;
-                            const float b = elem.second;
-                            self->trackValue = a;
-                            if (a == b) { goto blink; }
-                            v5 = 2;
-                            self->trackTarget = b;
-                            self->trackDir = ((b - a) < 0.0f) ? -1.0f : 1.0f;
-                            self->trackState = v5;
-                            goto animate;
-                        }
-                    }
-                    goto blink;
-                }
-                self->trackAccum = v25 + v27;                // *(a1+316)=v25+v27
-            }
+            state = 1;
+            self->trackState = 1;
+            self->trackValue = target;
         }
 
     blink:
-        // LABEL_28: blink state machine on +336.
         switch (self->blinkPhase) {
             case 0: { // wait for blink trigger
                 if (self->blinkEnabled) {
                     if (self->beginFrame ==
-                        static_cast<int>(self->blinkPos)) { // (int)*(a1+356)
-                        const float v30 = self->blinkTimer - a3;
-                        self->blinkTimer = v30;
-                        if (v30 <= 0.0f) {
+                        blinkPositionToSignedInt32_guess(self->blinkPos)) {
+                        const float timer = self->blinkTimer - dt;
+                        self->blinkTimer = timer;
+                        if (timer <= 0.0f) {
                             self->blinkPhase = 10;
                         }
                     }
@@ -263,41 +245,42 @@ namespace motion {
                 break;
             }
             case 10: { // closing
-                const int v31 = self->endFrame;             // *(a1+332)
-                const float v32 = self->blinkFrameCount;    // *(a1+348)
-                const float v33 = self->blinkPos +
-                    (((a3 * 2.5f) / v32) *
-                     static_cast<float>(v31 - self->beginFrame)); // - *(a1+328)
-                self->blinkPos = v33;
-                if (v33 >= static_cast<float>(v31)) {
-                    self->blinkPos = static_cast<float>(v31);
+                const int endFrame = self->endFrame;
+                const float frameCount = self->blinkFrameCount;
+                const float position = self->blinkPos +
+                    (((dt * 2.5f) / frameCount) *
+                     static_cast<float>(endFrame - self->beginFrame));
+                self->blinkPos = position;
+                if (position >= static_cast<float>(endFrame)) {
+                    self->blinkPos = static_cast<float>(endFrame);
                     self->blinkPhase = 11;
-                    self->blinkTimer = v32 / 5.0f;          // *(a1+352)=v32/5
+                    self->blinkTimer = frameCount / 5.0f;
                 }
                 break;
             }
             case 11: { // hold (eyes closed)
-                const float v34 = self->blinkTimer - a3;
-                self->blinkTimer = v34;
-                if (v34 <= 0.0f) {
-                    const float v35 = self->blinkIntervalMin; // *(a1+340)
-                    const float v36 = self->blinkIntervalMax; // *(a1+344)
+                const float timer = self->blinkTimer - dt;
+                self->blinkTimer = timer;
+                if (timer <= 0.0f) {
+                    const float intervalMin = self->blinkIntervalMin;
+                    const float intervalMax = self->blinkIntervalMax;
                     self->blinkPhase = 12;
-                    const float v37 = v36 - v35;
-                    const float v39 = static_cast<float>(
-                        EmoteBlinkRng_next(EmoteBlinkRng_get())); // sub_9F17D0(sub_9F1A08())
-                    self->blinkTimer = v35 + (v37 * v39);   // *(a1+352)
+                    const float intervalSpan = intervalMax - intervalMin;
+                    const float random = static_cast<float>(
+                        EmoteBlinkRng_nextCanonical_guess(
+                            EmoteBlinkRng_getGlobal_guess()));
+                    self->blinkTimer = intervalMin + intervalSpan * random;
                 }
                 break;
             }
             case 12: { // opening
-                const int v40 = self->beginFrame;           // *(a1+328)
-                const float v41 = self->blinkPos +
-                    (((a3 * -2.5f) / self->blinkFrameCount) *
-                     static_cast<float>(self->endFrame - v40)); // *(a1+332)-v40
-                self->blinkPos = v41;
-                if (v41 <= static_cast<float>(v40)) {
-                    self->blinkPos = static_cast<float>(v40);
+                const int beginFrame = self->beginFrame;
+                const float position = self->blinkPos +
+                    (((dt * -2.5f) / self->blinkFrameCount) *
+                     static_cast<float>(self->endFrame - beginFrame));
+                self->blinkPos = position;
+                if (position <= static_cast<float>(beginFrame)) {
+                    self->blinkPos = static_cast<float>(beginFrame);
                     self->blinkPhase = 0;
                 }
                 break;
@@ -306,30 +289,30 @@ namespace motion {
                 break;
         }
 
-        // Final remap: blend the track value by the blink position when inside
-        //   the [beginFrame, endFrame] window.
-        const int v42 = self->beginFrame;   // *(a1+328)
-        float v43 = self->trackValue;       // *(a1+300)
-        if (v43 >= static_cast<float>(v42)) {
-            const int v44 = self->endFrame; // *(a1+332)
-            if (v43 <= static_cast<float>(v44)) {
-                v43 = (static_cast<float>(
-                           (static_cast<float>(v44) - v43) *
-                           (self->blinkPos - static_cast<float>(v42))) /
-                       static_cast<double>(v44 - v42)) +
-                      v43;
+        // The remap is inclusive and deliberately leaves a zero-width frame
+        // range to the platform's floating-point divide-by-zero behaviour.
+        const int beginFrame = self->beginFrame;
+        float value = self->trackValue;
+        if (value >= static_cast<float>(beginFrame)) {
+            const int endFrame = self->endFrame;
+            if (value <= static_cast<float>(endFrame)) {
+                const float numerator =
+                    (static_cast<float>(endFrame) - value) *
+                    (self->blinkPos - static_cast<float>(beginFrame));
+                value = static_cast<float>(
+                    numerator / static_cast<double>(endFrame - beginFrame) +
+                    value);
             }
         }
-        *out = v43; // *a2 = v43
+        *out = value;
     }
 
-    // sub_663AA0 @0x663AA0.
-    void EmoteBlinkController_resetLike_0x663AA0(
-        EmoteBlinkController* self) {
-        if(!self->valueTrack12B.queue.empty()) {
+    // Commit the final pending value and return the controller to idle.
+    void EmoteBlinkController_reset_guess(EmoteBlinkController* self) {
+        if(!self->valueTrack12B.empty()) {
             self->trackState = 0;
-            self->trackValue = self->valueTrack12B.queue.back().endRad;
-            self->valueTrack12B.queue.clear();
+            self->trackValue = self->valueTrack12B.back().endRad;
+            self->valueTrack12B.clear();
             self->valueTrack8B.clear();
             return;
         }

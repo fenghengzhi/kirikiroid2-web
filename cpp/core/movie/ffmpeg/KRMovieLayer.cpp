@@ -10,7 +10,10 @@ extern "C" {
 
 NS_KRMOVIE_BEGIN
 
-VideoPresentLayer::~VideoPresentLayer() { TVPRemoveContinuousEventHook(this); }
+VideoPresentLayer::~VideoPresentLayer() {
+    // Remove zeroes every matching raw-hook slot before base destruction.
+    TVPRemoveContinuousEventHook(this);
+}
 
 tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
     BitmapPicture pic;
@@ -137,6 +140,9 @@ void MoviePlayerLayer::OnPlayEvent(KRMovieEvent msg, void *p) {
 
 void MoviePlayerLayer::Play() {
     inherit::Play();
+    // Unconditional append is native behaviour: repeated Play calls create
+    // duplicate callbacks, Stop does not remove them, and destruction removes
+    // all matches.  Re-entrant Play can append work visible in the same pass.
     TVPAddContinuousEventHook(this);
 }
 

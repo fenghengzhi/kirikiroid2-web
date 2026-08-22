@@ -476,18 +476,8 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
         iTJSDispatch2 *parentObj = param[1]->AsObjectNoAddRef();
         if(TJS_FAILED(parentObj->NativeInstanceSupport(
                TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               (iTJSNativeInstance **)&lay))) {
-            // Fallback: try via closure's Object member
-            clo = param[1]->AsObjectClosureNoAddRef();
-            if(clo.Object && clo.Object != parentObj) {
-                if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                       (iTJSNativeInstance **)&lay)))
-                    TVPThrowExceptionMessage(TVPSpecifyLayer);
-            } else {
-                TVPThrowExceptionMessage(TVPSpecifyLayer);
-            }
-        }
+               (iTJSNativeInstance **)&lay)))
+            TVPThrowExceptionMessage(TVPSpecifyLayer);
     }
 
     // retrieve manager
@@ -505,6 +495,10 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
     // is primarylayer ?
     // ask window to create layer manager
     if(!lay) {
+        // The new-expression completes construction before publishing Manager.
+        // Once published, AttachPrimary and RegisterSelfToWindow run in this
+        // order with no manager rollback in this function if either call exits
+        // exceptionally; retain that native publication boundary.
         Manager = new tTVPLayerManager(lto);
         Manager->AttachPrimary(this);
         Manager->RegisterSelfToWindow();
@@ -518,41 +512,6 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
 
     ActionOwner = param[0]->AsObjectClosure();
 
-    return TJS_S_OK;
-}
-
-//---------------------------------------------------------------------------
-tjs_error tTJSNI_BaseLayer::ConstructResolvedTreeOwnerLike_0x800438(
-    iTVPLayerTreeOwner *layerTreeOwner,
-    tTJSNI_BaseLayer *parentLayer,
-    iTJSDispatch2 *tjs_obj,
-    const tTJSVariantClosure &actionOwner) {
-    if(!layerTreeOwner)
-        TVPThrowExceptionMessage(
-            TJS_W("Cannot Retrive Layer Tree Owner Interface."));
-
-    Owner = tjs_obj; // no addref, matching Construct and native +24 owner slot
-
-    if(parentLayer) {
-        Manager = parentLayer->GetManager();
-        if(Manager)
-            Manager->AddRef();
-        Join(parentLayer);
-    }
-
-    if(!parentLayer) {
-        Manager = new tTVPLayerManager(layerTreeOwner);
-        Manager->AttachPrimary(this);
-        Manager->RegisterSelfToWindow();
-
-        Type = DisplayType = ltOpaque;
-        NeutralColor = TransparentColor = TVP_RGBA2COLOR(255, 255, 255, 255);
-        UpdateDrawFace();
-        HitThreshold = 0;
-    }
-
-    ActionOwner = actionOwner;
-    ActionOwner.AddRef();
     return TJS_S_OK;
 }
 
@@ -581,6 +540,10 @@ void tTJSNI_BaseLayer::Invalidate() {
     }
 
     if(Manager) {
+        // Keep Manager published throughout Release. On the final reference the
+        // manager destructor therefore runs while this field still contains the
+        // old pointer; clear it only if Release returns normally. The native
+        // sequence has no pre-clear and no temporary AddRef.
         Manager->Release(); // no longer used in this context
         Manager = nullptr;
     }
@@ -4890,8 +4853,8 @@ void tTJSNI_BaseLayer::BezierPatchCopy(const tTVPPointD *points, tjs_int divx,
         };
     };
 
-    // libkrkr2.so sub_69DC04 @0x69DD38..0x69DF3C treats divx/divy as
-    // cell counts and constructs one more boundary/point on each axis.
+    // Motionplayer's four reference targets treat divx/divy as cell counts
+    // and construct one more boundary/point on each axis.
     std::vector<tTVPPointD> tessellated;
     tessellated.reserve(static_cast<size_t>(divx + 1) *
                         static_cast<size_t>(divy + 1));
@@ -4969,8 +4932,7 @@ void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
         }
     };
 
-    // sub_69DC04 consumes divx*divy cells from a
-    // (divx+1)*(divy+1) point grid.
+    // Consume divx*divy cells from a (divx+1)*(divy+1) point grid.
     const auto pointColumns = static_cast<size_t>(divx + 1);
     for(tjs_int y = 0; y < divy; ++y) {
         const double v0 = static_cast<double>(y) / static_cast<double>(divy);
@@ -5042,7 +5004,7 @@ void tTJSNI_BaseLayer::OperateBezierPatch(const tTVPPointD *points,
         };
     };
 
-    // Same sub_69DC04 cell-count contract as BezierPatchCopy/MeshCopy.
+    // Same cell-count contract as BezierPatchCopy/MeshCopy.
     std::vector<tTVPPointD> tessellated;
     tessellated.reserve(static_cast<size_t>(divx + 1) *
                         static_cast<size_t>(divy + 1));
@@ -5134,8 +5096,7 @@ void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
         }
     };
 
-    // sub_69DC04 consumes divx*divy cells from a
-    // (divx+1)*(divy+1) point grid.
+    // Consume divx*divy cells from a (divx+1)*(divy+1) point grid.
     const auto pointColumns = static_cast<size_t>(divx + 1);
     for(tjs_int y = 0; y < divy; ++y) {
         const double v0 = static_cast<double>(y) / static_cast<double>(divy);
@@ -8105,6 +8066,11 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         if(!TransSelfUpdate)
             TVPAddContinuousEventHook(&TransIdleCallback);
 
+        // Native commit boundary: registration precedes tick initialization,
+        // handler StartProcess/EndProcess, InTransition, and Update(true).
+        // The catch below releases only pro/sop/handler; it deliberately does
+        // not unregister this callback or roll back already published members.
+
         // initial tick count
         TVPStartTickCount();
         if(UseTransTickCallback) {
@@ -8148,6 +8114,10 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 void tTJSNI_BaseLayer::InternalStopTransition() {
     // stop transition
     if(InTransition) {
+        // Clear the state and tombstone the current hook before firing the
+        // synchronous completion event.  Script may therefore start another
+        // transition on this same layer, appending a hook that the live raw-hook
+        // iteration can still reach in the current delivery pass.
         InTransition = false;
         TransCompEventPrevented = false;
 
@@ -8246,6 +8216,8 @@ void tTJSNI_BaseLayer::StopTransitionByHandler() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::InvokeTransition(tjs_uint64 tick) {
+    // Event disabling does not suppress this raw callback.  Completion is
+    // recorded in TransCompEventPrevented and consumed by a later enabled pass.
     if(!TransCompEventPrevented) {
         if(UseTransTickCallback)
             TransTick = GetTransTick();
@@ -8468,45 +8440,6 @@ tjs_uint64 tTJSNI_BaseLayer::GetTransTick() {
     }
 }
 //---------------------------------------------------------------------------
-
-//---------------------------------------------------------------------------
-// Decode a TJS Array of interleaved doubles (x,y,x,y,...) into tTVPPointD.
-//
-// Mirrors libkrkr2.so sub_6A0CF0 @ 0x6A0CF0: the mesh/bezier point array
-// (built by sub_6C715C @ 0x6C715C) is consumed by reading its element count
-// (Motion_propGetCount) and pulling each index as a double
-// (Motion_propGetIndexDouble), producing count/2 points. Out-of-range or
-// non-numeric indices coerce to 0.0, exactly as the binary does.
-//---------------------------------------------------------------------------
-static void TVPDecodeLayerMeshPointArray(const tTJSVariant *arrayVar,
-                                         std::vector<tTVPPointD> &out) {
-    out.clear();
-    if(!arrayVar || arrayVar->Type() != tvtObject)
-        return;
-    tTJSVariantClosure clo = arrayVar->AsObjectClosureNoAddRef();
-    if(!clo.Object)
-        return;
-
-    tjs_int count = 0;
-    if(TJS_FAILED(clo.Object->GetCount(&count, nullptr, nullptr, clo.Object)) ||
-       count < 2)
-        return;
-
-    const tjs_int pairCount = count / 2;
-    out.reserve(pairCount);
-    for(tjs_int i = 0; i + 1 < count; i += 2) {
-        tTVPPointD pt{ 0.0, 0.0 };
-        tTJSVariant xv;
-        if(TJS_SUCCEEDED(
-               clo.Object->PropGetByNum(0, i, &xv, clo.Object)))
-            pt.x = (tjs_real)xv;
-        tTJSVariant yv;
-        if(TJS_SUCCEEDED(
-               clo.Object->PropGetByNum(0, i + 1, &yv, clo.Object)))
-            pt.y = (tjs_real)yv;
-        out.push_back(pt);
-    }
-}
 
 //---------------------------------------------------------------------------
 // tTJSNC_Layer : TJS Layer class
@@ -9459,253 +9392,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ operateStretch)
-    //----------------------------------------------------------------------
-    // meshCopy / bezierPatchCopy / operateMesh / operateBezierPatch
-    //
-    // libkrkr2.so routes the motion render path through these Layer TJS
-    // methods via iTJSDispatch2::FuncCall (sub_6C7440 @ 0x6C7440 main submit,
-    // Player_emitRenderItem_requireLayer @ 0x6C4E28 SLA path). The native
-    // tTJSNI_BaseLayer impls (MeshCopy/BezierPatchCopy/OperateMesh/
-    // OperateBezierPatch) already existed but were never registered as TJS
-    // methods, so the dispatch keys had no destination. The argument layout
-    // below is decoded directly from the binary's packed FuncCall arrays:
-    //   meshCopy(10):       [src, sx, sy, sw, sh, points, divx, divy, type, clear]
-    //   bezierPatchCopy(10):[src, sx, sy, sw, sh, points, divx, divy, type, clear]
-    //   operateMesh(11):    [src, sx, sy, sw, sh, points, divx, divy, mode, opa, clear]
-    //   operateBezierPatch(11):[src, sx, sy, sw, sh, points, divx, divy, mode, opa, clear]
-    // The `points` arg is a TJS Array of interleaved doubles (x,y,x,y,...)
-    // exactly as built by sub_6C715C @ 0x6C715C and consumed by sub_6A0CF0
-    // @ 0x6A0CF0 (Motion_propGetCount + indexed double reads -> tTVPPointD*).
-    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ meshCopy) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
-        if(numparams < 8)
-            return TJS_E_BADPARAMCOUNT;
-
-        iTVPBaseBitmap *src = nullptr;
-        tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
-        if(clo.Object) {
-            tTJSNI_BaseLayer *srclayer = nullptr;
-            if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   (iTJSNativeInstance **)&srclayer)))
-                src = nullptr;
-            else
-                src = srclayer->GetMainImage();
-
-            if(src == nullptr) {
-                tTJSNI_Bitmap *srcbmp = nullptr;
-                if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
-                       (iTJSNativeInstance **)&srcbmp)))
-                    src = nullptr;
-                else
-                    src = srcbmp->GetBitmap();
-            }
-        }
-        if(!src)
-            TVPThrowExceptionMessage(TVPSpecifyLayerOrBitmap);
-
-        tTVPRect srcrect(*param[1], *param[2], *param[3], *param[4]);
-        srcrect.right += srcrect.left;
-        srcrect.bottom += srcrect.top;
-
-        std::vector<tTVPPointD> points;
-        TVPDecodeLayerMeshPointArray(param[5], points);
-
-        tjs_int divx = (tjs_int)*param[6];
-        tjs_int divy = (tjs_int)*param[7];
-
-        tTVPBBStretchType type = stNearest;
-        if(numparams >= 9 && param[8]->Type() != tvtVoid)
-            type = (tTVPBBStretchType)(tjs_int)*param[8];
-        bool clear = false;
-        if(numparams >= 10 && param[9]->Type() != tvtVoid)
-            clear = 0 != (tjs_int)*param[9];
-
-        _this->MeshCopy(points.data(), divx, divy, src, srcrect, type, clear);
-        return TJS_S_OK;
-    }
-    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ meshCopy)
-    //----------------------------------------------------------------------
-    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ bezierPatchCopy) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
-        if(numparams < 8)
-            return TJS_E_BADPARAMCOUNT;
-
-        iTVPBaseBitmap *src = nullptr;
-        tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
-        if(clo.Object) {
-            tTJSNI_BaseLayer *srclayer = nullptr;
-            if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   (iTJSNativeInstance **)&srclayer)))
-                src = nullptr;
-            else
-                src = srclayer->GetMainImage();
-
-            if(src == nullptr) {
-                tTJSNI_Bitmap *srcbmp = nullptr;
-                if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
-                       (iTJSNativeInstance **)&srcbmp)))
-                    src = nullptr;
-                else
-                    src = srcbmp->GetBitmap();
-            }
-        }
-        if(!src)
-            TVPThrowExceptionMessage(TVPSpecifyLayerOrBitmap);
-
-        tTVPRect srcrect(*param[1], *param[2], *param[3], *param[4]);
-        srcrect.right += srcrect.left;
-        srcrect.bottom += srcrect.top;
-
-        std::vector<tTVPPointD> points;
-        TVPDecodeLayerMeshPointArray(param[5], points);
-
-        tjs_int divx = (tjs_int)*param[6];
-        tjs_int divy = (tjs_int)*param[7];
-
-        tTVPBBStretchType type = stNearest;
-        if(numparams >= 9 && param[8]->Type() != tvtVoid)
-            type = (tTVPBBStretchType)(tjs_int)*param[8];
-        bool clear = false;
-        if(numparams >= 10 && param[9]->Type() != tvtVoid)
-            clear = 0 != (tjs_int)*param[9];
-
-        _this->BezierPatchCopy(points.data(), divx, divy, src, srcrect, type,
-                               clear);
-        return TJS_S_OK;
-    }
-    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ bezierPatchCopy)
-    //----------------------------------------------------------------------
-    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ operateMesh) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
-        if(numparams < 8)
-            return TJS_E_BADPARAMCOUNT;
-
-        iTVPBaseBitmap *src = nullptr;
-        tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
-        tTVPBlendOperationMode automode = omAlpha;
-        if(clo.Object) {
-            tTJSNI_BaseLayer *srclayer = nullptr;
-            if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   (iTJSNativeInstance **)&srclayer)))
-                src = nullptr;
-            else
-                src = srclayer->GetMainImage(),
-                automode = srclayer->GetOperationModeFromType();
-
-            if(src == nullptr) {
-                tTJSNI_Bitmap *srcbmp = nullptr;
-                if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
-                       (iTJSNativeInstance **)&srcbmp)))
-                    src = nullptr;
-                else
-                    src = srcbmp->GetBitmap();
-            }
-        }
-        if(!src)
-            TVPThrowExceptionMessage(TVPSpecifyLayerOrBitmap);
-
-        tTVPRect srcrect(*param[1], *param[2], *param[3], *param[4]);
-        srcrect.right += srcrect.left;
-        srcrect.bottom += srcrect.top;
-
-        std::vector<tTVPPointD> points;
-        TVPDecodeLayerMeshPointArray(param[5], points);
-
-        tjs_int divx = (tjs_int)*param[6];
-        tjs_int divy = (tjs_int)*param[7];
-
-        tTVPBlendOperationMode mode;
-        if(numparams >= 9 && param[8]->Type() != tvtVoid)
-            mode = (tTVPBlendOperationMode)(tjs_int)(*param[8]);
-        else
-            mode = omAuto;
-        tjs_int opa = 255;
-        if(numparams >= 10 && param[9]->Type() != tvtVoid)
-            opa = (tjs_int)*param[9];
-        bool clear = false;
-        if(numparams >= 11 && param[10]->Type() != tvtVoid)
-            clear = 0 != (tjs_int)*param[10];
-
-        if(mode == omAuto)
-            mode = automode;
-
-        _this->OperateMesh(points.data(), divx, divy, src, srcrect, mode, opa,
-                           stNearest, clear);
-        return TJS_S_OK;
-    }
-    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ operateMesh)
-    //----------------------------------------------------------------------
-    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ operateBezierPatch) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
-        if(numparams < 8)
-            return TJS_E_BADPARAMCOUNT;
-
-        iTVPBaseBitmap *src = nullptr;
-        tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
-        tTVPBlendOperationMode automode = omAlpha;
-        if(clo.Object) {
-            tTJSNI_BaseLayer *srclayer = nullptr;
-            if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   (iTJSNativeInstance **)&srclayer)))
-                src = nullptr;
-            else
-                src = srclayer->GetMainImage(),
-                automode = srclayer->GetOperationModeFromType();
-
-            if(src == nullptr) {
-                tTJSNI_Bitmap *srcbmp = nullptr;
-                if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
-                       (iTJSNativeInstance **)&srcbmp)))
-                    src = nullptr;
-                else
-                    src = srcbmp->GetBitmap();
-            }
-        }
-        if(!src)
-            TVPThrowExceptionMessage(TVPSpecifyLayerOrBitmap);
-
-        tTVPRect srcrect(*param[1], *param[2], *param[3], *param[4]);
-        srcrect.right += srcrect.left;
-        srcrect.bottom += srcrect.top;
-
-        std::vector<tTVPPointD> points;
-        TVPDecodeLayerMeshPointArray(param[5], points);
-
-        tjs_int divx = (tjs_int)*param[6];
-        tjs_int divy = (tjs_int)*param[7];
-
-        tTVPBlendOperationMode mode;
-        if(numparams >= 9 && param[8]->Type() != tvtVoid)
-            mode = (tTVPBlendOperationMode)(tjs_int)(*param[8]);
-        else
-            mode = omAuto;
-        tjs_int opa = 255;
-        if(numparams >= 10 && param[9]->Type() != tvtVoid)
-            opa = (tjs_int)*param[9];
-        bool clear = false;
-        if(numparams >= 11 && param[10]->Type() != tvtVoid)
-            clear = 0 != (tjs_int)*param[10];
-
-        if(mode == omAuto)
-            mode = automode;
-
-        _this->OperateBezierPatch(points.data(), divx, divy, src, srcrect, mode,
-                                  opa, stNearest, clear);
-        return TJS_S_OK;
-    }
-    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ operateBezierPatch)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ affineCopy) {
         // src, sx, sy, sw, sh, affine, x0/a, y0/b, x1/c, y1/d, x2/tx,

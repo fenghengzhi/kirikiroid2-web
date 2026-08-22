@@ -1,8 +1,7 @@
 // Unit tests for motion::detail::ttstr_hash — verifies the KiriKiri UTF-16
-// hash algorithm (1025/9/32769) reverse-engineered from libkrkr2.so. Iteration
-// order of motion::Player's embedded unordered_maps depends on this hash
-// matching the Android build byte-for-byte; a divergence here will silently
-// reorder script-visible enumerations.
+// hash algorithm (1025/9/32769) recovered independently from all four current
+// references. Matching hash and Hint-cache behavior is required for native
+// bucket selection; final unordered iteration remains STL/ABI-specific.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -84,6 +83,28 @@ TEST_CASE("ttstr_hash functor: agrees with raw helper on ttstr",
     REQUIRE(hasher(key) == cached);
 }
 
+TEST_CASE("ttstr_hash functor: copied ttstr aliases share the Hint cache",
+          "[motionplayer][ttstr_hash]") {
+    ttstr original(u"alias");
+    ttstr alias = original;
+    const ttstr_hash hasher{};
+
+    tjs_uint32 *originalHint = original.GetHint();
+    tjs_uint32 *aliasHint = alias.GetHint();
+    REQUIRE(originalHint != nullptr);
+    REQUIRE(aliasHint == originalHint);
+
+    *originalHint = 0;
+    const auto expected = static_cast<tjs_uint32>(
+        ttstr_hash_utf16(original.c_str()));
+    REQUIRE(hasher(alias) == expected);
+    REQUIRE(*originalHint == expected);
+
+    constexpr tjs_uint32 externallySeeded = 0x89ABCDEFu;
+    *aliasHint = externallySeeded;
+    REQUIRE(hasher(original) == externallySeeded);
+}
+
 TEST_CASE("ttstr_hash functor: null ttstr hashes to zero without a Hint",
           "[motionplayer][ttstr_hash]") {
     ttstr key;
@@ -108,6 +129,7 @@ TEST_CASE("ttstr_hash functor: agrees with raw helper on c-string overload",
     const tjs_char raw[] = {u'h', u'e', u'l', u'l', u'o', 0};
     const ttstr_hash hasher{};
     REQUIRE(hasher(raw) == ttstr_hash_utf16(raw));
+    REQUIRE(hasher(static_cast<const tjs_char *>(nullptr)) == kEmptySentinel);
 }
 
 TEST_CASE("ttstr_equal functor: delegates to ttstr operator==",
@@ -115,9 +137,34 @@ TEST_CASE("ttstr_equal functor: delegates to ttstr operator==",
     ttstr a(u"same");
     ttstr b(u"same");
     ttstr c(u"different");
+    ttstr sameLengthDifferent(u"samp");
     const ttstr_equal eq{};
     REQUIRE(eq(a, b));
     REQUIRE_FALSE(eq(a, c));
+    REQUIRE_FALSE(eq(a, sameLengthDifferent));
+}
+
+TEST_CASE("ttstr_equal functor: null backing and allocated empty are distinct",
+          "[motionplayer][ttstr_hash]") {
+    ttstr nullA;
+    ttstr nullB;
+    ttstr emptyA(TJS::tTJSStringBufferLength(0));
+    ttstr emptyB(TJS::tTJSStringBufferLength(0));
+    ttstr emptyAlias = emptyA;
+    const ttstr_equal eq{};
+
+    REQUIRE(nullA.GetHint() == nullptr);
+    REQUIRE(nullB.GetHint() == nullptr);
+    REQUIRE(emptyA.GetHint() != nullptr);
+    REQUIRE(emptyB.GetHint() != nullptr);
+    REQUIRE(emptyA.GetHint() != emptyB.GetHint());
+    REQUIRE(emptyAlias.GetHint() == emptyA.GetHint());
+
+    REQUIRE(eq(nullA, nullB));
+    REQUIRE(eq(emptyA, emptyAlias));
+    REQUIRE(eq(emptyA, emptyB));
+    REQUIRE_FALSE(eq(nullA, emptyA));
+    REQUIRE_FALSE(eq(emptyA, nullA));
 }
 
 TEST_CASE("LabelValueMap: stores and retrieves double values",
@@ -133,6 +180,29 @@ TEST_CASE("LabelValueMap: stores and retrieves double values",
     REQUIRE(m.find(ttstr(u"beta"))->second == -2.0);
     REQUIRE(m.find(ttstr(u"gamma"))->second == 0.0);
     REQUIRE(m.find(ttstr(u"missing")) == m.end());
+}
+
+TEST_CASE("LabelValueMap: null and allocated-empty ttstr are distinct keys",
+          "[motionplayer][ttstr_hash][container]") {
+    LabelValueMap m;
+    ttstr nullKey;
+    ttstr emptyA(TJS::tTJSStringBufferLength(0));
+    ttstr emptyB(TJS::tTJSStringBufferLength(0));
+
+    m[nullKey] = 1.0;
+    m[emptyA] = 2.0;
+    REQUIRE(m.size() == 2);
+    REQUIRE(m.find(nullKey) != m.end());
+    REQUIRE(m.find(nullKey)->second == 1.0);
+    REQUIRE(m.find(emptyA) != m.end());
+    REQUIRE(m.find(emptyA)->second == 2.0);
+
+    // Independently allocated empty backings compare equal and hash to the
+    // same UINT32_MAX sentinel, so this updates the existing empty-key node.
+    m[emptyB] = 3.0;
+    REQUIRE(m.size() == 2);
+    REQUIRE(m.find(emptyA)->second == 3.0);
+    REQUIRE(m.find(emptyB)->second == 3.0);
 }
 
 TEST_CASE("EvalCascadeState: default-constructed destructor is safe",
@@ -232,134 +302,103 @@ TEST_CASE("VariableLabelScopeDeque: append-and-iterate preserves order",
     REQUIRE(d[2].value == 2.0);
 }
 
-TEST_CASE("HeapRef: default empty, frees on destruction, transfers on move",
-          "[motionplayer][raii]") {
-    using motion::detail::HeapRef;
-    {
-        HeapRef empty;
-        REQUIRE_FALSE(static_cast<bool>(empty));
-        REQUIRE(empty.get() == nullptr);
-    } // empty.~HeapRef on nullptr must not crash
-
-    HeapRef src(::operator new(32));
-    REQUIRE(static_cast<bool>(src));
-    void *owned = src.get();
-
-    HeapRef dst(std::move(src));
-    REQUIRE(dst.get() == owned);
-    REQUIRE(src.get() == nullptr);
-    REQUIRE_FALSE(static_cast<bool>(src));
-
-    HeapRef other(::operator new(16));
-    void *other_owned = other.get();
-    other = std::move(dst);
-    REQUIRE(other.get() == owned);
-    REQUIRE(dst.get() == nullptr);
-    (void)other_owned; // freed by move-assign before taking new pointer
-}
-
-TEST_CASE("HeapRef: reset releases current and adopts new",
-          "[motionplayer][raii]") {
-    using motion::detail::HeapRef;
-    HeapRef r(::operator new(8));
-    REQUIRE(static_cast<bool>(r));
-    r.reset();
-    REQUIRE(r.get() == nullptr);
-    void *fresh = ::operator new(8);
-    r.reset(fresh);
-    REQUIRE(r.get() == fresh);
-}
-
-TEST_CASE("DispatchRef: default empty, no crash on null destruction",
-          "[motionplayer][raii]") {
-    using motion::detail::DispatchRef;
-    {
-        DispatchRef empty;
-        REQUIRE_FALSE(static_cast<bool>(empty));
-        REQUIRE(empty.get() == nullptr);
-    }
-}
-
-TEST_CASE("DispatchRef: move transfers and nullifies source",
-          "[motionplayer][raii]") {
-    using motion::detail::DispatchRef;
-    // Without a live iTJSDispatch2 we test only the pointer plumbing using a
-    // null transition; the Release call path is exercised by integration
-    // tests where a real refcounted dispatch is available.
-    DispatchRef src;
-    DispatchRef dst(std::move(src));
-    REQUIRE(dst.get() == nullptr);
-    REQUIRE(src.get() == nullptr);
-}
-
-TEST_CASE("PerNodeLayerState: default-construct fields are zero / empty",
+TEST_CASE("PerNodeLayerState: map insertion starts with a raw-zero ClipSlot",
           "[motionplayer][value_struct]") {
     using motion::detail::PerNodeLayerState;
     PerNodeLayerState s;
+    const auto &slot = s.clipSlot;
     REQUIRE(s.nodeType == 0);
-    REQUIRE(s.contentMask == 0);
-    REQUIRE(s.doneFlag == 0);
-    REQUIRE(s.blendMode == 16);
-    REQUIRE(s.ox == 0.0);
-    REQUIRE(s.oy == 0.0);
-    REQUIRE(s.opacity == 255);
-    REQUIRE(s.coordX == 0.0);
-    REQUIRE(s.coordY == 0.0);
-    REQUIRE(s.coordZ == 0.0);
-    REQUIRE(s.flipX == 0);
-    REQUIRE(s.flipY == 0);
-    REQUIRE(s.angle == 0.0);
-    REQUIRE(s.scaleX == 1.0);
-    REQUIRE(s.scaleY == 1.0);
-    REQUIRE_FALSE(static_cast<bool>(s.dispatch_8));
-    REQUIRE(s.srcValue_44 == ttstr());
-    REQUIRE_FALSE(static_cast<bool>(s.dispatch_288));
-    REQUIRE_FALSE(static_cast<bool>(s.dispatch_392));
-    REQUIRE_FALSE(static_cast<bool>(s.dispatch_504));
-    REQUIRE_FALSE(static_cast<bool>(s.heap_320));
-    REQUIRE_FALSE(static_cast<bool>(s.heap_584));
-    REQUIRE(s.ttstr_188 == ttstr());
-    REQUIRE(s.ttstr_688 == ttstr());
+    REQUIRE(slot.frameIndex == 0);
+    REQUIRE(slot.clipStartTime == 0.0);
+    REQUIRE(slot.ti == 0);
+    REQUIRE(slot.contentMask == 0);
+    REQUIRE_FALSE(slot.done);
+    REQUIRE_FALSE(slot.crossfading);
+    REQUIRE_FALSE(slot.merged);
+    REQUIRE(slot.iconValue.IsEmpty());
+    REQUIRE(slot.srcValue.IsEmpty());
+    REQUIRE(slot.blendMode == 0);
+    REQUIRE(slot.ox == 0.0);
+    REQUIRE(slot.oy == 0.0);
+    for(const auto color : slot.packedColors) {
+        REQUIRE(color == 0);
+    }
+    REQUIRE(slot.opacity == 0);
+    REQUIRE(slot.x == 0.0);
+    REQUIRE(slot.y == 0.0);
+    REQUIRE(slot.z == 0.0);
+    REQUIRE_FALSE(slot.flipX);
+    REQUIRE_FALSE(slot.flipY);
+    REQUIRE(slot.angle == 0.0);
+    REQUIRE(slot.scaleX == 0.0);
+    REQUIRE(slot.scaleY == 0.0);
+    REQUIRE(slot.slantX == 0.0);
+    REQUIRE(slot.slantY == 0.0);
+    REQUIRE(slot.cccVariant.Type() == tvtVoid);
+    REQUIRE(slot.occVariant.Type() == tvtVoid);
+    REQUIRE(slot.accVariant.Type() == tvtVoid);
+    REQUIRE(slot.zccVariant.Type() == tvtVoid);
+    REQUIRE(slot.sccVariant.Type() == tvtVoid);
+    REQUIRE(slot.cpVariant.Type() == tvtVoid);
+    REQUIRE(slot.actionValue.IsEmpty());
+    REQUIRE(slot.meshCurveVariant.Type() == tvtVoid);
+    REQUIRE(slot.meshControlPoints.empty());
+    REQUIRE(slot.motionDtgtValue.IsEmpty());
+    REQUIRE(slot.modelDtgt.IsEmpty());
+    REQUIRE(slot.prtFmin == 0.0);
+    REQUIRE(slot.prtF == 0.0);
+    REQUIRE(slot.prtZmin == 0.0);
+    REQUIRE(slot.prtZ == 0.0);
+    REQUIRE(slot.cameraTarget.IsEmpty());
+    REQUIRE(slot.anchorTarget.IsEmpty());
+    REQUIRE(s.childPlayerSnapshot.Type() == tvtVoid);
+    REQUIRE(s.meshControlPoints.empty());
+    for(const auto value : s.particleInterp) {
+        REQUIRE(value == 0.0);
+    }
+    REQUIRE(s.particleArraySnapshot.Type() == tvtVoid);
 }
 
-TEST_CASE("PerNodeLayerState: destructor frees owned heap blocks",
+TEST_CASE("PerNodeLayerState: embedded ClipSlot owns the recovered payloads",
           "[motionplayer][value_struct]") {
     using motion::detail::PerNodeLayerState;
     {
         PerNodeLayerState s;
-        s.heap_320.reset(::operator new(64));
-        s.heap_584.reset(::operator new(128));
-        s.ttstr_188 = ttstr(u"frame.skip.head");
-        s.ttstr_516 = ttstr(u"transform.snap");
-        s.ttstr_688 = ttstr(u"variable.snap.tail");
-        // Verify population took effect before scope exit.
-        REQUIRE(static_cast<bool>(s.heap_320));
-        REQUIRE(static_cast<bool>(s.heap_584));
-        REQUIRE(s.ttstr_516 == ttstr(u"transform.snap"));
-    } // ~PerNodeLayerState: HeapRef frees both heap blocks, ttstr Releases.
+        s.clipSlot.iconValue = ttstr(u"icon");
+        s.clipSlot.srcValue = ttstr(u"src");
+        s.clipSlot.cccVariant = tTJSVariant(ttstr(u"curve"));
+        s.clipSlot.actionValue = ttstr(u"action");
+        s.clipSlot.meshControlPoints = {{1.0f, 2.0f}};
+        s.clipSlot.motionDtgtValue = ttstr(u"motion-target");
+        s.clipSlot.modelDtgt = ttstr(u"model-target");
+        s.clipSlot.cameraTarget = ttstr(u"camera-target");
+        s.clipSlot.anchorTarget = ttstr(u"anchor-target");
+        s.childPlayerSnapshot = tTJSVariant(ttstr(u"child"));
+        s.meshControlPoints = {{3.0f, 4.0f}};
+        s.particleArraySnapshot = tTJSVariant(ttstr(u"particles"));
+        REQUIRE(s.clipSlot.meshControlPoints.size() == 1);
+        REQUIRE(s.meshControlPoints.size() == 1);
+    }
 }
 
-TEST_CASE("PerNodeLayerState: move construction transfers heap ownership",
+TEST_CASE("PerNodeLayerState: move construction transfers both mesh vectors",
           "[motionplayer][value_struct]") {
     using motion::detail::PerNodeLayerState;
     PerNodeLayerState src;
-    src.heap_320.reset(::operator new(64));
-    src.heap_584.reset(::operator new(128));
     src.nodeType = 3;
-    src.coordX = 1920.0;
-    src.ttstr_560 = ttstr(u"node.path.snap");
-
-    void *h320 = src.heap_320.get();
-    void *h584 = src.heap_584.get();
+    src.clipSlot.x = 1920.0;
+    src.clipSlot.srcValue = ttstr(u"node.path.snap");
+    src.clipSlot.meshControlPoints = {{1.0f, 2.0f}, {3.0f, 4.0f}};
+    src.meshControlPoints = {{5.0f, 6.0f}, {7.0f, 8.0f}};
+    const auto *slotMesh = src.clipSlot.meshControlPoints.data();
+    const auto *outerMesh = src.meshControlPoints.data();
 
     PerNodeLayerState dst(std::move(src));
-    REQUIRE(dst.heap_320.get() == h320);
-    REQUIRE(dst.heap_584.get() == h584);
-    REQUIRE(src.heap_320.get() == nullptr);
-    REQUIRE(src.heap_584.get() == nullptr);
     REQUIRE(dst.nodeType == 3);
-    REQUIRE(dst.coordX == 1920.0);
-    REQUIRE(dst.ttstr_560 == ttstr(u"node.path.snap"));
+    REQUIRE(dst.clipSlot.x == 1920.0);
+    REQUIRE(dst.clipSlot.srcValue == ttstr(u"node.path.snap"));
+    REQUIRE(dst.clipSlot.meshControlPoints.data() == slotMesh);
+    REQUIRE(dst.meshControlPoints.data() == outerMesh);
 }
 
 TEST_CASE("PerNodeLayerStateMap: emplace and lookup by node-path key",
@@ -370,18 +409,18 @@ TEST_CASE("PerNodeLayerStateMap: emplace and lookup by node-path key",
     {
         PerNodeLayerState s;
         s.nodeType = 4;
-        s.flipX = 1;
-        s.ttstr_560 = ttstr(u"variable.snap.head");
-        s.heap_320.reset(::operator new(48));
+        s.clipSlot.flipX = true;
+        s.clipSlot.srcValue = ttstr(u"variable.snap.head");
+        s.meshControlPoints = {{1.0f, 2.0f}};
         m.emplace(ttstr(u"root/group/leaf"), std::move(s));
     }
     REQUIRE(m.size() == 1);
     auto it = m.find(ttstr(u"root/group/leaf"));
     REQUIRE(it != m.end());
     REQUIRE(it->second.nodeType == 4);
-    REQUIRE(it->second.flipX == 1);
-    REQUIRE(it->second.ttstr_560 == ttstr(u"variable.snap.head"));
-    REQUIRE(static_cast<bool>(it->second.heap_320));
+    REQUIRE(it->second.clipSlot.flipX);
+    REQUIRE(it->second.clipSlot.srcValue == ttstr(u"variable.snap.head"));
+    REQUIRE(it->second.meshControlPoints.size() == 1);
     REQUIRE(m.find(ttstr(u"root/missing")) == m.end());
     // Map dtor releases all PerNodeLayerState entries on scope exit.
 }

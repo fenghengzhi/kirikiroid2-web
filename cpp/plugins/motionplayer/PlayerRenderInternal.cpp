@@ -8,6 +8,7 @@
 #include "tjsArray.h"
 
 #include <cstdint>
+#include <cstring>
 
 using namespace motion::internal;
 
@@ -32,9 +33,52 @@ extern "C" const char *TVPGetSoftwareAffineRenderMethodBranchForWasmtime();
 
 namespace motion::internal::render_detail {
 
+    namespace {
+        motion::D3DAdaptor *g_sharedD3DAdaptor_guess = nullptr;
+
+        void callLayerFillRectInteger_guess(
+            iTJSDispatch2 *layerObject,
+            const tTVPRect &rect,
+            tTJSVariant &result) {
+            tTJSVariant left(static_cast<tjs_int>(rect.left));
+            tTJSVariant top(static_cast<tjs_int>(rect.top));
+            tTJSVariant width(static_cast<tjs_int>(rect.get_width()));
+            tTJSVariant height(static_cast<tjs_int>(rect.get_height()));
+            tTJSVariant color(static_cast<tjs_int>(0));
+            tTJSVariant *arguments[] = {
+                &left, &top, &width, &height, &color,
+            };
+            (void)layerObject->FuncCall(
+                0, TJS_W("fillRect"),
+                &motion::detail::fillRectMemberHint_guess, &result, 5,
+                arguments, layerObject);
+        }
+
+        void callLayerUpdateInteger_guess(
+            iTJSDispatch2 *layerObject,
+            const tTVPRect &rect,
+            tTJSVariant &result) {
+            tTJSVariant left(static_cast<tjs_int>(rect.left));
+            tTJSVariant top(static_cast<tjs_int>(rect.top));
+            tTJSVariant width(static_cast<tjs_int>(rect.get_width()));
+            tTJSVariant height(static_cast<tjs_int>(rect.get_height()));
+            tTJSVariant *arguments[] = {&left, &top, &width, &height};
+            (void)layerObject->FuncCall(
+                0, TJS_W("update"),
+                &motion::detail::updateMemberHint_guess, &result, 4,
+                arguments, layerObject);
+        }
+    }
+
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
 
-    bool getLayerClassDispatchVariantLike_0x5CB08C(tTJSVariant &layerClassVar) {
+    iTJSDispatch2 *retainObjectFromVariantCopy_guess(
+        const tTJSVariant &value) {
+        tTJSVariant valueCopy(value);
+        return valueCopy.AsObject();
+    }
+
+    bool getLayerClassDispatchVariant_guess(tTJSVariant &layerClassVar) {
         iTJSDispatch2 *global = TVPGetScriptDispatch();
         if(!global) {
             return false;
@@ -47,7 +91,7 @@ namespace motion::internal::render_detail {
         return ok;
     }
 
-    tjs_error callLayerOperateAffineLike_0x6C7440(
+    tjs_error callLayerOperateAffine_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject,
         const tTVPPointD *points,
@@ -55,14 +99,10 @@ namespace motion::internal::render_detail {
         const tTVPRect &sourceRect,
         tTVPBlendOperationMode blendMode,
         tjs_int opacity) {
-        if(!layerClassObject || !renderLayerObject || !points) {
-            return TJS_E_FAIL;
-        }
-        if(sourceObject.Type() != tvtObject ||
-           !sourceObject.AsObjectNoAddRef()) {
-            return TJS_E_NATIVECLASSCRASH;
-        }
-
+        // This portable helper extracts a trusted inline renderer block. The
+        // native block has no receiver/point/source admission branch: it copies
+        // the source Variant as-is, materializes argv, and dispatches. Its
+        // surrounding renderer has already established all pointer owners.
         tTJSVariant sourceArg(sourceObject);
         tTJSVariant srcLeft(sourceRect.left);
         tTJSVariant srcTop(sourceRect.top);
@@ -77,8 +117,8 @@ namespace motion::internal::render_detail {
         tTJSVariant y2(points[2].y);
         tTJSVariant mode(static_cast<tjs_int32>(blendMode));
         tTJSVariant opa(static_cast<tjs_int32>(opacity));
-        // 0x6C8D38 materializes this final type argument as a literal Integer 0;
-        // completionType is only part of the direct-branch gate.
+        // The four current direct branches materialize this final type argument
+        // as a literal Integer 0; completionType only participates in the gate.
         tTJSVariant stretchType(static_cast<tjs_int>(0));
 
         tTJSVariant *args[] = {
@@ -87,27 +127,22 @@ namespace motion::internal::render_detail {
             &mode, &opa, &stretchType,
         };
 
-        static tjs_uint32 operateAffineHint = 0;
-        // libkrkr2.so 0x6C7440 dispatches through the Layer class object and
-        // passes the render layer only as objthis.
+        // The native dispatch uses the Layer class as receiver and passes the
+        // render layer only as objthis.
         return layerClassObject->FuncCall(
-            0, TJS_W("operateAffine"), &operateAffineHint, nullptr, 15, args,
-            renderLayerObject);
+            0, TJS_W("operateAffine"),
+            &motion::detail::operateAffineMemberHint_guess, nullptr, 15,
+            args, renderLayerObject);
     }
 
-    tjs_error callLayerAffineCopyLike_0x6C7440(
+    tjs_error callLayerAffineCopy_guess(
         iTJSDispatch2 *renderLayerObject,
         const tTVPPointD *points,
         const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect,
         tTVPBBStretchType type,
         bool clear) {
-        if(!renderLayerObject || !points ||
-           sourceObject.Type() != tvtObject ||
-           !sourceObject.AsObjectNoAddRef()) {
-            return TJS_E_FAIL;
-        }
-        // libkrkr2.so sub_6C7440 L"affineCopy" block (argc=14, points mode):
+        // Four-reference affineCopy block (argc=14, points mode):
         // [src, sx, sy, sw, sh, useMatrix=false, x0, y0, x1, y1, x2, y2,
         //  type, clear]. Dispatched on the render-layer instance.
         tTJSVariant sourceArg(sourceObject);
@@ -135,7 +170,7 @@ namespace motion::internal::render_detail {
             renderLayerObject);
     }
 
-    tjs_error callLayerOperateRectLike_0x6C7440(
+    tjs_error callLayerOperateRect_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject,
         tjs_real destX,
@@ -145,12 +180,7 @@ namespace motion::internal::render_detail {
         tjs_real sourceHeight,
         tTVPBlendOperationMode blendMode,
         tjs_int opacity) {
-        if(!layerClassObject || !renderLayerObject ||
-           sourceObject.Type() != tvtObject ||
-           !sourceObject.AsObjectNoAddRef()) {
-            return TJS_E_FAIL;
-        }
-        // libkrkr2.so sub_6C7440 L"operateRect" block (argc=9):
+        // Four-reference operateRect block (argc=9):
         // [dx, dy, src, sx, sy, sw, sh, mode, opa]. Dispatched on the
         // Layer class accessor with the target render-layer as objthis. The
         // registered Layer.operateRect method resolves the source object's
@@ -174,13 +204,14 @@ namespace motion::internal::render_detail {
             renderLayerObject);
     }
 
-    tjs_error callLayerSetSizeRealLike_0x6C7440(
+    tjs_error callLayerSetSizeReal_guess(
         iTJSDispatch2 *layerObject,
         tjs_real width,
         tjs_real height) {
-        if(!layerObject) {
-            return TJS_E_FAIL;
-        }
+        // Like the image-transfer helpers above, these basic Layer calls are
+        // extracts of trusted inline blocks. Their enclosing renderer owns the
+        // receiver; the reference block does not translate a broken owner into
+        // a synthetic HRESULT or zero value.
         tTJSVariant widthArg(width);
         tTJSVariant heightArg(height);
         tTJSVariant *args[] = {&widthArg, &heightArg};
@@ -189,13 +220,10 @@ namespace motion::internal::render_detail {
             nullptr, 2, args, layerObject);
     }
 
-    tjs_error callLayerFillRect4Like_0x6C7440(
+    tjs_error callLayerFillRect4_guess(
         iTJSDispatch2 *layerObject,
         tjs_real width,
         tjs_real height) {
-        if(!layerObject) {
-            return TJS_E_FAIL;
-        }
         tTJSVariant zeroX(static_cast<tjs_int>(0));
         tTJSVariant widthArg(width);
         tTJSVariant heightArg(height);
@@ -208,13 +236,10 @@ namespace motion::internal::render_detail {
             nullptr, 4, args, layerObject);
     }
 
-    tjs_error callLayerFillRect5Like_0x6C4E28(
+    tjs_error callLayerFillRect5_guess(
         iTJSDispatch2 *layerObject,
         tjs_real width,
         tjs_real height) {
-        if(!layerObject) {
-            return TJS_E_FAIL;
-        }
         tTJSVariant zeroX(static_cast<tjs_int>(0));
         tTJSVariant zeroY(static_cast<tjs_int>(0));
         tTJSVariant widthArg(width);
@@ -228,123 +253,206 @@ namespace motion::internal::render_detail {
             nullptr, 5, args, layerObject);
     }
 
-    tjs_error callLayerSetClipLike_0x6C7440(
+    tjs_error callLayerSetClip_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject,
         tjs_real left,
         tjs_real top,
         tjs_real width,
         tjs_real height) {
-        if(!layerClassObject || !renderLayerObject) {
-            return TJS_E_FAIL;
-        }
-        // libkrkr2.so sub_6C7440 @ 0x6c78dc: viewport-clip branch dispatches
-        // (*(vtbl+16))(v370, 0, L"setClip", &hint, 0, 4, &v371, objthis) with
-        // argv = [left, top, width, height]. 0x6C7820..0x6C78B0 constructs
-        // four type-5 Real Variants; integer conversion belongs to the
-        // registered Layer.setClip boundary and must not happen here.
+        // The viewport branch dispatches Layer.setClip with
+        // argv=[left, top, width, height]. All four arguments are type-5 Real
+        // Variants; integer conversion belongs to the registered Layer method
+        // boundary and must not happen here.
         tTJSVariant l(left);
         tTJSVariant t(top);
         tTJSVariant w(width);
         tTJSVariant h(height);
         tTJSVariant *args[] = {&l, &t, &w, &h};
-        static tjs_uint32 setClipHint = 0;
-        return layerClassObject->FuncCall(0, TJS_W("setClip"), &setClipHint,
-                                          nullptr, 4, args, renderLayerObject);
+        return layerClassObject->FuncCall(
+            0, TJS_W("setClip"), &motion::detail::setClipMemberHint_guess,
+            nullptr, 4, args, renderLayerObject);
     }
 
-    tjs_error callLayerResetClipLike_0x6C7440(
+    tjs_error callLayerResetClip_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject) {
-        if(!layerClassObject || !renderLayerObject) {
-            return TJS_E_FAIL;
-        }
-        // libkrkr2.so sub_6C7440 @ 0x6c7620 (and the post-walk reset @ 0x6c8fcc):
-        // (*(vtbl+16))(v370, 0, L"setClip", &hint, 0, 0, 0, objthis) with argc=0.
-        // Same method name as the set branch; numparams==0 routes to
-        // Layer.setClip's ResetClip() path (cpp/core/visual/LayerIntf.cpp:8882).
-        static tjs_uint32 resetClipHint = 0;
-        return layerClassObject->FuncCall(0, TJS_W("setClip"), &resetClipHint,
-                                          nullptr, 0, nullptr,
-                                          renderLayerObject);
+        // The same Layer.setClip member is dispatched with argc=0 here and at
+        // the post-walk reset. numparams==0 routes to ResetClip().
+        return layerClassObject->FuncCall(
+            0, TJS_W("setClip"), &motion::detail::setClipMemberHint_guess,
+            nullptr, 0, nullptr, renderLayerObject);
     }
 
-    tjs_int callLayerPropGetIntLike_0x6C99B8(
+    tjs_int callLayerPropGetInt_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *layerObject,
         const tjs_char *memberName,
         tjs_uint32 *memberHint) {
-        if(!layerClassObject || !layerObject) {
-            return 0;
-        }
         tTJSVariant value;
         (void)layerClassObject->PropGet(
             0, memberName, memberHint, &value, layerObject);
         return static_cast<tjs_int>(value.AsInteger());
     }
 
-    iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
+    tTJSVariant buildMeshPointTJSArrayVariant_guess(
         const std::vector<detail::MeshPoint> &points,
         float xOffset, float yOffset) {
-        // Mirror sub_6C715C @ 0x6C715C: produce a TJS Array of interleaved
-        // doubles (x,y,x,y,...) with each coordinate translated by the
-        // (xOffset,yOffset) the binary applies before the copy/operate call.
-        iTJSDispatch2 *array = TJSCreateArrayObject();
-        tjs_int index = 0;
+        // The native helper owns a fresh Array Variant plus a borrowed pointer
+        // to tTJSArrayNI::Items. Each coordinate is added in float with the
+        // offset as the left operand, promoted to Real, then directly appended.
+        // A non-empty input naturally dereferences a missing Items pointer; no
+        // script PropSet or friendly NativeInstanceSupport fallback exists.
+        auto array = motion::detail::createTJSArrayWithItems_guess();
         for(const auto &point : points) {
-            tTJSVariant x(static_cast<tjs_real>(point.x + xOffset));
-            tTJSVariant y(static_cast<tjs_real>(point.y + yOffset));
-            array->PropSetByNum(TJS_MEMBERENSURE, index++, &x, array);
-            array->PropSetByNum(TJS_MEMBERENSURE, index++, &y, array);
+            array.items->emplace_back(
+                static_cast<tjs_real>(xOffset + point.x));
+            array.items->emplace_back(
+                static_cast<tjs_real>(yOffset + point.y));
         }
-        return array;
+        // Force the native local-owner -> returned-owner copy boundary before
+        // the helper-local Array Variant is destroyed.
+        return static_cast<const tTJSVariant &>(array.value);
     }
 
-    std::array<tjs_int, 2> bezierPatchCellDivisionsLike_0x6C5C00(
+    void drawRenderItemFrame_guess(
+        iTJSDispatch2 *layerClassObject,
+        iTJSDispatch2 *renderLayerObject,
+        const detail::PreparedRenderItem &item,
+        const tTJSVariant &outline,
+        const tTJSVariant &meshline,
+        float xOffset,
+        float yOffset) {
+        if(!layerClassObject || !renderLayerObject ||
+           (outline.Type() == tvtVoid && meshline.Type() == tvtVoid)) {
+            return;
+        }
+
+        if(item.meshType == 0) {
+            for(std::size_t edge = 0; edge < 4; ++edge) {
+                const std::size_t next = (edge + 1) & 3;
+                tTJSVariant outlineArg(outline);
+                tTJSVariant x0(static_cast<tjs_real>(
+                    item.corners[edge * 2] + xOffset));
+                tTJSVariant y0(static_cast<tjs_real>(
+                    item.corners[edge * 2 + 1] + yOffset));
+                tTJSVariant x1(static_cast<tjs_real>(
+                    item.corners[next * 2] + xOffset));
+                tTJSVariant y1(static_cast<tjs_real>(
+                    item.corners[next * 2 + 1] + yOffset));
+                tTJSVariant *args[] = {
+                    &outlineArg, &x0, &y0, &x1, &y1,
+                };
+                (void)layerClassObject->FuncCall(
+                    0, TJS_W("drawLine"),
+                    &motion::detail::drawLineMemberHint_guess, nullptr, 5,
+                    args, renderLayerObject);
+            }
+            return;
+        }
+
+        const std::vector<detail::MeshPoint> *points = nullptr;
+        if(item.meshType == 1) {
+            points = &item.meshPoints;
+        } else if(item.meshType == 2) {
+            points = &item.commandCompositeMeshPoints;
+        } else {
+            return;
+        }
+
+        tTJSVariant pointArrayArg = buildMeshPointTJSArrayVariant_guess(
+            *points, xOffset, yOffset);
+        tTJSVariant outlineArg(outline);
+        tTJSVariant meshlineArg(meshline);
+
+        if(item.meshType == 2) {
+            tTJSVariant divX(static_cast<tjs_int>(item.meshDivX));
+            tTJSVariant divY(static_cast<tjs_int>(item.meshDivY));
+            tTJSVariant *args[] = {
+                &outlineArg, &meshlineArg, &pointArrayArg, &divX, &divY,
+            };
+            (void)layerClassObject->FuncCall(
+                0, TJS_W("drawMeshFrame"),
+                &motion::detail::drawMeshFrameMemberHint_guess, nullptr, 5,
+                args, renderLayerObject);
+            return;
+        }
+
+        if(meshline.Type() != tvtVoid) {
+            const auto cellDivisions =
+                renderBezierPatchCellDivisions_guess(
+                    item.commandPatchDivision,
+                    item.sourceState->width,
+                    item.sourceState->height);
+            tTJSVariant divX(cellDivisions[0]);
+            tTJSVariant divY(cellDivisions[1]);
+            tTJSVariant *args[] = {
+                &outlineArg, &meshlineArg, &pointArrayArg, &divX, &divY,
+            };
+            (void)layerClassObject->FuncCall(
+                0, TJS_W("drawBezierPatchMeshFrame"),
+                &motion::detail::drawBezierPatchMeshFrameMemberHint_guess,
+                nullptr, 5, args, renderLayerObject);
+            return;
+        }
+
+        tTJSVariant *args[] = {
+            &outlineArg, &meshlineArg, &pointArrayArg,
+        };
+        (void)layerClassObject->FuncCall(
+            0, TJS_W("drawBezierPatchFrame"),
+            &motion::detail::drawBezierPatchFrameMemberHint_guess, nullptr, 3,
+            args, renderLayerObject);
+    }
+
+    std::array<tjs_int, 2> renderBezierPatchCellDivisions_guess(
         tjs_int division,
         double sourceWidth,
         double sourceHeight) {
-        const double denominator = sourceWidth + sourceHeight;
-        // 0x6C5C00..0x6C5C18 unconditionally executes FDIV then the FCVTZS W
-        // generated by this ordinary source-level cast.
-        const auto split = static_cast<tjs_int>(
-            static_cast<double>(division) * sourceWidth / denominator);
-        return {split + 1, division - split + 1};
-    }
+        static_assert(sizeof(tjs_int) == sizeof(std::uint32_t));
 
-    std::array<tjs_int, 2> bezierPatchCellDivisionsU32Like_0x6C8E5C(
-        tjs_int division,
-        double sourceWidth,
-        double sourceHeight) {
-        const auto width = static_cast<std::uint32_t>(sourceWidth);
-        const auto height = static_cast<std::uint32_t>(sourceHeight);
-        const auto denominator = width + height;
-        // AArch64 UDIV returns zero for a zero divisor; make that boundary
-        // explicit because wasm integer division would otherwise trap.
-        const auto split = denominator != 0u
-            ? static_cast<std::uint32_t>(division) * width / denominator
+        const std::uint32_t width =
+            doubleToUnsignedIntTowardZeroSaturated_guess(sourceWidth);
+        const std::uint32_t height =
+            doubleToUnsignedIntTowardZeroSaturated_guess(sourceHeight);
+        const std::uint32_t denominator = width + height;
+        const std::uint32_t divisionWord =
+            static_cast<std::uint32_t>(division);
+        const std::uint32_t numerator = divisionWord * width;
+
+        // AArch64 performs this inline and yields zero for a zero divisor.
+        // ARMv7 delegates that boundary to an external runtime helper, so the
+        // deterministic Web profile follows the behavior contained in both
+        // AArch64 reference plugins instead of allowing wasm division to trap.
+        const std::uint32_t split = denominator != 0u
+            ? numerator / denominator
             : 0u;
+
+        const auto wordToSignedCellCount = [](std::uint32_t word) {
+            std::int32_t signedWord;
+            std::memcpy(&signedWord, &word, sizeof(signedWord));
+            return static_cast<tjs_int>(signedWord);
+        };
         return {
-            static_cast<tjs_int>(split + 1u),
-            static_cast<tjs_int>(
-                static_cast<std::uint32_t>(division) - split + 1u),
+            wordToSignedCellCount(split + 1u),
+            wordToSignedCellCount(divisionWord - split + 1u),
         };
     }
 
     // Common packer for the copy-family (meshCopy/bezierPatchCopy, argc=10) and
     // operate-family (operateMesh/operateBezierPatch, argc=11) primitives. The
-    // arg layout matches the binary's packed FuncCall arrays in sub_6C7440 /
-    // sub_6C4E28 exactly:
+    // Argument layout matches the four current renderers' packed FuncCall
+    // arrays exactly:
     //   copy:    [src, sx=0, sy=0, sw, sh, points, divx, divy, type, clear]
     //   operate: [src, sx=0, sy=0, sw, sh, points, divx, divy, mode, opa, clear]
-    static tjs_error callLayerMeshFamilyLike_0x6C7440(
+    static tjs_error callLayerMeshFamily_guess(
         const tjs_char *methodName,
         tjs_uint32 *memberHint,
         iTJSDispatch2 *dispatchObject,
         iTJSDispatch2 *renderLayerObject,
         const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect,
-        iTJSDispatch2 *meshPointArray,
+        const tTJSVariant &meshPointArray,
         tjs_int divx,
         tjs_int divy,
         bool isOperate,
@@ -352,18 +460,11 @@ namespace motion::internal::render_detail {
         tjs_int opacity,
         tTVPBBStretchType type,
         bool clear) {
-        if(!dispatchObject || !renderLayerObject ||
-           sourceObject.Type() != tvtObject ||
-           !sourceObject.AsObjectNoAddRef()) {
-            return TJS_E_FAIL;
-        }
-
         tTJSVariant sourceArg(sourceObject);
         tTJSVariant srcLeft(sourceRect.left);
         tTJSVariant srcTop(sourceRect.top);
         tTJSVariant srcWidth(sourceRect.get_width());
         tTJSVariant srcHeight(sourceRect.get_height());
-        tTJSVariant pointsArg(meshPointArray, meshPointArray);
         tTJSVariant divxArg(divx);
         tTJSVariant divyArg(divy);
 
@@ -374,7 +475,8 @@ namespace motion::internal::render_detail {
             tTJSVariant clearArg(static_cast<tjs_int32>(clear ? 1 : 0));
             tTJSVariant *args[] = {
                 &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
-                &pointsArg, &divxArg, &divyArg, &modeArg, &opaArg, &clearArg,
+                const_cast<tTJSVariant *>(&meshPointArray),
+                &divxArg, &divyArg, &modeArg, &opaArg, &clearArg,
             };
             return dispatchObject->FuncCall(0, methodName, memberHint, nullptr,
                                             11, args, renderLayerObject);
@@ -385,55 +487,56 @@ namespace motion::internal::render_detail {
         tTJSVariant clearArg(static_cast<tjs_int32>(clear ? 1 : 0));
         tTJSVariant *args[] = {
             &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
-            &pointsArg, &divxArg, &divyArg, &typeArg, &clearArg,
+            const_cast<tTJSVariant *>(&meshPointArray),
+            &divxArg, &divyArg, &typeArg, &clearArg,
         };
         return dispatchObject->FuncCall(0, methodName, memberHint, nullptr, 10,
                                         args, renderLayerObject);
     }
 
-    tjs_error callLayerMeshCopyLike_0x6C7440(
+    tjs_error callLayerMeshCopy_guess(
         iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
-        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        const tTVPRect &sourceRect, const tTJSVariant &meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBBStretchType type, bool clear) {
-        return callLayerMeshFamilyLike_0x6C7440(
+        return callLayerMeshFamily_guess(
             TJS_W("meshCopy"), &motion::detail::meshCopyMemberHint_guess,
             renderLayerObject, renderLayerObject, sourceObject, sourceRect,
             meshPointArray, divx, divy, false, omAlpha, 255, type, clear);
     }
 
-    tjs_error callLayerBezierPatchCopyLike_0x6C7440(
+    tjs_error callLayerBezierPatchCopy_guess(
         iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
-        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        const tTVPRect &sourceRect, const tTJSVariant &meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBBStretchType type, bool clear) {
-        return callLayerMeshFamilyLike_0x6C7440(
+        return callLayerMeshFamily_guess(
             TJS_W("bezierPatchCopy"),
             &motion::detail::bezierPatchCopyMemberHint_guess,
             renderLayerObject, renderLayerObject, sourceObject, sourceRect,
             meshPointArray, divx, divy, false, omAlpha, 255, type, clear);
     }
 
-    tjs_error callLayerOperateMeshLike_0x6C7440(
+    tjs_error callLayerOperateMesh_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
-        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        const tTVPRect &sourceRect, const tTJSVariant &meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBlendOperationMode blendMode, tjs_int opacity,
         bool clear) {
-        static tjs_uint32 operateMeshHint = 0;
-        return callLayerMeshFamilyLike_0x6C7440(
-            TJS_W("operateMesh"), &operateMeshHint, layerClassObject,
-            renderLayerObject, sourceObject, sourceRect, meshPointArray, divx,
-            divy, true, blendMode, opacity, stNearest, clear);
+        return callLayerMeshFamily_guess(
+            TJS_W("operateMesh"),
+            &motion::detail::operateMeshMemberHint_guess, layerClassObject,
+            renderLayerObject, sourceObject, sourceRect, meshPointArray,
+            divx, divy, true, blendMode, opacity, stNearest, clear);
     }
 
-    tjs_error callLayerOperateBezierPatchLike_0x6C7440(
+    tjs_error callLayerOperateBezierPatch_guess(
         iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
-        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        const tTVPRect &sourceRect, const tTJSVariant &meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBlendOperationMode blendMode, tjs_int opacity,
         bool clear) {
-        static tjs_uint32 operateBezierPatchHint = 0;
-        return callLayerMeshFamilyLike_0x6C7440(
-            TJS_W("operateBezierPatch"), &operateBezierPatchHint,
+        return callLayerMeshFamily_guess(
+            TJS_W("operateBezierPatch"),
+            &motion::detail::operateBezierPatchMemberHint_guess,
             layerClassObject, renderLayerObject, sourceObject, sourceRect,
             meshPointArray, divx, divy, true, blendMode, opacity, stNearest,
             clear);
@@ -512,7 +615,7 @@ namespace motion::internal::render_detail {
         tTJSVariant layerClassVar;
         iTJSDispatch2 *created = nullptr;
         const bool haveLayerClass =
-            getLayerClassDispatchVariantLike_0x5CB08C(layerClassVar);
+            getLayerClassDispatchVariant_guess(layerClassVar);
         if(haveLayerClass) {
             tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
             tTJSVariant parentVar =
@@ -598,20 +701,6 @@ namespace motion::internal::render_detail {
         return layer;
     }
 
-    bool queryLayerCanvasSize(iTJSDispatch2 *layerObject, int &width, int &height) {
-        width = 0;
-        height = 0;
-        if(auto *layer = resolveNativeLayer(layerObject)) {
-            width = static_cast<int>(layer->GetWidth());
-            height = static_cast<int>(layer->GetHeight());
-            if(width <= 0 || height <= 0) {
-                width = static_cast<int>(layer->GetImageWidth());
-                height = static_cast<int>(layer->GetImageHeight());
-            }
-        }
-        return width > 0 && height > 0;
-    }
-
     bool setObjectIntProperty(iTJSDispatch2 *object, const tjs_char *name,
                               tjs_int value) {
         if(!object) {
@@ -642,46 +731,10 @@ namespace motion::internal::render_detail {
         return true;
     }
 
-    std::string summarizeLayerChildren(tTJSNI_BaseLayer *layer, int maxChildren) {
-        if(!layer) {
-            return "<null-layer>";
-        }
-        int visibleChildren = 0;
-        const auto totalChildren = static_cast<int>(layer->GetCount());
-        for(int i = 0; i < totalChildren; ++i) {
-            auto *child = layer->GetChildren(i);
-            if(child && child->GetVisible() && child->GetOpacity() != 0) {
-                ++visibleChildren;
-            }
-        }
-        std::string summary = fmt::format(
-            "children={} visibleChildren={} selfVisible={} opacity={}",
-            totalChildren, visibleChildren,
-            layer->GetVisible() ? 1 : 0, layer->GetOpacity());
-        const int count = std::min(totalChildren, maxChildren);
-        for(int i = 0; i < count; ++i) {
-            auto *child = layer->GetChildren(i);
-            if(!child) {
-                continue;
-            }
-            summary += fmt::format(
-                " | [{}] ptr={} name={} vis={} nodeVis={} opacity={} size={}x{}",
-                i,
-                static_cast<const void *>(child),
-                child->GetName().AsStdString(),
-                child->GetVisible() ? 1 : 0,
-                child->GetNodeVisible() ? 1 : 0,
-                child->GetOpacity(),
-                child->GetWidth(),
-                child->GetHeight());
-        }
-        return summary;
-    }
-
-    tTVPBlendOperationMode resolveBlendOperationModeLike_0x6C7440(
+    tTVPBlendOperationMode resolveBlendOperationMode_guess(
         int rawBlendMode) {
-        // libkrkr2.so 0x6C7440 does not pass the raw item blend flag through to
-        // operateRect. It first maps the low 4 bits to the final TVP blend
+        // The four current renderers do not pass the raw item blend flag
+        // through to operateRect. They first map the low 4 bits to the final TVP blend
         // operation mode: 1->0xE, 2/5->0xF, 3->0x10, 4->0x11, and the raw 0 /
         // default path ultimately composites with mode 2 in the common case.
         switch(rawBlendMode & 0x0F) {
@@ -700,7 +753,7 @@ namespace motion::internal::render_detail {
         }
     }
 
-    bool shouldUseDirectRenderPathLike_0x6C7440(
+    bool shouldUseDirectRenderPath_guess(
         const motion::detail::PreparedRenderItem &item,
         tjs_int completionType) {
         const unsigned lowNibble =
@@ -723,63 +776,50 @@ namespace motion::internal::render_detail {
         }};
     }
 
-    std::vector<tTVPPointD> buildMeshPoints(
-        const std::vector<detail::MeshPoint> &points,
-        float xOffset,
-        float yOffset) {
-        std::vector<tTVPPointD> result;
-        result.reserve(points.size());
-        for(const auto &point : points) {
-            result.push_back({
-                static_cast<double>(point.x + xOffset),
-                static_cast<double>(point.y + yOffset),
-            });
-        }
-        return result;
-    }
-
-    motion::D3DAdaptor *ensureSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject) {
-        (void)targetLayerObject;
-        if(!TVPMainWindow) {
-            return nullptr;
-        }
-        iTJSDispatch2 *windowObject = TVPMainWindow->GetOwnerNoAddRef();
-        if(!windowObject) {
-            return nullptr;
-        }
-
-        static std::unique_ptr<motion::D3DAdaptor> s_sharedAdaptor;
-        if(!s_sharedAdaptor) {
-            s_sharedAdaptor = std::make_unique<motion::D3DAdaptor>();
-            // Player_drawCompat @ 0x6D5FB8 constructs the shared adaptor from
-            // the main Window size, not from the destination Layer size.
+    motion::D3DAdaptor *ensureSharedD3DAdaptor() {
+        // All four references use a zero-initialized raw process-global slot.
+        // It is neither guarded nor registered for destruction: the first
+        // successful constructor publishes it and the process retains it.
+        if(!g_sharedD3DAdaptor_guess) {
+            // The dimensions are sampled before allocation.  The allocating
+            // constructor then obtains and retains the main Window owner; a
+            // constructor failure leaves the slot null so a later draw retries.
             const int width = static_cast<int>(TVPMainWindow->GetWidth());
             const int height = static_cast<int>(TVPMainWindow->GetHeight());
-            const auto halfLike_0x6D5FB8 = [](int value) {
-                return (value >= 0 ? value : value + 1) >> 1;
-            };
-            tTJSVariant window(windowObject, windowObject);
-            s_sharedAdaptor->initializeLike_0x6ADB10(
-                window, width, height, halfLike_0x6D5FB8(width),
-                halfLike_0x6D5FB8(height));
+            g_sharedD3DAdaptor_guess = new motion::D3DAdaptor(
+                TVPMainWindow->GetOwnerNoAddRef(), width, height,
+                width / 2, height / 2);
         }
-        s_sharedAdaptor->setVisible(true);
-        return s_sharedAdaptor.get();
+        return g_sharedD3DAdaptor_guess;
     }
 
     bool computeRenderClipRect(
         const motion::detail::PreparedRenderItem &entry,
-                               int canvasWidth, int canvasHeight,
-                               RenderClipRect &out,
-                               std::string *failureReason) {
-        // sub_6C4E28 @0x6C5DBC..0x6C5E50 first intersects the four float
-        // paint-box values with a4 (the target/camera rect).  Only a valid
+        int canvasWidth,
+        int canvasHeight,
+        RenderClipRect &out,
+        std::string *failureReason) {
+        return computeRenderClipRect(
+            entry,
+            {0.0f, 0.0f,
+             static_cast<float>(canvasWidth),
+             static_cast<float>(canvasHeight)},
+            out, failureReason);
+    }
+
+    bool computeRenderClipRect(
+        const motion::detail::PreparedRenderItem &entry,
+        const std::array<float, 4> &targetClip,
+        RenderClipRect &out,
+        std::string *failureReason) {
+        // The current canvas pass first intersects the four float paint-box
+        // values with the target/camera rect. Only a valid
         // viewport is rounded; without one, fractional paint-box edges remain
-        // fractional all the way into item+216..228.
-        const float cameraLeft = 0.0f;
-        const float cameraTop = 0.0f;
-        const float cameraRight = static_cast<float>(canvasWidth);
-        const float cameraBottom = static_cast<float>(canvasHeight);
+        // fractional in the resulting clip rectangle.
+        const float cameraLeft = targetClip[0];
+        const float cameraTop = targetClip[1];
+        const float cameraRight = targetClip[2];
+        const float cameraBottom = targetClip[3];
         float clipLeft = cameraLeft < entry.paintBox[0]
             ? entry.paintBox[0]
             : cameraLeft;
@@ -843,27 +883,17 @@ namespace motion::internal::render_detail {
         return config->GetValue<bool>("ogl_accurate_render", false);
     }
 
-    tTVPRect localRectFromItem(
-        const motion::detail::PreparedRenderItem &item) {
-        return tTVPRect(0, 0,
-                        item.clipRect[2] - item.clipRect[0],
-                        item.clipRect[3] - item.clipRect[1]);
-    }
-
-    bool clearLayerAlphaOutsideRect(tTJSNI_BaseLayer *layer,
+    void clearLayerAlphaOutsideRect(iTJSDispatch2 *layerObject,
                                     const tTVPRect &outerRect,
-                                    const tTVPRect &innerRect) {
-        if(!layer || !layer->GetMainImage()) {
-            return false;
-        }
-        auto *bmp = layer->GetMainImage();
-        if(outerRect.left >= outerRect.right || outerRect.top >= outerRect.bottom) {
-            return true;
-        }
-
+                                    const tTVPRect &innerRect,
+                                    tTJSVariant &dispatchResult) {
         auto clearMask = [&](const tTVPRect &rect) {
             if(rect.left < rect.right && rect.top < rect.bottom) {
-                bmp->FillMask(rect, 0);
+                // Each strip is an observable script-visible fillRect call
+                // with five Integer Variants and the retained destination as
+                // objthis. The same result Variant is reused across calls.
+                callLayerFillRectInteger_guess(
+                    layerObject, rect, dispatchResult);
             }
         };
 
@@ -879,45 +909,39 @@ namespace motion::internal::render_detail {
                            innerRect.bottom,
                            std::min(outerRect.right, innerRect.right),
                            outerRect.bottom));
-        return true;
     }
 
-    bool applyMotionAlphaMaskLike_0x6AF104(
-        iTJSDispatch2 *dstLayerObject,
+    void applyMotionAlphaMaskOwnedVariants_guess(
+        const tTJSVariant &dstLayerVariant,
         int dstX,
         int dstY,
-        iTJSDispatch2 *srcLayerObject,
+        const tTJSVariant &srcLayerVariant,
         int srcX,
         int srcY,
         int width,
         int height,
         int threshold,
         int playerStencilType,
-        int itemFlags,
-        const std::string &motionPath,
-        double frameTime,
-        int dstNodeIndex,
-        int srcNodeIndex) {
-        auto *dstLayer = resolveNativeLayer(dstLayerObject);
-        auto *srcLayer = resolveNativeLayer(srcLayerObject);
-        if(!dstLayer || !srcLayer || !dstLayer->GetHasImage() ||
-           !srcLayer->GetHasImage() || !dstLayer->GetMainImage() ||
-           !srcLayer->GetMainImage()) {
-            return false;
-        }
+        int itemFlags) {
+        // The native ABI's two owning call-argument Variants already exist on
+        // entry. It copies the destination once more into ncbPropAccessor,
+        // whose AsObject owner remains retained through the compositor tail.
+        tTJSVariant destinationCopy(dstLayerVariant);
+        ncbPropAccessor destination(destinationCopy);
+        destinationCopy.Clear();
 
-        auto *dstBmp = dstLayer->GetMainImage();
-        auto *srcBmp = srcLayer->GetMainImage();
-        const auto &dstClip = dstLayer->GetClip();
-        const int dstImageWidth = static_cast<int>(dstLayer->GetImageWidth());
-        const int dstImageHeight = static_cast<int>(dstLayer->GetImageHeight());
-        const int srcImageWidth = static_cast<int>(srcLayer->GetImageWidth());
-        const int srcImageHeight = static_cast<int>(srcLayer->GetImageHeight());
-
-        const int requestedLeft = dstX;
-        const int requestedTop = dstY;
-        const int requestedRight = dstX + width;
-        const int requestedBottom = dstY + height;
+        const tjs_int clipLeft =
+            destination.getIntValue(TJS_W("clipLeft"));
+        const tjs_int clipTop =
+            destination.getIntValue(TJS_W("clipTop"));
+        const tjs_int clipWidth =
+            destination.getIntValue(TJS_W("clipWidth"));
+        const tjs_int clipHeight =
+            destination.getIntValue(TJS_W("clipHeight"));
+        const tTVPRect dstClip(
+            clipLeft, clipTop, clipLeft + clipWidth,
+            clipTop + clipHeight);
+        tTJSVariant dispatchResult;
 
         if(dstClip.left > dstX) {
             srcX += dstClip.left - dstX;
@@ -929,108 +953,286 @@ namespace motion::internal::render_detail {
             height -= dstClip.top - dstY;
             dstY = dstClip.top;
         }
-        if(srcX < 0) {
-            dstX -= srcX;
-            width += srcX;
-            srcX = 0;
+        if(dstX + width > dstClip.right) {
+            width = dstClip.right - dstX;
         }
-        if(srcY < 0) {
-            dstY -= srcY;
-            height += srcY;
-            srcY = 0;
+        if(dstY + height > dstClip.bottom) {
+            height = dstClip.bottom - dstY;
         }
 
-        const int dstLimitRight =
-            std::min(dstClip.right, dstImageWidth);
-        const int dstLimitBottom =
-            std::min(dstClip.bottom, dstImageHeight);
-        if(dstX + width > dstLimitRight) {
-            width = dstLimitRight - dstX;
-        }
-        if(dstY + height > dstLimitBottom) {
-            height = dstLimitBottom - dstY;
-        }
-        if(srcX + width > srcImageWidth) {
-            width = srcImageWidth - srcX;
-        }
-        if(srcY + height > srcImageHeight) {
-            height = srcImageHeight - srcY;
-        }
-
-        const tTVPRect requestedRect(
-            std::max(requestedLeft, dstClip.left),
-            std::max(requestedTop, dstClip.top),
-            std::min(requestedRight, dstLimitRight),
-            std::min(requestedBottom, dstLimitBottom));
         const tTVPRect overlapRect(dstX, dstY, dstX + width, dstY + height);
 
-        if((itemFlags & 3) == 1) {
-            clearLayerAlphaOutsideRect(dstLayer, requestedRect, overlapRect);
-        }
-
         if(width <= 0 || height <= 0) {
-            return true;
+            // Empty intersection never touches the source layer. All four
+            // references dispatch the complete destination clip only for op 1.
+            if(itemFlags == 1) {
+                callLayerFillRectInteger_guess(
+                    destination.GetDispatch(), dstClip, dispatchResult);
+            }
+            return;
         }
 
-        const bool thresholdMaskMode = playerStencilType == 0;
-        for(int y = 0; y < height; ++y) {
-            auto *dstRow =
-                static_cast<std::uint8_t *>(dstBmp->GetScanLineForWrite(dstY + y));
-            const auto *srcRow =
-                static_cast<const std::uint8_t *>(srcBmp->GetScanLine(srcY + y));
-            for(int x = 0; x < width; ++x) {
-                auto *dstPixel = dstRow + (dstX + x) * 4;
-                const auto *srcPixel = srcRow + (srcX + x) * 4;
-                const auto srcAlpha = static_cast<int>(srcPixel[3]);
-                auto &dstAlpha = dstPixel[3];
-                switch(itemFlags) {
-                    case 1:
-                        if(thresholdMaskMode) {
-                            if(srcAlpha < threshold) {
-                                dstAlpha = 0;
-                            }
-                        } else {
+        // Native delays both strict Layer conversions until overlap is known
+        // non-empty, converts source before destination, and then trusts the
+        // native instances/images. Invalid internal state fails naturally.
+        auto *srcLayer = resolveNativeLayer(
+            srcLayerVariant.AsObjectNoAddRef());
+        auto *dstLayer = resolveNativeLayer(
+            dstLayerVariant.AsObjectNoAddRef());
+        auto *srcTexture = srcLayer->GetMainImage()->GetTexture();
+        const tTVPRect srcRect(
+            srcX, srcY, srcX + width, srcY + height);
+        tRenderTexRectArray::Element sourceTextures[] = {
+            tRenderTexRectArray::Element(srcTexture, srcRect),
+        };
+
+        // This setup intentionally precedes mask-mode/op validation. In all
+        // four references an unsupported non-empty operation still exposes the
+        // same bitmap side effects (software destination independence, or GPU
+        // writable-target acquisition) before falling through to Layer.update.
+        const std::uint8_t *srcPixels = nullptr;
+        std::uint8_t *dstPixels = nullptr;
+        int srcPitch = 0;
+        int dstPitch = 0;
+        iTVPTexture2D *dstReferenceTexture = nullptr;
+        iTVPTexture2D *dstRenderTexture = nullptr;
+        if(TVPIsSoftwareRenderManager()) {
+            srcPixels = static_cast<const std::uint8_t *>(
+                srcTexture->GetPixelData());
+            dstPixels = static_cast<std::uint8_t *>(
+                dstLayer->GetMainImagePixelBufferForWrite());
+            srcPitch = srcTexture->GetPitch();
+            dstPitch = dstLayer->GetMainImagePixelBufferPitch();
+            srcPixels += srcY * srcPitch + srcX * 4;
+            dstPixels += dstY * dstPitch + dstX * 4;
+        } else {
+            dstReferenceTexture = dstLayer->GetMainImage()->GetTexture();
+            dstRenderTexture = dstLayer->GetMainImage()->GetTextureForRender(
+                true, &overlapRect);
+        }
+
+        if(playerStencilType == 1) {
+            if(itemFlags == 5 || itemFlags == 6) {
+                if(TVPIsSoftwareRenderManager()) {
+                    auto *dstRow = dstPixels;
+                    const auto *srcRow = srcPixels;
+                    for(int y = 0; y < height; ++y) {
+                        for(int x = 0; x < width; ++x) {
+                            const auto srcAlpha =
+                                static_cast<int>(srcRow[x * 4 + 3]);
+                            auto &dstAlpha = dstRow[x * 4 + 3];
+                            dstAlpha = static_cast<std::uint8_t>(
+                                srcAlpha +
+                                ((255 - srcAlpha) *
+                                 static_cast<int>(dstAlpha)) / 255);
+                        }
+                        srcRow += srcPitch;
+                        dstRow += dstPitch;
+                    }
+                } else {
+                    static std::uint32_t methodHint = 0;
+                    static iTVPRenderMethod *method =
+                        TVPGetRenderManager()
+                            ->GetOrCompileRenderMethod(
+                                "AddAlphaMask", &methodHint,
+                                "void main() { gl_FragColor = texture2D(tex0, v_texCoord0); }\n",
+                                1, 0)
+                            ->SetBlendFuncSeparate(
+                                GL_FUNC_ADD, GL_ZERO, GL_ONE, GL_ONE,
+                                GL_ONE_MINUS_SRC_ALPHA);
+                    TVPGetRenderManager()->OperateRect(
+                        method, dstRenderTexture, dstReferenceTexture,
+                        overlapRect, tRenderTexRectArray(sourceTextures));
+                }
+            } else if(itemFlags == 2) {
+                if(TVPIsSoftwareRenderManager()) {
+                    auto *dstRow = dstPixels;
+                    const auto *srcRow = srcPixels;
+                    for(int y = 0; y < height; ++y) {
+                        for(int x = 0; x < width; ++x) {
+                            const auto srcAlpha =
+                                static_cast<int>(srcRow[x * 4 + 3]);
+                            auto &dstAlpha = dstRow[x * 4 + 3];
+                            dstAlpha = static_cast<std::uint8_t>(
+                                ((255 - srcAlpha) *
+                                 static_cast<int>(dstAlpha)) / 255);
+                        }
+                        srcRow += srcPitch;
+                        dstRow += dstPitch;
+                    }
+                } else {
+                    static std::uint32_t methodHint = 0;
+                    static iTVPRenderMethod *method =
+                        TVPGetRenderManager()
+                            ->GetOrCompileRenderMethod(
+                                "AlphaMaskRev", &methodHint,
+                                "void main() { gl_FragColor = texture2D(tex0, v_texCoord0); }\n",
+                                1, 0)
+                            ->SetBlendFuncSeparate(
+                                GL_FUNC_ADD, GL_ZERO, GL_ONE, GL_ZERO,
+                                GL_ONE_MINUS_SRC_ALPHA);
+                    TVPGetRenderManager()->OperateRect(
+                        method, dstRenderTexture, dstReferenceTexture,
+                        overlapRect, tRenderTexRectArray(sourceTextures));
+                }
+            } else if(itemFlags == 1) {
+                clearLayerAlphaOutsideRect(
+                    destination.GetDispatch(), dstClip, overlapRect,
+                    dispatchResult);
+                if(TVPIsSoftwareRenderManager()) {
+                    auto *dstRow = dstPixels;
+                    const auto *srcRow = srcPixels;
+                    for(int y = 0; y < height; ++y) {
+                        for(int x = 0; x < width; ++x) {
+                            const auto srcAlpha =
+                                static_cast<int>(srcRow[x * 4 + 3]);
+                            auto &dstAlpha = dstRow[x * 4 + 3];
                             dstAlpha = static_cast<std::uint8_t>(
                                 (static_cast<int>(dstAlpha) * srcAlpha) / 255);
                         }
-                        break;
-                    case 2:
-                        if(thresholdMaskMode) {
-                            if(srcAlpha >= threshold) {
-                                dstAlpha = 0;
+                        srcRow += srcPitch;
+                        dstRow += dstPitch;
+                    }
+                } else {
+                    static std::uint32_t methodHint = 0;
+                    static iTVPRenderMethod *method =
+                        TVPGetRenderManager()
+                            ->GetOrCompileRenderMethod(
+                                "AlphaMask", &methodHint,
+                                "void main() { gl_FragColor = texture2D(tex0, v_texCoord0); }\n",
+                                1, 0)
+                            ->SetBlendFuncSeparate(
+                                GL_FUNC_ADD, GL_ZERO, GL_ONE, GL_ZERO,
+                                GL_SRC_ALPHA);
+                    TVPGetRenderManager()->OperateRect(
+                        method, dstRenderTexture, dstReferenceTexture,
+                        overlapRect, tRenderTexRectArray(sourceTextures));
+                }
+            }
+        } else if(playerStencilType == 0) {
+            if(itemFlags == 5 || itemFlags == 6) {
+                if(TVPIsSoftwareRenderManager()) {
+                    auto *dstRow = dstPixels;
+                    const auto *srcRow = srcPixels;
+                    for(int y = 0; y < height; ++y) {
+                        for(int x = 0; x < width; ++x) {
+                            if(static_cast<int>(srcRow[x * 4 + 3]) >= threshold) {
+                                dstRow[x * 4 + 3] = 255;
                             }
-                        } else {
-                            dstAlpha = static_cast<std::uint8_t>(
-                                ((255 - srcAlpha) * static_cast<int>(dstAlpha)) / 255);
                         }
-                        break;
-                    case 5:
-                    case 6:
-                        if(thresholdMaskMode) {
-                            if(srcAlpha >= threshold) {
-                                dstAlpha = 255;
+                        srcRow += srcPitch;
+                        dstRow += dstPitch;
+                    }
+                } else {
+                    static std::uint32_t methodHint = 0;
+                    static iTVPRenderMethod *method =
+                        TVPGetRenderManager()
+                            ->GetOrCompileRenderMethod(
+                                "AlphaMaskThresholdFill", &methodHint,
+                                "uniform float threshold;\n"
+                                "void main() { gl_FragColor = vec4(0,0,0,step(threshold, texture2D(tex0, v_texCoord0).a)); }\n",
+                                1, 0)
+                            ->SetBlendFuncSeparate(
+                                GL_MAX, GL_ZERO, GL_ONE, GL_ZERO,
+                                GL_ONE_MINUS_SRC_ALPHA);
+                    static int thresholdId =
+                        method->EnumParameterID("threshold");
+                    method->SetParameterOpa(thresholdId, threshold);
+                    TVPGetRenderManager()->OperateRect(
+                        method, dstRenderTexture, dstReferenceTexture,
+                        overlapRect, tRenderTexRectArray(sourceTextures));
+                }
+            } else if(itemFlags == 2) {
+                if(TVPIsSoftwareRenderManager()) {
+                    auto *dstRow = dstPixels;
+                    const auto *srcRow = srcPixels;
+                    for(int y = 0; y < height; ++y) {
+                        for(int x = 0; x < width; ++x) {
+                            if(static_cast<int>(srcRow[x * 4 + 3]) >= threshold) {
+                                dstRow[x * 4 + 3] = 0;
                             }
-                        } else {
-                            dstAlpha = static_cast<std::uint8_t>(
-                                srcAlpha +
-                                ((255 - srcAlpha) * static_cast<int>(dstAlpha)) / 255);
                         }
-                        break;
-                    default:
-                        break;
+                        srcRow += srcPitch;
+                        dstRow += dstPitch;
+                    }
+                } else {
+                    static std::uint32_t methodHint = 0;
+                    static iTVPRenderMethod *method =
+                        TVPGetRenderManager()
+                            ->GetOrCompileRenderMethod(
+                                "AlphaMaskThresholdCrop", &methodHint,
+                                "uniform float threshold;\n"
+                                "void main() { gl_FragColor = vec4(0,0,0,step(threshold, texture2D(tex0, v_texCoord0).a)); }\n",
+                                1, 0)
+                            ->SetBlendFuncSeparate(
+                                GL_FUNC_ADD, GL_ZERO, GL_ONE, GL_ZERO,
+                                GL_ONE_MINUS_SRC_ALPHA);
+                    static int thresholdId =
+                        method->EnumParameterID("threshold");
+                    method->SetParameterOpa(thresholdId, threshold);
+                    TVPGetRenderManager()->OperateRect(
+                        method, dstRenderTexture, dstReferenceTexture,
+                        overlapRect, tRenderTexRectArray(sourceTextures));
+                }
+            } else if(itemFlags == 1) {
+                clearLayerAlphaOutsideRect(
+                    destination.GetDispatch(), dstClip, overlapRect,
+                    dispatchResult);
+                if(TVPIsSoftwareRenderManager()) {
+                    auto *dstRow = dstPixels;
+                    const auto *srcRow = srcPixels;
+                    for(int y = 0; y < height; ++y) {
+                        for(int x = 0; x < width; ++x) {
+                            if(static_cast<int>(srcRow[x * 4 + 3]) < threshold) {
+                                dstRow[x * 4 + 3] = 0;
+                            }
+                        }
+                        srcRow += srcPitch;
+                        dstRow += dstPitch;
+                    }
+                } else {
+                    static std::uint32_t methodHint = 0;
+                    static iTVPRenderMethod *method =
+                        TVPGetRenderManager()
+                            ->GetOrCompileRenderMethod(
+                                "AlphaMaskThreshold", &methodHint,
+                                "uniform float threshold;\n"
+                                "void main() { gl_FragColor = vec4(0,0,0,step(threshold, texture2D(tex0, v_texCoord0).a)); }\n",
+                                1, 0)
+                            ->SetBlendFuncSeparate(
+                                GL_FUNC_ADD, GL_ZERO, GL_ONE, GL_ZERO,
+                                GL_SRC_ALPHA);
+                    static int thresholdId =
+                        method->EnumParameterID("threshold");
+                    method->SetParameterOpa(thresholdId, threshold);
+                    TVPGetRenderManager()->OperateRect(
+                        method, dstRenderTexture, dstReferenceTexture,
+                        overlapRect, tRenderTexRectArray(sourceTextures));
                 }
             }
         }
 
-        motion::detail::logoChainTraceLogf(
-            motionPath, "execute.mask", "0x6AF104", frameTime,
-            "dstNode={} srcNode={} itemFlags={} playerStencilType={} threshold={} requested=[{},{},{},{}] overlap=[{},{},{},{}]",
-            dstNodeIndex, srcNodeIndex, itemFlags, playerStencilType, threshold,
-            requestedRect.left, requestedRect.top,
-            requestedRect.right, requestedRect.bottom,
-            overlapRect.left, overlapRect.top,
-            overlapRect.right, overlapRect.bottom);
-        return true;
+        // Every non-empty overlap ends in the script-visible four-Integer
+        // update call, including unsupported mode/op no-ops.
+        callLayerUpdateInteger_guess(
+            destination.GetDispatch(), overlapRect, dispatchResult);
+    }
+
+    void applyMotionAlphaMask_guess(
+        tTJSVariant dstLayerVariant,
+        int dstX,
+        int dstY,
+        tTJSVariant srcLayerVariant,
+        int srcX,
+        int srcY,
+        int width,
+        int height,
+        int threshold,
+        int playerStencilType,
+        int itemFlags) {
+        applyMotionAlphaMaskOwnedVariants_guess(
+            dstLayerVariant, dstX, dstY, srcLayerVariant, srcX, srcY,
+            width, height, threshold, playerStencilType, itemFlags);
     }
 
 #if defined(KRKR2_WASMTIME_HEADLESS)

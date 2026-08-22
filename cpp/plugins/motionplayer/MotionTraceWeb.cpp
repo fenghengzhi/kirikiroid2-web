@@ -141,8 +141,9 @@ namespace {
         out << ",\"slantY\":";
         writeJsonDouble(out, accum.slantY);
         out << ",\"opacity\":" << accum.opacity;
-        // Frida oracle reads node+52 and names it blendMode; locally this is
-        // the persistent stencilType field, not accumulated.blendMode.
+        // The trace schema calls this value blendMode, but the native source
+        // is the node's persistent stencilType field. The evaluated transform
+        // block has no accumulated blend-mode member.
         out << ",\"blendMode\":" << node.stencilType;
         out << ",\"drawFlag\":" << (node.drawFlag ? "true" : "false");
         out << ",\"drawnThisFrame\":"

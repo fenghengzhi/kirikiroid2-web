@@ -39,113 +39,44 @@ namespace motion::internal {
             int frameType = 0) {
             TimelineTraceState state;
             state.visible = visible && !slot.done;
-            state.frameType = slot.frameIndex >= 0 ? slot.frameType : frameType;
+            state.frameType = slot.frameIndex >= 0
+                ? (slot.done ? 0 : (slot.crossfading ? 3 : 2))
+                : frameType;
             state.x = slot.x; state.y = slot.y; state.z = slot.z;
             state.opacity = static_cast<double>(slot.opacity) / 255.0;
             state.scaleX = slot.scaleX; state.scaleY = slot.scaleY;
             return state;
         }
 
-        void copyActiveTimelinePayloadLike_0x699B6C(
+        void copyActiveTimelinePayload_guess(
             detail::MotionNode &node) {
             const auto &slot = node.activeSlot();
             auto &dst = node.accumulated;
+            // Keep the common four-target store sequence. All scalar stores
+            // precede the potentially-throwing mesh vector assignment below.
             dst.flipX = slot.flipX;
             dst.flipY = slot.flipY;
-            dst.posX = slot.x;
-            dst.posY = slot.y;
-            dst.posZ = slot.z;
             dst.angle = slot.angle;
             dst.scaleX = slot.scaleX;
             dst.scaleY = slot.scaleY;
             dst.slantX = slot.slantX;
             dst.slantY = slot.slantY;
-            dst.opacity = slot.opacity;
-            dst.blendMode = slot.blendMode;
+            dst.posX = slot.x;
+            dst.posY = slot.y;
+            dst.posZ = slot.z;
             copyPackedColorsToBytes(node.colorBytes, slot.packedColors);
+            dst.opacity = slot.opacity;
 
-            // Player_evaluateTimeline @0x699BE4..0x699C20 copies the active
-            // slot vector directly into node+2024 when meshType==1.
+            // The active-copy branch copies the slot vector directly into the
+            // node output when meshType==1.
             if(node.meshType == 1) {
                 node.meshControlPoints = slot.meshControlPoints;
             }
         }
 
-        void interpolateTimelinePayloadLike_0x699D80(
-            detail::MotionNode &node,
-            double ratio) {
-            const auto &a = node.activeSlot();
-            const auto &b = node.otherSlot();
-            auto &dst = node.accumulated;
-            auto lerp = [ratio](double lhs, double rhs) {
-                return rhs * ratio + lhs * (1.0 - ratio);
-            };
-
-            dst.flipX = a.flipX;
-            dst.flipY = a.flipY;
-
-            const double srcPos[3] = {a.x, a.y, a.z};
-            const double dstPos[3] = {b.x, b.y, b.z};
-            double outPos[3] = {};
-            interpolatePositionVariantLike_0x69A4D4(
-                a.cccVariant, dstPos, srcPos, outPos,
-                node.coordinateMode, a.cpVariant, ratio);
-            dst.posX = outPos[0];
-            dst.posY = outPos[1];
-            dst.posZ = outPos[2];
-
-            const double angleRatio = a.accVariant.Type() != tvtVoid
-                ? evaluateBezierVariantLike_0x69A754(a.accVariant, ratio)
-                : ratio;
-            double angleA = a.angle;
-            double angleB = b.angle;
-            if(angleA != angleB) {
-                if(angleA >= angleB) {
-                    if(angleA - angleB > 180.0) angleB += 360.0;
-                } else if(angleB - angleA > 180.0) {
-                    angleB -= 360.0;
-                }
-                angleA = angleB * angleRatio + angleA * (1.0 - angleRatio);
-                if(angleA < 0.0) angleA += 360.0;
-                else if(angleA >= 360.0) angleA -= 360.0;
-            }
-            dst.angle = angleA;
-
-            const double scaleRatio = a.zccVariant.Type() != tvtVoid
-                ? evaluateBezierVariantLike_0x69A754(a.zccVariant, ratio)
-                : ratio;
-            dst.scaleX = a.scaleX == b.scaleX
-                ? a.scaleX : b.scaleX * scaleRatio
-                    + a.scaleX * (1.0 - scaleRatio);
-            dst.scaleY = a.scaleY == b.scaleY
-                ? a.scaleY : b.scaleY * scaleRatio
-                    + a.scaleY * (1.0 - scaleRatio);
-
-            const double slantRatio = a.sccVariant.Type() != tvtVoid
-                ? evaluateBezierVariantLike_0x69A754(a.sccVariant, ratio)
-                : ratio;
-            dst.slantX = a.slantX == b.slantX
-                ? a.slantX : b.slantX * slantRatio
-                    + a.slantX * (1.0 - slantRatio);
-            dst.slantY = a.slantY == b.slantY
-                ? a.slantY : b.slantY * slantRatio
-                    + a.slantY * (1.0 - slantRatio);
-
-            double opacity = static_cast<double>(a.opacity);
-            if(a.opacity != b.opacity) {
-                opacity = lerp(opacity, static_cast<double>(b.opacity));
-            }
-            dst.opacity = opacity < 0.0
-                ? static_cast<int>(std::ceil(opacity - 0.5))
-                : static_cast<int>(std::floor(opacity + 0.5));
-            dst.blendMode = a.blendMode;
-            copyPackedColorsToBytes(node.colorBytes, a.packedColors);
-        }
-
-        // sub_69AC4C @0x69AC4C. Android stores each control point as one 8-byte
-        // {float x,float y} vector element; MeshPoint preserves that source-level
-        // element topology throughout the production interpolation chain.
-        void interpolateMeshPointsLike_0x69AC4C(
+        // Each control point is one source-level {float x,float y} vector
+        // element throughout the production interpolation chain.
+        void interpolateMeshPoints_guess(
             const tTJSVariant &curve,
             std::vector<detail::MeshPoint> &output,
             const std::vector<detail::MeshPoint> &source,
@@ -154,7 +85,7 @@ namespace motion::internal {
             float meshRatio = static_cast<float>(ratio);
             if(curve.Type() != tvtVoid) {
                 meshRatio = static_cast<float>(
-                    evaluateBezierVariantLike_0x69A754(
+                    evaluateVariableTrackEasing_guess(
                         curve, static_cast<double>(meshRatio)));
             }
             if(source.size() != target.size()) {
@@ -176,41 +107,55 @@ namespace motion::internal {
             }
         }
 
-        void writeTypeSpecificCopyLike_0x699C2C(
+        void writeTimelineTypeSpecificCopy_guess(
             detail::MotionNode &node) {
             const auto &slot = node.activeSlot();
             switch(node.nodeType) {
                 case 5:
-                    node.cameraFov = slot.cameraFov;             // node+2368
+                    node.cameraFov = slot.cameraFov;
                     break;
                 case 10:
-                    node.feedbackTimespan = slot.feedbackTimespan; // node+2432
+                    node.feedbackTimespan = slot.feedbackTimespan;
                     break;
                 default:
                     break;
             }
         }
 
-        void writeTypeSpecificLerpLike_0x69A0F8(
-            detail::MotionNode &node,
+        double interpolateScalarWithCurve_guess(
+            double from, double to, const tTJSVariant &curve,
             double ratio) {
+            if(from == to) {
+                return from;
+            }
+            if(curve.Type() != tvtVoid) {
+                ratio = evaluateVariableTrackEasing_guess(curve, ratio);
+            }
+            return to * ratio + from * (1.0 - ratio);
+        }
+
+        void writeTimelineTypeSpecificLerp_guess(
+            detail::MotionNode &node,
+            double ratio,
+            const tTJSVariant &scalarCurve) {
             const auto &a = node.activeSlot();
             const auto &b = node.otherSlot();
             switch(node.nodeType) {
                 case 5:
-                    node.cameraFov = b.cameraFov * ratio
-                        + a.cameraFov * (1.0 - ratio);            // node+2368
+                    node.cameraFov = interpolateScalarWithCurve_guess(
+                        a.cameraFov, b.cameraFov, scalarCurve, ratio);
                     break;
                 case 10:
-                    node.feedbackTimespan = b.feedbackTimespan * ratio
-                        + a.feedbackTimespan * (1.0 - ratio);    // node+2432
+                    node.feedbackTimespan = interpolateScalarWithCurve_guess(
+                        a.feedbackTimespan, b.feedbackTimespan,
+                        scalarCurve, ratio);
                     break;
                 default:
                     break;
             }
         }
 
-        void interpolateMeshPayloadLike_0x69A058(
+        void interpolateTimelineMeshPayload_guess(
             detail::MotionNode &node,
             double ratio) {
             if(node.meshType != 1) {
@@ -218,53 +163,41 @@ namespace motion::internal {
             }
             auto &a = node.activeSlot();
             const auto &b = node.otherSlot();
-            static const std::vector<detail::MeshPoint> emptyMeshPoints;
-            // At 0x69A058 both-empty only clears the already-empty active
-            // vector and deliberately leaves node+2024 untouched.
+            // Both-empty only clears the already-empty active vector and
+            // deliberately leaves the node output vector untouched.
             if(a.meshControlPoints.empty() && b.meshControlPoints.empty()) {
                 a.meshControlPoints.clear();
                 return;
             }
             const auto &source = a.meshControlPoints.empty()
-                ? emptyMeshPoints : a.meshControlPoints;
+                ? defaultBezierPatchPoints_guess : a.meshControlPoints;
             const auto &target = b.meshControlPoints.empty()
-                ? emptyMeshPoints : b.meshControlPoints;
-            interpolateMeshPointsLike_0x69AC4C(
+                ? defaultBezierPatchPoints_guess : b.meshControlPoints;
+            interpolateMeshPoints_guess(
                 a.meshCurveVariant, node.meshControlPoints,
                 source, target, ratio);
         }
 
-        // Player_evaluateTimeline (0x699AE4) type-4 particle mirror.
-        // The binary's nodeType==4 switch case writes the node+2224..2288 eval
-        // mirror (MotionNode::particleInterp) from the active slot's particle block
-        // via one of two branches:
-        //   - COPY branch @0x699c2c (no crossfade / single slot): node+2224..2288
-        //     <- v11[93..101] where v11 = node+536*idx, i.e. node+536*idx+744..808.
-        //   - INTERP branch @0x69a0f8 (crossfade): per-field lerp of the active and
-        //     other slots' blocks at node+320+536*idx+424..488 with ratio r, copying
-        //     the active value when active==other (binary `if(a!=b) v=b*r+a*(1-r)`).
-        // ALIAS (self-disassembled): node+536*idx+744 == node+320+536*idx+424, so
-        // COPY's slot+744 and INTERP's slot+424 reference the SAME prt block. The
-        // block is written every frame during normal playback by mergeFrameContent
-        // (slot+424 = prtFmin) and on the HM3 path by restore @0x699890. The COPY
-        // branch therefore reads the same prtFmin..prtRange fields INTERP reads
-        // (its srcA), NOT a separate region. This mirror is what the particle
-        // emitter @0x6BF0DC reads (node4[139..143]).
-        void writeParticleInterpCopyLike_0x699c2c(detail::MotionNode &node) {
+        // The nodeType-4 copy and interpolation branches read the same nine-field
+        // slot particle block. There is no separate copy-only region; the node
+        // mirror is the downstream emitter input.
+        void copyParticleInterpolationPayload_guess(detail::MotionNode &node) {
             const detail::MotionNode::ClipSlot &slot = node.activeSlot();
-            // node+2224..2288 <- slot+424..488 (prt block, == COPY's slot+744..808).
+            // Copy the active slot's nine particle scalars into the node-level
+            // evaluator output consumed by particle emission.
             const double src[9] = {slot.prtFmin, slot.prtF, slot.prtVmin, slot.prtV,
                                    slot.prtAmin, slot.prtA, slot.prtZmin, slot.prtZ,
                                    slot.prtRange};
             for(int i = 0; i < 9; ++i) {
-                node.particleInterp[i] = src[i]; // node+2224.. <- slot+424.. (==+744)
+                node.particleInterp[i] = src[i];
             }
         }
 
-        void writeParticleInterpLerpLike_0x69a0f8(detail::MotionNode &node,
-                                                  double ratio) {
-            const auto &a = node.activeSlot();   // slot[active]+424..488
-            const auto &b = node.otherSlot();    // slot[other]+424..488
+        void interpolateParticlePayload_guess(
+            detail::MotionNode &node, double ratio,
+            const tTJSVariant &scalarCurve) {
+            const auto &a = node.activeSlot();
+            const auto &b = node.otherSlot();
             const double srcA[9] = {a.prtFmin, a.prtF, a.prtVmin, a.prtV,
                                     a.prtAmin, a.prtA, a.prtZmin, a.prtZ,
                                     a.prtRange};
@@ -272,36 +205,104 @@ namespace motion::internal {
                                     b.prtAmin, b.prtA, b.prtZmin, b.prtZ,
                                     b.prtRange};
             for(int i = 0; i < 9; ++i) {
-                double v = srcA[i];
-                if(srcA[i] != srcB[i]) {         // binary: lerp only when differ
-                    v = srcB[i] * ratio + srcA[i] * (1.0 - ratio);
-                }
-                node.particleInterp[i] = v;       // node+2224..2288
+                node.particleInterp[i] = interpolateScalarWithCurve_guess(
+                    srcA[i], srcB[i], scalarCurve, ratio);
             }
         }
 
-        // REMOVED 2026-06-21: markNodePayloadDirtyFromState / markNodeNoActiveFrame.
-        // These were an invented per-node payload-change detector that set node+44
-        // (node.flags bit0x01) unconditionally at the seek-primitive tail, with no
-        // counterpart in libkrkr2.so (node+44 is set 1 only inside the actual
-        // cross-frame seek iteration bodies — 0x6B7FBC / 0x6B72C0 / 0x6BA28C — and
-        // cleared unconditionally each frame by the post-loop at 0x6BBD2C). See the
-        // detailed comment at the former call site in
-        // advanceNodeFrameSelectionLike_0x6926B4. The port-local lastActive* cache
-        // fields they maintained had no other consumer and were removed from
-        // MotionNode.h.
+        void interpolateTimelinePayload_guess(
+            detail::MotionNode &node,
+            double ratio) {
+            const auto &a = node.activeSlot();
+            const auto &b = node.otherSlot();
+            auto &dst = node.accumulated;
 
-        bool rawDispatchObject(const tTJSVariant &value) {
-            return value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr;
+            dst.flipX = a.flipX;
+            dst.flipY = a.flipY;
+
+            double angle = a.angle;
+            double otherAngle = b.angle;
+            if(angle != otherAngle) {
+                if(angle >= otherAngle) {
+                    if(angle - otherAngle > 180.0) {
+                        otherAngle += 360.0;
+                    }
+                } else if(otherAngle - angle > 180.0) {
+                    otherAngle -= 360.0;
+                }
+                angle = interpolateScalarWithCurve_guess(
+                    angle, otherAngle, a.accVariant, ratio);
+                if(angle < 0.0) {
+                    angle += 360.0;
+                } else if(angle >= 360.0) {
+                    angle -= 360.0;
+                }
+            }
+            dst.angle = angle;
+
+            // The native source evaluates the same curve independently for
+            // each unequal component. Dispatch count and exception timing are
+            // therefore observable and must not be cached across X and Y.
+            dst.scaleX = interpolateScalarWithCurve_guess(
+                a.scaleX, b.scaleX, a.zccVariant, ratio);
+            dst.scaleY = interpolateScalarWithCurve_guess(
+                a.scaleY, b.scaleY, a.zccVariant, ratio);
+            dst.slantX = interpolateScalarWithCurve_guess(
+                a.slantX, b.slantX, a.sccVariant, ratio);
+            dst.slantY = interpolateScalarWithCurve_guess(
+                a.slantY, b.slantY, a.sccVariant, ratio);
+
+            const double srcPos[3] = {a.x, a.y, a.z};
+            const double dstPos[3] = {b.x, b.y, b.z};
+            double outPos[3] = {};
+            evaluatePositionInterpolation_guess(
+                a.cccVariant, dstPos, srcPos, outPos,
+                node.coordinateMode, a.cpVariant, ratio);
+            dst.posX = outPos[0];
+            dst.posY = outPos[1];
+            dst.posZ = outPos[2];
+
+            // All four targets construct this default-Void Variant after the
+            // position call and keep it alive through opacity, mesh and the
+            // type-specific switch. Its easing branches are source-real but
+            // unreachable with the recovered initializer.
+            const tTJSVariant scalarCurve;
+            std::array<std::uint32_t, 4> colors{};
+            for(std::size_t i = 0; i < colors.size(); ++i) {
+                // The shipped source passes the active color as both endpoints.
+                // Equality returns before cccVariant is inspected.
+                colors[i] = interpolatePackedColor_guess(
+                    a.cccVariant, a.packedColors[i], a.packedColors[i], ratio);
+            }
+            copyPackedColorsToBytes(node.colorBytes, colors);
+
+            const double opacity = interpolateScalarWithCurve_guess(
+                static_cast<double>(static_cast<std::uint32_t>(a.opacity)),
+                static_cast<double>(static_cast<std::uint32_t>(b.opacity)),
+                scalarCurve, ratio);
+            const std::uint32_t opacityWord =
+                timelineOpacityWordFromDouble_guess(opacity);
+            static_assert(sizeof(dst.opacity) == sizeof(opacityWord));
+            std::memcpy(&dst.opacity, &opacityWord, sizeof(opacityWord));
+
+            interpolateTimelineMeshPayload_guess(node, ratio);
+            if(node.nodeType == 4) {
+                interpolateParticlePayload_guess(
+                    node, ratio, scalarCurve);
+            }
+            writeTimelineTypeSpecificLerp_guess(
+                node, ratio, scalarCurve);
         }
 
-        // Player_resetFrameSlot @0x69260C. This deliberately does not assign a
-        // fresh C++ object: Android releases only src/curve/act owners, zeros the
-        // transform prefix and clears the mesh vector while retaining capacity.
-        void resetClipSlotLike_0x69260C(
+        // Dirty publishes only from an actual frame-crossing iteration or
+        // absolute initialization, then the update pass consumes and clears it.
+
+        // The four-reference slot reset deliberately does not assign a fresh
+        // C++ object: it releases only the owned strings/Variants, zeros the
+        // scalar prefix, and clears the mesh vector while retaining capacity.
+        void resetClipSlot_guess(
             detail::MotionNode::ClipSlot &slot) {
             slot.frameIndex = 0;
-            slot.frameType = 0;
             slot.clipStartTime = 0.0;
             slot.ti = 0;
             slot.contentMask = 0;
@@ -324,8 +325,6 @@ namespace motion::internal {
             slot.scaleY = 0.0;
             slot.slantX = 0.0;
             slot.slantY = 0.0;
-            slot.width = 0.0;
-            slot.height = 0.0;
             slot.cccVariant.Clear();
             slot.occVariant.Clear();
             slot.accVariant.Clear();
@@ -333,66 +332,47 @@ namespace motion::internal {
             slot.sccVariant.Clear();
             slot.cpVariant.Clear();
             slot.meshCurveVariant.Clear();
-            slot.actionValue.Clear();
-            slot.hasSync = false;
+            // The native reset intentionally preserves icon and action owners.
+            // Their masks/type gates prevent stale values from being consumed;
+            // later present fields overwrite and release them in place.
             slot.meshControlPoints.clear();
+            // The two scalar words immediately after the native mesh vector
+            // are also reset. Other motion-block fields deliberately retain
+            // their previous bytes until a frame carrying the motion mask
+            // initializes that block.
+            slot.motionFlags = 0;
+            slot.motionDt = 0;
         }
 
-        // Player_parseFrame @0x6926B4: raw frameList+index input, parse only.
-        void parseFrameLike_0x6926B4(
-            detail::MotionNode::ClipSlot &slot,
-            const tTJSVariant &frameList,
-            int frameIndex) {
-            resetClipSlotLike_0x69260C(slot);
-            slot.frameIndex = frameIndex;
-            const tTJSVariant frame =
-                detail::motionPropGetByNum(frameList, frameIndex);
-            slot.clipStartTime =
-                detail::motionPropGetDouble(frame, TJS_W("time"));
-            const int type =
-                detail::motionPropGetInt(frame, TJS_W("type"));
-            slot.frameType = type;
-            if(type == 0) {
-                slot.done = true;
-                return;
-            }
-            slot.done = false;
-            if(type == 2) {
-                slot.crossfading = false;
-            } else if(type == 3) {
-                slot.crossfading = true;
-            }
-            const tTJSVariant content =
-                detail::motionPropGet(frame, TJS_W("content"));
-            slot.contentMask =
-                detail::motionPropGetInt(content, TJS_W("mask"));
-            if((slot.contentMask & 0x40000) != 0) {
-                slot.actionValue =
-                    detail::motionPropGetString(content, TJS_W("act"));
-            }
-        }
-
-        void copyRawCurveVariant(const tTJSVariant &content,
+        void copyRawCurveVariant(iTJSDispatch2 *content,
                                  const tjs_char *name,
+                                 tjs_uint32 *hint,
                                  tTJSVariant &owner) {
-            owner = detail::motionPropGet(content, name);
+            owner = detail::motionPropGet(content, name, 0, hint);
         }
 
-        // Player_mergeFrameContent @0x692AB0. The third Android argument is the
-        // raw frameList; content is intentionally fetched again by slot index.
-        void mergeFrameContentLike_0x692AB0(
-            detail::MotionNode &node,
-            detail::MotionNode::ClipSlot &slot,
-            const tTJSVariant &frameList) {
+    }
+
+    // Merge the content payload for an already parsed slot. The native routine
+    // receives only the node-type byte plus the raw frame list; it does not
+    // receive or retain a MotionNode pointer. Root, frame and content accessors
+    // remain live across every selected nested payload block.
+    void mergeNodeFrameContent_guess(
+        detail::MotionNode::ClipSlot &slot,
+        int nodeType,
+        const tTJSVariant &frameList) {
             slot.merged = true;
             if(slot.done) {
                 return;
             }
 
-            const tTJSVariant frame =
-                detail::motionPropGetByNum(frameList, slot.frameIndex);
-            const tTJSVariant content =
-                detail::motionPropGet(frame, TJS_W("content"));
+            ncbPropAccessor frameListObject{tTJSVariant(frameList)};
+            ncbPropAccessor frameObject{frameListObject.GetValue(
+                slot.frameIndex, ncbTypedefs::Tag<tTJSVariant>(), 0)};
+            ncbPropAccessor contentObject{frameObject.GetValue(
+                TJS_W("content"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+                &detail::contentMemberHint_guess)};
+            iTJSDispatch2 *const content = contentObject.GetDispatch();
             const std::uint32_t mask =
                 static_cast<std::uint32_t>(slot.contentMask);
 
@@ -403,28 +383,43 @@ namespace motion::internal {
             slot.opacity = 255;
             slot.blendMode = 16;
 
-            if(node.nodeType >= 0 && node.nodeType < 32 &&
-               (((1u << static_cast<unsigned>(node.nodeType)) & 0x1849u) != 0)) {
+            if(nodeType >= 0 && nodeType < 32 &&
+               (((1u << static_cast<unsigned>(nodeType)) & 0x1849u) != 0)) {
                 slot.srcValue =
-                    detail::motionPropGetString(content, TJS_W("src"));
+                    detail::motionPropGetString(
+                        content, TJS_W("src"), 0,
+                        &detail::srcMemberHint_guess);
+                // Four-reference behavior is deliberately two-phase. First
+                // probe `icon` with MEMBERMUSTEXIST into a temporary Variant;
+                // on success, discard it and read the property again with
+                // flags=0 for string conversion. A reentrant getter can
+                // therefore return a different value on the second read.
                 tTJSVariant probe;
                 if(detail::motionTryPropGet(
                        content, TJS_W("icon"), probe,
-                       TJS_MEMBERMUSTEXIST)) {
+                       TJS_MEMBERMUSTEXIST, nullptr)) {
                     slot.iconValue =
-                        detail::motionPropGetString(content, TJS_W("icon"));
+                        detail::motionPropGetString(
+                            content, TJS_W("icon"), 0, nullptr);
                 } else {
                     slot.iconValue.Clear();
                 }
             }
 
             if((mask & 0x1u) != 0) {
-                slot.ox = detail::motionPropGetDouble(content, TJS_W("ox"));
-                slot.oy = detail::motionPropGetDouble(content, TJS_W("oy"));
+                slot.ox = detail::motionPropGetDouble(
+                    content, TJS_W("ox"), 0,
+                    &detail::nodeFrameOxMemberHint_guess);
+                slot.oy = detail::motionPropGetDouble(
+                    content, TJS_W("oy"), 0,
+                    &detail::nodeFrameOyMemberHint_guess);
             }
             if((mask & 0x2u) != 0) {
-                const tTJSVariant coord =
-                    detail::motionPropGet(content, TJS_W("coord"));
+                ncbPropAccessor coordObject{
+                    detail::motionPropGet(
+                        content, TJS_W("coord"), 0,
+                        &detail::coordMemberHint_guess)};
+                iTJSDispatch2 *const coord = coordObject.GetDispatch();
                 slot.x = detail::motionPropGetDoubleByNum(coord, 0);
                 slot.y = detail::motionPropGetDoubleByNum(coord, 1);
                 slot.z = detail::motionPropGetDoubleByNum(coord, 2);
@@ -433,16 +428,24 @@ namespace motion::internal {
             if((mask & 0x20600u) != 0) {
                 if((mask & 0x20000u) != 0) {
                     slot.blendMode =
-                        detail::motionPropGetInt(content, TJS_W("bm"));
+                        detail::motionPropGetInt(
+                            content, TJS_W("bm"), 0,
+                            &detail::nodeFrameBmMemberHint_guess);
                 }
                 if((mask & 0x200u) != 0) {
                     const tTJSVariant color =
-                        detail::motionPropGet(content, TJS_W("color"));
+                        detail::motionPropGet(
+                            content, TJS_W("color"), 0,
+                            &detail::colorMemberHint_guess);
                     if(color.Type() == tvtObject) {
+                        ncbPropAccessor colorObject{color};
+                        iTJSDispatch2 *const colorDispatch =
+                            colorObject.GetDispatch();
                         for(int i = 0; i < 4; ++i) {
                             slot.packedColors[static_cast<std::size_t>(i)] =
                                 static_cast<std::uint32_t>(
-                                    detail::motionPropGetIntByNum(color, i));
+                                    detail::motionPropGetIntByNum(
+                                        colorDispatch, i));
                         }
                     } else {
                         std::uint32_t packed = 0;
@@ -465,86 +468,128 @@ namespace motion::internal {
                 }
                 if((mask & 0x400u) != 0) {
                     slot.opacity =
-                        detail::motionPropGetInt(content, TJS_W("opa"));
+                        detail::motionPropGetInt(
+                            content, TJS_W("opa"), 0,
+                            &detail::nodeFrameOpaMemberHint_guess);
                 }
             }
 
             if((mask & 0x1FCu) != 0) {
                 if((mask & 0xCu) != 0) {
                     slot.flipX =
-                        detail::motionPropGetBool(content, TJS_W("fx"));
+                        detail::motionPropGetBool(
+                            content, TJS_W("fx"), 0,
+                            &detail::nodeFrameFxMemberHint_guess);
                     slot.flipY =
-                        detail::motionPropGetBool(content, TJS_W("fy"));
+                        detail::motionPropGetBool(
+                            content, TJS_W("fy"), 0,
+                            &detail::nodeFrameFyMemberHint_guess);
                 }
                 if((mask & 0x10u) != 0) {
                     slot.angle =
-                        detail::motionPropGetDouble(content, TJS_W("angle"));
+                        detail::motionPropGetDouble(
+                            content, TJS_W("angle"), 0,
+                            &detail::angleMemberHint_guess);
                 }
                 if((mask & 0x60u) != 0) {
                     slot.scaleX =
-                        detail::motionPropGetDouble(content, TJS_W("zx"));
+                        detail::motionPropGetDouble(
+                            content, TJS_W("zx"), 0,
+                            &detail::nodeFrameZxMemberHint_guess);
                     slot.scaleY =
-                        detail::motionPropGetDouble(content, TJS_W("zy"));
+                        detail::motionPropGetDouble(
+                            content, TJS_W("zy"), 0,
+                            &detail::nodeFrameZyMemberHint_guess);
                 }
                 if((mask & 0x180u) != 0) {
                     slot.slantX =
-                        detail::motionPropGetDouble(content, TJS_W("sx"));
+                        detail::motionPropGetDouble(
+                            content, TJS_W("sx"), 0,
+                            &detail::nodeFrameSxMemberHint_guess);
                     slot.slantY =
-                        detail::motionPropGetDouble(content, TJS_W("sy"));
+                        detail::motionPropGetDouble(
+                            content, TJS_W("sy"), 0,
+                            &detail::nodeFrameSyMemberHint_guess);
                 }
             }
 
             if(slot.crossfading) {
                 if((mask & 0x04000000u) != 0) {
                     slot.ti = static_cast<std::uint32_t>(
-                        detail::motionPropGetInt(content, TJS_W("ti")));
+                        detail::motionPropGetInt(
+                            content, TJS_W("ti"), 0,
+                            &detail::nodeFrameTiMemberHint_guess));
                 }
                 if((mask & 0x800u) != 0) {
                     copyRawCurveVariant(content, TJS_W("ccc"),
+                                        &detail::nodeFrameCccMemberHint_guess,
                                         slot.cccVariant);
                 }
                 if((mask & 0x8000u) != 0) {
                     copyRawCurveVariant(content, TJS_W("occ"),
+                                        &detail::nodeFrameOccMemberHint_guess,
                                         slot.occVariant);
                 }
                 if((mask & 0x1000u) != 0) {
                     copyRawCurveVariant(content, TJS_W("acc"),
+                                        &detail::nodeFrameAccMemberHint_guess,
                                         slot.accVariant);
                 }
                 if((mask & 0x2000u) != 0) {
                     copyRawCurveVariant(content, TJS_W("zcc"),
+                                        &detail::nodeFrameZccMemberHint_guess,
                                         slot.zccVariant);
                 }
                 if((mask & 0x4000u) != 0) {
                     copyRawCurveVariant(content, TJS_W("scc"),
+                                        &detail::nodeFrameSccMemberHint_guess,
                                         slot.sccVariant);
                 }
                 if((mask & 0x10000u) != 0) {
                     slot.cpVariant =
-                        detail::motionPropGet(content, TJS_W("cp"));
+                        detail::motionPropGet(
+                            content, TJS_W("cp"), 0,
+                            &detail::nodeFrameCpMemberHint_guess);
                 }
             }
 
             if((mask & 0x02000000u) != 0) {
                 tTJSVariant mesh =
-                    detail::motionPropGet(content, TJS_W("mesh"));
+                    detail::motionPropGet(
+                        content, TJS_W("mesh"), 0,
+                        &detail::meshMemberHint_guess);
                 if(mesh.Type() == tvtVoid) {
-                    mesh = detail::motionPropGet(content, TJS_W("obj"));
+                    mesh = detail::motionPropGet(
+                        content, TJS_W("obj"), 0,
+                        &detail::nodeFrameObjMemberHint_guess);
                 }
+                ncbPropAccessor meshObject{mesh};
+                iTJSDispatch2 *const meshDispatch =
+                    meshObject.GetDispatch();
                 slot.meshCurveVariant =
-                    detail::motionPropGet(mesh, TJS_W("cc"));
+                    detail::motionPropGet(
+                        meshDispatch, TJS_W("cc"), 0,
+                        &detail::nodeFrameCcMemberHint_guess);
                 if(slot.meshCurveVariant.Type() == tvtVoid) {
                     slot.meshCurveVariant =
-                        detail::motionPropGet(mesh, TJS_W("mcc"));
+                        detail::motionPropGet(
+                            meshDispatch, TJS_W("mcc"), 0,
+                            &detail::nodeFrameMccMemberHint_guess);
                 }
                 tTJSVariant points =
-                    detail::motionPropGet(mesh, TJS_W("bp"));
+                    detail::motionPropGet(
+                        meshDispatch, TJS_W("bp"), 0,
+                        &detail::nodeFrameBpMemberHint_guess);
                 if(points.Type() == tvtVoid) {
                     points = detail::motionPropGet(
-                        mesh, TJS_W("bezierPatch"));
+                        meshDispatch, TJS_W("bezierPatch"), 0,
+                        &detail::bezierPatchMemberHint_guess);
                 }
                 if(points.Type() == tvtObject) {
-                    if(detail::motionPropGetCount(points) != 32) {
+                    ncbPropAccessor pointsObject{points};
+                    iTJSDispatch2 *const pointsDispatch =
+                        pointsObject.GetDispatch();
+                    if(detail::motionPropGetCount(pointsDispatch) != 32) {
                         TJS_eTJSError(
                             TJS_W("unexpected bezier patch point num."));
                     }
@@ -552,19 +597,26 @@ namespace motion::internal {
                     for(int i = 0; i < 32; i += 2) {
                         slot.meshControlPoints.push_back({
                             static_cast<float>(
-                                detail::motionPropGetDoubleByNum(points, i)),
+                                detail::motionPropGetDoubleByNum(
+                                    pointsDispatch, i)),
                             static_cast<float>(
-                                detail::motionPropGetDoubleByNum(points, i + 1))
+                                detail::motionPropGetDoubleByNum(
+                                    pointsDispatch, i + 1))
                         });
                     }
                 }
             }
 
             if((mask & 0x80000u) != 0) {
-                const tTJSVariant motion =
-                    detail::motionPropGet(content, TJS_W("motion"));
+                ncbPropAccessor motionObject{
+                    detail::motionPropGet(
+                        content, TJS_W("motion"), 0,
+                        &detail::motionMemberHint_guess)};
+                iTJSDispatch2 *const motion = motionObject.GetDispatch();
                 const int motionMask =
-                    detail::motionPropGetInt(motion, TJS_W("mask"));
+                    detail::motionPropGetInt(
+                        motion, TJS_W("mask"), 0,
+                        &detail::maskMemberHint_guess);
                 slot.motionFlags = 0;
                 slot.motionDt = 1;
                 slot.motionDocmpl = false;
@@ -572,46 +624,74 @@ namespace motion::internal {
                 slot.motionDtgtValue.Clear();
                 if((motionMask & 0x1) != 0) {
                     slot.motionFlags =
-                        detail::motionPropGetInt(motion, TJS_W("flags"));
+                        detail::motionPropGetInt(
+                            motion, TJS_W("flags"), 0,
+                            &detail::nodeFrameFlagsMemberHint_guess);
                 }
                 if((motionMask & 0x2) != 0) {
                     slot.motionDt =
-                        detail::motionPropGetInt(motion, TJS_W("dt"));
+                        detail::motionPropGetInt(
+                            motion, TJS_W("dt"), 0,
+                            &detail::nodeFrameDtMemberHint_guess);
                 }
                 if((motionMask & 0x4) != 0) {
                     slot.motionDocmpl =
-                        detail::motionPropGetBool(motion, TJS_W("docmpl"));
+                        detail::motionPropGetBool(
+                            motion, TJS_W("docmpl"), 0,
+                            &detail::nodeFrameDocmplMemberHint_guess);
                 }
                 if((motionMask & 0x8) != 0) {
                     slot.motionDofst =
-                        detail::motionPropGetDouble(motion, TJS_W("dofst"));
+                        detail::motionPropGetDouble(
+                            motion, TJS_W("dofst"), 0,
+                            &detail::nodeFrameDofstMemberHint_guess);
                 }
                 if((motionMask & 0x10) != 0) {
                     slot.motionDtgtValue =
-                        detail::motionPropGetString(motion, TJS_W("dtgt"));
+                        detail::motionPropGetString(
+                            motion, TJS_W("dtgt"), 0,
+                            &detail::nodeFrameDtgtMemberHint_guess);
                 }
                 slot.motionTimeOffset =
-                    detail::motionPropGetDouble(motion, TJS_W("timeOffset"));
+                    detail::motionPropGetDouble(
+                        motion, TJS_W("timeOffset"), 0,
+                        &detail::nodeFrameTimeOffsetMemberHint_guess);
             }
 
             if((mask & 0x01000000u) != 0) {
-                const tTJSVariant model =
-                    detail::motionPropGet(content, TJS_W("model"));
+                ncbPropAccessor modelObject{
+                    detail::motionPropGet(
+                        content, TJS_W("model"), 0,
+                        &detail::nodeFrameModelMemberHint_guess)};
+                iTJSDispatch2 *const model = modelObject.GetDispatch();
                 slot.modelTimeOffset =
-                    detail::motionPropGetDouble(model, TJS_W("timeOffset"));
+                    detail::motionPropGetDouble(
+                        model, TJS_W("timeOffset"), 0,
+                        &detail::nodeFrameTimeOffsetMemberHint_guess);
                 slot.modelLoop =
-                    detail::motionPropGetBool(model, TJS_W("loop"));
+                    detail::motionPropGetBool(
+                        model, TJS_W("loop"), 0,
+                        &detail::nodeFrameLoopMemberHint_guess);
                 slot.modelDt =
-                    detail::motionPropGetInt(model, TJS_W("dt"));
+                    detail::motionPropGetInt(
+                        model, TJS_W("dt"), 0,
+                        &detail::nodeFrameDtMemberHint_guess);
                 slot.modelDtgt =
-                    detail::motionPropGetString(model, TJS_W("dtgt"));
+                    detail::motionPropGetString(
+                        model, TJS_W("dtgt"), 0,
+                        &detail::nodeFrameDtgtMemberHint_guess);
             }
 
             if((mask & 0x100000u) != 0) {
-                const tTJSVariant particle =
-                    detail::motionPropGet(content, TJS_W("prt"));
+                ncbPropAccessor particleObject{
+                    detail::motionPropGet(
+                        content, TJS_W("prt"), 0,
+                        &detail::nodeFramePrtMemberHint_guess)};
+                iTJSDispatch2 *const particle = particleObject.GetDispatch();
                 const int particleMask =
-                    detail::motionPropGetInt(particle, TJS_W("mask"));
+                    detail::motionPropGetInt(
+                        particle, TJS_W("mask"), 0,
+                        &detail::maskMemberHint_guess);
                 slot.prtTrigger = 0;
                 slot.prtFmin = 10.0;
                 slot.prtF = 10.0;
@@ -624,67 +704,125 @@ namespace motion::internal {
                 slot.prtRange = 0.0;
                 if((particleMask & 0x1) != 0) {
                     slot.prtTrigger =
-                        detail::motionPropGetInt(particle, TJS_W("trigger"));
+                        detail::motionPropGetInt(
+                            particle, TJS_W("trigger"), 0,
+                            &detail::nodeFrameTriggerMemberHint_guess);
                 }
                 if((particleMask & 0x2) != 0) {
                     slot.prtFmin =
-                        detail::motionPropGetDouble(particle, TJS_W("fmin"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("fmin"), 0,
+                            &detail::nodeFrameFminMemberHint_guess);
                     slot.prtF =
-                        detail::motionPropGetDouble(particle, TJS_W("fmax"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("fmax"), 0,
+                            &detail::nodeFrameFmaxMemberHint_guess);
                 }
                 if((particleMask & 0x4) != 0) {
                     slot.prtVmin =
-                        detail::motionPropGetDouble(particle, TJS_W("vmin"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("vmin"), 0,
+                            &detail::nodeFrameVminMemberHint_guess);
                     slot.prtV =
-                        detail::motionPropGetDouble(particle, TJS_W("vmax"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("vmax"), 0,
+                            &detail::nodeFrameVmaxMemberHint_guess);
                 }
                 if((particleMask & 0x8) != 0) {
                     slot.prtAmin =
-                        detail::motionPropGetDouble(particle, TJS_W("amin"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("amin"), 0,
+                            &detail::nodeFrameAminMemberHint_guess);
                     slot.prtA =
-                        detail::motionPropGetDouble(particle, TJS_W("amax"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("amax"), 0,
+                            &detail::nodeFrameAmaxMemberHint_guess);
                 }
                 if((particleMask & 0x10) != 0) {
                     slot.prtZmin =
-                        detail::motionPropGetDouble(particle, TJS_W("zmin"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("zmin"), 0,
+                            &detail::nodeFrameZminMemberHint_guess);
                     slot.prtZ =
-                        detail::motionPropGetDouble(particle, TJS_W("zmax"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("zmax"), 0,
+                            &detail::nodeFrameZmaxMemberHint_guess);
                 }
                 if((particleMask & 0x20) != 0) {
                     slot.prtRange =
-                        detail::motionPropGetDouble(particle, TJS_W("range"));
+                        detail::motionPropGetDouble(
+                            particle, TJS_W("range"), 0,
+                            &detail::nodeFrameRangeMemberHint_guess);
                 }
             }
 
             if((mask & 0x200000u) != 0) {
-                const tTJSVariant camera =
-                    detail::motionPropGet(content, TJS_W("camera"));
+                ncbPropAccessor cameraObject{
+                    detail::motionPropGet(
+                        content, TJS_W("camera"), 0,
+                        &detail::nodeFrameCameraMemberHint_guess)};
+                iTJSDispatch2 *const camera = cameraObject.GetDispatch();
                 slot.cameraFov =
-                    detail::motionPropGetDouble(camera, TJS_W("fov"));
+                    detail::motionPropGetDouble(
+                        camera, TJS_W("fov"), 0,
+                        &detail::nodeFrameFovMemberHint_guess);
                 slot.cameraTarget =
-                    detail::motionPropGetString(camera, TJS_W("target"));
+                    detail::motionPropGetString(
+                        camera, TJS_W("target"), 0,
+                        &detail::nodeFrameTargetMemberHint_guess);
             }
             if((mask & 0x800000u) != 0) {
-                const tTJSVariant anchor =
-                    detail::motionPropGet(content, TJS_W("anchor"));
+                ncbPropAccessor anchorObject{
+                    detail::motionPropGet(
+                        content, TJS_W("anchor"), 0,
+                        &detail::nodeFrameAnchorMemberHint_guess)};
+                iTJSDispatch2 *const anchor = anchorObject.GetDispatch();
                 slot.anchorTarget =
-                    detail::motionPropGetString(anchor, TJS_W("target"));
+                    detail::motionPropGetString(
+                        anchor, TJS_W("target"), 0,
+                        &detail::nodeFrameTargetMemberHint_guess);
             }
             if((mask & 0x08000000u) != 0) {
-                const tTJSVariant feedback =
-                    detail::motionPropGet(content, TJS_W("feedback"));
+                ncbPropAccessor feedbackObject{
+                    detail::motionPropGet(
+                        content, TJS_W("feedback"), 0,
+                        &detail::nodeFrameFeedbackMemberHint_guess)};
+                iTJSDispatch2 *const feedback =
+                    feedbackObject.GetDispatch();
                 slot.feedbackTimespan =
-                    detail::motionPropGetDouble(feedback, TJS_W("timespan"));
+                    detail::motionPropGetDouble(
+                        feedback, TJS_W("timespan"), 0,
+                        &detail::nodeFrameTimespanMemberHint_guess);
             }
 
-            // Local evaluator compatibility: Android reads node+84 directly;
-            // do not re-read a decoded layer dictionary.
-            slot.hasTransformOrder = true;
-            std::copy(node.transformOrder, node.transformOrder + 4,
-                      slot.transformOrder);
+    }
+
+    namespace {
+
+        int signedIndexFromBits32_guess(std::uint32_t bits) noexcept {
+            static_assert(sizeof(int) == sizeof(std::uint32_t),
+                          "motion timeline indices require a 32-bit int");
+            std::int32_t signedBits = 0;
+            std::memcpy(&signedBits, &bits, sizeof(signedBits));
+            return static_cast<int>(signedBits);
         }
 
-        int initialFrameIndexForTimeLike_0x6B64AC(
+        int subtractTwoWrapping32_guess(int value) noexcept {
+            return signedIndexFromBits32_guess(
+                static_cast<std::uint32_t>(value) - UINT32_C(2));
+        }
+
+        int incrementWrapping32_guess(int value) noexcept {
+            return signedIndexFromBits32_guess(
+                static_cast<std::uint32_t>(value) + UINT32_C(1));
+        }
+
+        int decrementWrapping32_guess(int value) noexcept {
+            return signedIndexFromBits32_guess(
+                static_cast<std::uint32_t>(value) - UINT32_C(1));
+        }
+
+        int initialNodeFrameIndexForTime_guess(
             const tTJSVariant &frames,
             double currentTime) {
             const int count = detail::motionPropGetCount(frames);
@@ -710,71 +848,19 @@ namespace motion::internal {
                     }
                 }
             }
-            return selected <= count - 2 ? selected : count - 2;
+            const int upper = subtractTwoWrapping32_guess(count);
+            return selected <= upper ? selected : upper;
         }
 
-        double frameSelectionTimeLike_0x6B7E44(
+        double nodeFrameSelectionTime_guess(
             const detail::MotionNode &node,
             double currentTime) {
-            // sub_6B64AC/sub_6B7E44 read node+8->value when the node is
-            // parameterized; otherwise they use the Player timeline time.
+            // Parameterized nodes select by their bound parameter value;
+            // ordinary nodes select by the Player timeline time.
             if(node.parameterEntry != nullptr) {
                 return node.parameterEntry->value;
             }
             return currentTime;
-        }
-
-        bool initializeNodeTimelineSlotsLike_0x6B64AC(
-            detail::MotionNode &node,
-            double currentTime,
-            std::vector<detail::MotionEvent> *pendingEvents = nullptr) {
-            if(!rawDispatchObject(node.frameListVariant)) {
-                return false;
-            }
-
-            const double selectionTime =
-                frameSelectionTimeLike_0x6B7E44(node, currentTime);
-            const int activeIndex = initialFrameIndexForTimeLike_0x6B64AC(
-                node.frameListVariant, selectionTime);
-            node.activeSlotIndex = 0;
-            parseFrameLike_0x6926B4(
-                node.slots[0], node.frameListVariant, activeIndex);
-            mergeFrameContentLike_0x692AB0(
-                node, node.slots[0], node.frameListVariant);
-            parseFrameLike_0x6926B4(
-                node.slots[1], node.frameListVariant, activeIndex + 1);
-            mergeFrameContentLike_0x692AB0(
-                node, node.slots[1], node.frameListVariant);
-            node.flags |= 0x01;
-
-            // 砖5/洞2 (initNodeTimeline tail): Aligned with libkrkr2.so
-            // Player_initNodeTimeline tail @0x6B674C. After parsing slot[0]
-            // (node+320) and slot[1], the binary fires a per-node onAction when the
-            // seed landed EXACTLY on slot[0]'s frame AND that frame carries an
-            // action:
-            //   if ( v8 == *(double*)(node+328)            // slot[0].time
-            //        && (*(_BYTE*)(node+342) & 4) != 0 )   // slot[0].mask & 0x40000
-            //     Player_pushActionEvent_guess(player, &node_label, node+608);
-            // where v8 = frameSelectionTimeLike_0x6B7E44(node) (the seed target,
-            // node+8 ? *(node+8)+40 : player+456), node+328 = slot[0]+8 = time
-            // (= ClipSlot.clipStartTime), the (node+342 & 4) byte = slot[0].mask
-            // & 0x40000 (parseFrame @0x6928EC sets slot+288='act' ONLY under that
-            // bit), and node+608 = slot[0]+288 = the action variant. The pushed
-            // event is {type=0(ACTION), param1=node label, param2=action} (same
-            // contract as Player_pushActionEvent_guess @0x6B63C0 -> onAction). The
-            // The binary tests the 0x40000 mask bit itself; actionValue is the
-            // independent slot+288 ttstr copied into the queued variant.
-            if(pendingEvents) {
-                const detail::MotionNode::ClipSlot &slot0 = node.slots[0];
-                if(selectionTime == slot0.clipStartTime &&
-                   (slot0.contentMask & 0x40000) != 0) {
-                    detail::MotionEvent event;
-                    event.param1 = tTJSVariant(node.layerName);
-                    event.param2 = tTJSVariant(slot0.actionValue);
-                    pendingEvents->push_back(event);
-                }
-            }
-            return true;
         }
 
         TimelineTraceState traceStateFromNodeSlots(
@@ -783,11 +869,12 @@ namespace motion::internal {
             const auto &active = node.activeSlot();
             const auto &other = node.otherSlot();
             TimelineTraceState state =
-                traceStateFromClipSlot(active, !active.done, active.frameType);
+                traceStateFromClipSlot(active, !active.done);
             state.debugEvaluated = active.frameIndex >= 0;
             state.debugActiveIndex = active.frameIndex;
             state.debugFrameATime = active.clipStartTime;
-            state.debugFrameAType = active.frameType;
+            state.debugFrameAType =
+                active.done ? 0 : (active.crossfading ? 3 : 2);
             state.debugFrameAInvisible = active.done;
             state.debugFrameAOpacity =
                 static_cast<double>(active.opacity) / 255.0;
@@ -797,7 +884,8 @@ namespace motion::internal {
             if(other.frameIndex >= 0) {
                 state.debugNextIndex = other.frameIndex;
                 state.debugFrameBTime = other.clipStartTime;
-                state.debugFrameBType = other.frameType;
+                state.debugFrameBType =
+                    other.done ? 0 : (other.crossfading ? 3 : 2);
                 state.debugFrameBInvisible = other.done;
                 state.debugFrameBOpacity =
                     static_cast<double>(other.opacity) / 255.0;
@@ -820,77 +908,40 @@ namespace motion::internal {
         }
     }
 
-    // The shared per-node seek primitive behind THREE binary functions that all
-    // run an identical forward / corrective-backward seek over node.slots[0/1]
-    // and an identical state-establish tail, differing only in WHICH direction
-    // loops run and whether per-node onAction fires:
-    //   • Player_advanceNodeFrames  @0x6B7E44 (parameterized): forward + corrective
-    //       backward, NO events  → doForward=true,  doBackward=true,  events=null
-    //   • forward inline seek       @0x6B73DC (advanceRootAndNodes, non-param):
-    //       forward only, WITH events → doForward=true, doBackward=false
-    //   • backward inline seek      @0x6BA1CC (rewindRootAndNodes, non-param):
-    //       backward only, WITH events → doForward=false, doBackward=true
-    // The forward/backward loops below are gated by doForward/doBackward so each
-    // binary variant gets exactly its loop set; the frames-empty handling, the
-    // init seed, and the tail are shared (byte-identical across all three).
-    // (doBackward off for the forward inline is the binary's reality — 0x6B73DC
-    // has NO corrective-backward; its loop-wrap repositioning is done earlier by
-    // Player_reseekTimelineCursors' node re-seed @0x6B91B0, ported as
-    // reseekNodeTimelineSlotsLike_0x6B91B0. Empirically the backward loop never
-    // fires for the logo cases, so the split is logo-identical.)
-    MOTIONPLAYER_NOINLINE void
-    advanceNodeFrameSelectionLike_0x6926B4(
+    // Shared two-slot seek primitive retained for the independently callable
+    // parameterized-node helper. Ordinary nodes have different owner, live-time,
+    // action and dirty-commit boundaries and are kept in the two native-shaped
+    // incremental loops below instead of passing through this abstraction.
+    MOTIONPLAYER_NOINLINE bool
+    seekNodeFrameSelection_guess(
         detail::MotionNode &node, double currentTime,
-        std::vector<detail::MotionEvent> *pendingEvents,
+        Player *eventOwner,
         bool doForward, bool doBackward) {
-        // 砖5/洞2: fire a per-node onAction(label, action) for each crossed
-        // action frame (slot mask bit 0x40000 / content["act"], stored in
-        // ClipSlot.actionValue). Aligned to sub_6B638C (0x6B638C) push
-        // in Player_advanceRootAndNodes (0x6B6ADC, push @0x6B74E4, fires the
-        // CROSSED `other` slot) and Player_rewindRootAndNodes (0x6B9A3C, push
-        // @0x6BA26C, fires the just-entered prev slot).
-        //
-        // param1 = *(node+0). VERIFIED via Player_initNodeFields (0x6B3C78):
-        // node+0 is seeded at 0x6B3DF4 with the refcounted ttstr pointer of the
-        // PropGetString("label") result (sub_529524 @0x6B3DC8). The inline push
-        // constructs a String tTJSVariant from that same pointer (advance 0x6B74BC:
-        // `LDR X8,[X20]; STUR X8,[var_70]` then AddRef) copies exactly that
-        // label variant as record.a. node.layerName is this same PSB "label"
-        // (NodeTree.cpp:108). So param1 = node.layerName is the faithful port.
-        // NOTE: param1 is NOT the layer dispatch object (node.tjsLayerObject /
-        // *(node+0)+16); that misreading would diverge from the binary.
-        // param2 = slot+288 (advance push arg `node+0x120`) = actionValue.
+        // Each crossed action frame queues onAction(label, action). The first
+        // argument is the node's raw PSB label, not its layer dispatch object;
+        // the second is the action string owned by the crossed clip slot.
         const auto fireNodeAction =
             [&](const detail::MotionNode::ClipSlot &slot) {
-            if(pendingEvents && (slot.contentMask & 0x40000) != 0) {
-                detail::MotionEvent event;
-                event.param1 = tTJSVariant(node.layerName);
-                event.param2 = tTJSVariant(slot.actionValue);
-                pendingEvents->push_back(event);
+            if(eventOwner && (slot.contentMask & 0x40000) != 0) {
+                eventOwner->enqueueActionEvent_guess(
+                    tTJSVariant(node.layerName), slot.actionValue);
             }
         };
-
-        if(!rawDispatchObject(node.frameListVariant)) {
-            node.activeSlot().done = true;
-            node.activeSlot().crossfading = false;
-            node.otherSlot().done = true;
-            return;
-        }
 
         const int frameCount =
             detail::motionPropGetCount(node.frameListVariant);
         const double selectionTime =
-            frameSelectionTimeLike_0x6B7E44(node, currentTime);
+            nodeFrameSelectionTime_guess(node, currentTime);
         bool seeked = false;
         const int lastForwardFrameIndex = frameCount - 2;
         while(doForward &&
               node.activeSlot().frameIndex < lastForwardFrameIndex &&
               selectionTime >= node.otherSlot().clipStartTime) {
-            // 0x6B6ADC: fire the crossed frame (`other`) before the swap.
+            // Forward traversal fires the crossed `other` slot before swapping.
             fireNodeAction(node.otherSlot());
             node.activeSlotIndex ^= 1;
             const int nextIndex = node.activeSlot().frameIndex + 1;
-            parseFrameLike_0x6926B4(
+            parseNodeFrame_guess(
                 node.otherSlot(), node.frameListVariant, nextIndex);
             seeked = true;
             node.flags |= 0x01;
@@ -900,142 +951,178 @@ namespace motion::internal {
               selectionTime < node.activeSlot().clipStartTime) {
             const int previousIndex = node.activeSlot().frameIndex - 1;
             node.activeSlotIndex ^= 1;
-            parseFrameLike_0x6926B4(
+            parseNodeFrame_guess(
                 node.activeSlot(), node.frameListVariant, previousIndex);
-            // 0x6B9A3C: rewind fires the just-entered (previous) frame.
+            // Reverse traversal fires the just-entered previous slot.
             fireNodeAction(node.activeSlot());
             seeked = true;
             node.flags |= 0x01;
         }
 
-        // 0x6B7FC0/0x6B7FD4 and the two inline siblings merge only slots
-        // invalidated by parseFrame. A tick that crosses no frame performs no
-        // merge work at all.
+        // All three native paths merge only slots invalidated by parsing. A tick
+        // that crosses no frame performs no merge work.
         if(seeked) {
             if(!node.slots[0].merged) {
-                mergeFrameContentLike_0x692AB0(
-                    node, node.slots[0], node.frameListVariant);
+                mergeNodeFrameContent_guess(
+                    node.slots[0], node.nodeType, node.frameListVariant);
             }
             if(!node.slots[1].merged) {
-                mergeFrameContentLike_0x692AB0(
-                    node, node.slots[1], node.frameListVariant);
+                mergeNodeFrameContent_guess(
+                    node.slots[1], node.nodeType, node.frameListVariant);
             }
         }
 
         if(node.activeSlot().frameIndex < 0) {
+            return seeked;
+        }
+        // Do not synthesize dirty state from a port-local payload cache here.
+        // Native code sets the node dirty bit only in iterations that actually
+        // cross a frame; updateLayers clears it after consumption. Unconditional
+        // dirtying prevents static child Players from settling and can repeatedly
+        // replay a zero-delta child motion.
+        return seeked;
+    }
+
+    // Parse one raw frame-list entry into a clip slot without merging the
+    // referenced content payload. The retained source accessor outlives the
+    // indexed getter, and the indexed result directly backs the frame
+    // accessor. Nonzero frames add a content accessor; normal teardown is
+    // content, frame, then frame-list root.
+    void parseNodeFrame_guess(
+        detail::MotionNode::ClipSlot &slot,
+        const tTJSVariant &frameList,
+        int frameIndex) {
+        resetClipSlot_guess(slot);
+        slot.frameIndex = frameIndex;
+
+        ncbPropAccessor frameListObject{tTJSVariant(frameList)};
+        ncbPropAccessor frameObject{frameListObject.GetValue(
+            frameIndex, ncbTypedefs::Tag<tTJSVariant>(), 0)};
+        slot.clipStartTime = frameObject.GetValue(
+            TJS_W("time"), ncbTypedefs::Tag<tjs_real>(), 0,
+            &detail::timeMemberHint_guess);
+        const tjs_int type = frameObject.GetValue(
+            TJS_W("type"), ncbTypedefs::Tag<tjs_int>(), 0,
+            &detail::typeMemberHint_guess);
+        if(type == 0) {
+            slot.done = true;
             return;
         }
-        node.currentFrameType = node.activeSlot().frameType;
-        // NOTE (2026-06-21): the port previously called
-        // markNodePayloadDirtyFromState(node, state) here — an INVENTED node+44
-        // (node.flags bit0x01) dirtying channel that ran UNCONDITIONALLY at the
-        // tail of the seek primitive (outside the forward/backward seek loops),
-        // setting node.flags=1 whenever the active payload differed from a
-        // port-local lastActive* cache. libkrkr2.so has NO such channel: node+44
-        // is set 1 ONLY inside the actual cross-frame seek iteration bodies, each
-        // guarded by an "did this frame actually step a frame" flag
-        // (Player_advanceNodeFrames 0x6B7FBC via `else if((v9&1)==0) goto LABEL_25`;
-        // Player_advanceRootAndNodes inline seek 0x6B72C0 via `if((v47&1)==0) goto
-        // LABEL_98`; Player_rewindRootAndNodes 0x6BA28C same pattern). A node that
-        // does NOT cross a frame this tick leaves node+44 at the 0 written by
-        // Player_updateLayers' unconditional post-loop clear (0x6BBD2C). The
-        // invented unconditional channel kept static type-3 child-Player nodes'
-        // node+44 (and hence Player_evaluateTimeline's `internalDirty = a2 ||
-        // node+44` at 0x699B1C → accumulated.dirty at node+1504) pinned at 1 every
-        // frame, so they never settled → childMotionPass (0x6BE0C0) never took the
-        // skip gate → the child motion was re-played every frame with _deltaTime=0
-        // → the child Player's time never advanced → the type-3 subtree never
-        // reached 'done'/destroy → unbounded recursion (DRACU title: 28000 nodes /
-        // 1.9GB / blank). Removed to match the binary: node+44 settles via the
-        // post-loop clear when no seek iteration runs this tick.
+
+        slot.done = false;
+        if(type == 2) {
+            slot.crossfading = false;
+        } else if(type == 3) {
+            slot.crossfading = true;
+        }
+
+        ncbPropAccessor contentObject{frameObject.GetValue(
+            TJS_W("content"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::contentMemberHint_guess)};
+        slot.contentMask = contentObject.GetValue(
+            TJS_W("mask"), ncbTypedefs::Tag<tjs_int>(), 0,
+            &detail::maskMemberHint_guess);
+        if((slot.contentMask & 0x40000) != 0) {
+            slot.actionValue = contentObject.GetValue(
+                TJS_W("act"), ncbTypedefs::Tag<ttstr>(), 0,
+                &detail::actMemberHint_guess);
+        }
     }
 
-    // ==================================================================
-    // Player_advanceNodeFrames @ 0x6B7E44  (P7 convergence step 1 of 3)
-    // ------------------------------------------------------------------
-    // The binary's per-node 2-slot ping-pong frame seek for PARAMETERIZED
-    // nodes (the caller branch `if (*(node+8)) advanceNodeFrames(node,player)`
-    // at Player_advanceRootAndNodes 0x6B73B4/0x6B73D4, LABEL_104). It forward-
-    // seeks (with corrective backward seek) the node's active parsed-frame slot
-    // toward the node's CHILD eval time, then merges both slots + gated
-    // findSource.
-    //
-    // D-A1 RESOLUTION (decompiled, NOT trusted from stale comments):
-    //   The binary reads the seek target at 0x6B7E90 as
-    //       v6 = *(double *)(*(node+8) + 40)
-    //   node+8 is seeded by Player_initNodeFields (0x6B3EA0): when the PSB
-    //   "parameterize" value has variant type 4 (integer), node+8 =
-    //   player_paramTable[idx] (56-byte stride entry, 0x6B3E90/0x6B3EA0);
-    //   otherwise node+8 = 0. So node+8 is a *parameter-table entry*, NOT a
-    //   child Player. Offset +40 of that 56-byte entry is the interpolated
-    //   parameter VALUE: sub_6B1718 (the param-entry builder) writes the
-    //   entry's fields at base..base+48 and stores the eased value at
-    //   `*(double*)(v6-16)` = entry+40 (0x6B19E4). Cross-checked against
-    //   Player_initNodeTimeline (0x6B64AC, 0x6B6500):
-    //       v7 = (*(node+8)) ? (double*)(*(node+8)+40) : (double*)(player+456)
-    //   i.e. parameterized -> entry+40 value, else player+456 (clampedEvalTime).
-    //   The live MotionParameterEntry maps entry+40 -> ::value (RuntimeSupport.h
-    //   builds the 56-byte entry with `value` as the eased field). Therefore
-    //   *(node+8)+40 == node.parameterEntry->value == exactly what
-    //   frameSelectionTimeLike_0x6B7E44 returns for a parameterized node
-    //   (PlayerUpdateLayerEval.cpp). CONFIRMED EQUAL: child+40 == the live
-    //   parameterEntry->value. No behavior change for parameterized nodes.
-    //
-    // FAITHFUL BODY = the shared seek + state-establish tail, events suppressed.
-    // ------------------------------------------------------------------
-    // 0x6B7E44 and the NON-parameterized inline sibling path inside
-    // Player_advanceRootAndNodes (0x6B73B0, LABEL_88 @0x6B72BC..0x6B7338) execute
-    // the SAME source-level node-frame-advance: identical forward seek
-    // (0x6B7F14 / break `cur.fi >= count-2 || target < other.time`), identical
-    // corrective backward seek, and a field-for-field identical tail —
-    // `node+44 = 1` (content-established) → 2× gated Player_mergeFrameContent
-    // (node+346/+882) → gated Motion_Player_findSource(node+200, player,
-    // activeSlot+356/src, +348/icon) which writes the active slot's
-    // done(node+200 +0) / src(texture, +24). The ONLY binary difference: the
-    // parameterized path (0x6B7E44) fires NO per-node onAction events; the
-    // inline path pushes them in its seek loop (slot mask 0x40000). Verified by
-    // decompile (0x6B7E44 full body + 0x6B72BC..0x6B7338 disasm) 2026-06-05.
-    //
-    // The live faithful reproduction of that shared seek+tail is
-    // advanceNodeFrameSelectionLike_0x6926B4 (proven correct: logo 93/243).
-    // So the faithful 0x6B7E44 = that shared helper with pendingEvents = nullptr.
-    //
-    // The earlier decoded parser needed invented non-negative guards because it
-    // reset out-of-range frames to a synthetic invisible slot. That premise was
-    // removed with the raw frameList parser: this shared loop now keeps the
-    // binary's unguarded `other.fi+1` / `cur.fi-1` PropGetByNum calls and relies
-    // on the same timeline-data invariant as 0x6B7E44.
-    // ------------------------------------------------------------------
+    // Absolute initializer shared by full reseek and dirty emoteEdit rebuilds.
+    // Its Player-first signature and complete tail match the independently
+    // callable helper present in all four reference binaries.
     MOTIONPLAYER_NOINLINE void
-    advanceNodeFramesLike_0x6B7E44(detail::MotionNode &node, double currentTime) {
-        // 0x6B7E90 seek target = *(node+8)+40 = parameterEntry->value. The shared
-        // helper recomputes the selection time internally via
-        // frameSelectionTimeLike_0x6B7E44. Player_initNodeFields @0x6B3EA0
-        // guarantees parameterEntry is non-null exactly for integer
-        // `parameterize`, so this matches the binary node+8 split directly.
-        // pendingEvents = nullptr: the parameterized path fires no onAction.
-        advanceNodeFrameSelectionLike_0x6926B4(node, currentTime, nullptr);
+    initializeNodeTimelineSlots_guess(Player &player,
+                                      detail::MotionNode &node) {
+        const double selectionTime =
+            nodeFrameSelectionTime_guess(node, player._clampedEvalTime);
+        // Native retains the frame-list dispatch before dynamic count and
+        // keeps that owner through scan, slot rebuild, source refresh and the
+        // exact-frame action tail. Parse/merge still re-read the persistent
+        // node field, so a re-entrant clear remains observable there.
+        const tTJSVariant frameListOwner = node.frameListVariant;
+        const int activeIndex = initialNodeFrameIndexForTime_guess(
+            frameListOwner, selectionTime);
+        parseNodeFrame_guess(
+            node.slots[0], node.frameListVariant, activeIndex);
+        mergeNodeFrameContent_guess(
+            node.slots[0], node.nodeType, node.frameListVariant);
+        parseNodeFrame_guess(
+            node.slots[1], node.frameListVariant, activeIndex + 1);
+        mergeNodeFrameContent_guess(
+            node.slots[1], node.nodeType, node.frameListVariant);
+        // Both slot rebuilds publish before the active/dirty commits. A parser
+        // or merger exception therefore preserves the prior cursor and flags.
+        node.activeSlotIndex = 0;
+        node.flags |= 0x01;
+
+        const int sourceMask = player._preview ? 6153 : 6145;
+        if(node.forceVisible != 0 ||
+           ((1 << node.nodeType) & sourceMask) != 0) {
+            player.findSourceForNode_guess(node);
+        }
+
+        // The action test follows source lookup and observes only slot 0.
+        if(selectionTime == node.slots[0].clipStartTime &&
+           (node.slots[0].contentMask & 0x40000) != 0) {
+            player.enqueueActionEvent_guess(
+                tTJSVariant(node.layerName), node.slots[0].actionValue);
+        }
     }
 
-    // M1/P7 step-1: read-only slot consumer for the updateLayers pass.
-    // After progressSeekNodeSlotsLike_0x6C106C has positioned node.slots[0/1],
-    // updateLayers reads them here — no seek. Mirrors the read half of the old
-    // inline seek: uses the same per-node selection time
-    // (frameSelectionTimeLike_0x6B7E44) so the debug interpolation ratio matches.
-    // Aligned to libkrkr2.so: Player_updateLayers (0x6BB33C) feeds the slots to
-    // Player_evaluateTimeline (0x699AE4) without cursor-stepping.
+    // Shared two-slot ping-pong seek for parameterized nodes. The node's
+    // parameter pointer refers to a parameter-table entry, not a child Player;
+    // its eased value is therefore the seek target. The native path performs a
+    // forward pass plus corrective backward pass, merges invalidated slots and
+    // emits no per-node onAction events. Raw frame indices intentionally rely on
+    // the same timeline-data invariant as the native PropGetByNum calls.
+    MOTIONPLAYER_NOINLINE void
+    seekParameterizedNodeFrames_guess(detail::MotionNode &node,
+                                      Player &player) {
+        // The shared helper reads parameterEntry->value as its selection time.
+        // A null event owner preserves the native parameterized-path behavior.
+        const bool seeked = seekNodeFrameSelection_guess(
+            node, 0.0, nullptr);
+        if(!seeked) {
+            return;
+        }
+
+        const int mask = player._preview ? 6153 : 6145;
+        if(node.forceVisible != 0 ||
+           ((1 << node.nodeType) & mask) != 0) {
+            player.findSourceForNode_guess(node);
+        }
+    }
+
+    // Diagnostic-only projection of the slots already positioned by progress.
+    // It uses the production selection-time rule so trace interpolation labels
+    // match the evaluator, but it is not a recovered native helper and must
+    // never run when the Web trace sidecar is disabled.
     MOTIONPLAYER_NOINLINE TimelineTraceState
     readNodeFrameSlotsForTrace(detail::MotionNode &node,
                                double currentTime) {
         const double selectionTime =
-            frameSelectionTimeLike_0x6B7E44(node, currentTime);
+            nodeFrameSelectionTime_guess(node, currentTime);
         return traceStateFromNodeSlots(node, selectionTime);
     }
 
+    std::uint32_t doubleToUnsignedIntTowardZeroSaturated_guess(
+        double value) {
+        constexpr double kTwoToThe32 = 4294967296.0;
+        if(std::isnan(value) || value <= 0.0) {
+            return 0;
+        }
+        if(value >= kTwoToThe32) {
+            return std::numeric_limits<std::uint32_t>::max();
+        }
+        return static_cast<std::uint32_t>(value);
+    }
+
     MOTIONPLAYER_NOINLINE bool
-    evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
-                                  bool dirtyArg,
-                                  double currentTime) {
+    evaluateTimeline_guess(detail::MotionNode &node,
+                           double currentTime,
+                           bool dirtyArg) {
         const bool dirty = dirtyArg || node.flags != 0;
         auto &active = node.activeSlot();
         auto &other = node.otherSlot();
@@ -1048,12 +1135,13 @@ namespace motion::internal {
             if(!dirty) {
                 return false;
             }
-            copyActiveTimelinePayloadLike_0x699B6C(node);
-            // type-4 COPY branch (@0x699c2c): node+2224..2288 <- slot+744..808.
+            copyActiveTimelinePayload_guess(node);
+            // Type 4 additionally publishes the active slot's particle block
+            // into the node-level interpolation output.
             if(node.nodeType == 4) {
-                writeParticleInterpCopyLike_0x699c2c(node);
+                copyParticleInterpolationPayload_guess(node);
             }
-            writeTypeSpecificCopyLike_0x699C2C(node);
+            writeTimelineTypeSpecificCopy_guess(node);
             return true;
         }
 
@@ -1063,274 +1151,254 @@ namespace motion::internal {
 
         double elapsed = currentTime - active.clipStartTime;
         if(active.ti != 0) {
-            elapsed = static_cast<double>(active.ti) *
-                static_cast<std::uint32_t>(
+            const std::uint32_t stepCount =
+                doubleToUnsignedIntTowardZeroSaturated_guess(
                     elapsed / static_cast<double>(active.ti));
+            // All four references multiply in a 32-bit W/core register before
+            // converting the wrapped unsigned product back to double.
+            const std::uint32_t quantizedElapsed = active.ti * stepCount;
+            elapsed = static_cast<double>(quantizedElapsed);
         }
         const double ratio = elapsed /
             (other.clipStartTime - active.clipStartTime);
         const double oldRatio = node.timelineEvalRatio;
 
-        if(std::fabs(ratio) < 1.0e-7) {
+        constexpr double kNearZeroRatio = 1.0e-7;
+        // All four Arm references branch to interpolation only on an ordered
+        // abs(ratio) >= threshold comparison. An unordered NaN therefore falls
+        // through to this active-copy branch; spelling the inverse as `<` would
+        // incorrectly send NaN to interpolation in portable C++.
+        const bool ratioAtOrBeyondNearZeroThreshold =
+            std::fabs(ratio) >= kNearZeroRatio;
+        if(!ratioAtOrBeyondNearZeroThreshold) {
             node.timelineEvalRatio = ratio;
-            if(!dirty && std::fabs(oldRatio - ratio) < 1.0e-7) {
+            const bool changedEnough =
+                std::fabs(oldRatio - ratio) >= kNearZeroRatio;
+            // The native ordered-GE result is ORed with dirty. For an unordered
+            // NaN difference the result is false, so a clean node returns after
+            // storing the new (possibly NaN) ratio and leaves payload untouched.
+            if(!dirty && !changedEnough) {
                 return false;
             }
-            copyActiveTimelinePayloadLike_0x699B6C(node);
+            copyActiveTimelinePayload_guess(node);
             if(node.nodeType == 4) {
-                writeParticleInterpCopyLike_0x699c2c(node);
+                copyParticleInterpolationPayload_guess(node);
             }
-            writeTypeSpecificCopyLike_0x699C2C(node);
+            writeTimelineTypeSpecificCopy_guess(node);
             return true;
         }
 
-        if(!dirty &&
-           std::fabs(oldRatio - ratio) < std::numeric_limits<double>::epsilon()) {
+        const bool changedEnough =
+            std::fabs(oldRatio - ratio) >=
+            std::numeric_limits<double>::epsilon();
+        // This is likewise an ordered-GE gate. An unordered difference on the
+        // normal-ratio side returns without writing ratio or payload.
+        if(!dirty && !changedEnough) {
             return false;
         }
         node.timelineEvalRatio = ratio;
-        interpolateTimelinePayloadLike_0x699D80(node, ratio);
-        interpolateMeshPayloadLike_0x69A058(node, ratio);
-        // type-4 particle eval mirror (binary nodeType==4 switch case). When
-        // the ratio is non-zero this is the crossfade INTERP branch @0x69a0f8.
-        if(node.nodeType == 4) {
-            writeParticleInterpLerpLike_0x69a0f8(node, ratio);
-        }
-        writeTypeSpecificLerpLike_0x69A0F8(node, ratio);
+        interpolateTimelinePayload_guess(node, ratio);
         return true;
     }
 }
 
 namespace motion {
-    // M1/P7 step-1: progress-pass per-node frame seek (cursor stepping).
-    //
-    // Aligned to libkrkr2.so Player_progress_inner (0x6C106C). In the binary the
-    // progress core walks the node-deque (player+200, 2632B stride) and, for
-    // each node whose child-timeline pointer node+8 is non-null, calls
-    // Player_advanceNodeFrames (0x6B7E44) at 0x6C1264 / 0x6C130C; the inline
-    // loop bodies start at deque index 1 (`for(j=1; ...; ++j)`), i.e. the root
-    // node (index 0) is NOT seeked here (it is reseeded by
-    // Player_advanceRootAndNodes / the root-content snapshot path). The seek
-    // FILLS each node's two parsed-frame slots (node+320 / node+856) that the
-    // SEPARATE Player_updateLayers pass (0x6BB33C) then reads via
-    // Player_evaluateTimeline (0x699AE4) at 0x6BB5F0.
-    //
-    // The live MotionNode::ClipSlot slots[2] ARE the binary's node+320/+856
-    // slots, and advanceNodeFrameSelectionLike_0x6926B4 already seeks them using
-    // the same per-node selection time (frameSelectionTimeLike_0x6B7E44 picks
-    // node.parameterEntry->value for parameterized nodes, else clampedEvalTime =
-    // player+456). So this driver is a faithful hoist: it runs the existing live
-    // seek in the progress pass (before updateLayers), restoring the binary's
-    // two-pass data flow with NO second slot copy.
-    //
-    // Both incremental directions and the absolute reseed are live:
-    //   • forward: Player_advanceRootAndNodes @0x6B6ADC -> inline @0x6B73DC;
-    //   • reverse: Player_rewindRootAndNodes @0x6B9A3C -> inline @0x6BA1CC;
-    //   • first-frame/loop-wrap: Player_reseekTimelineCursors @0x6B86C8 ->
-    //     Player_initNodeTimeline @0x6B64AC for every non-root node.
-    // The incremental helpers therefore consume already-seeded slots exactly as
-    // the binary does; there is deliberately no port-local lazy initialization.
-    void Player::progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime,
-                                                    bool forward) {
-        auto &nodes = _nodes;
-        if (nodes.empty()) {
-            return;
-        }
-        // Player_progress_inner node-deque loop starts at index 1 (0x6C1288:
-        // `for(j=1; ...)`). Root node (index 0) takes the root-stream path, not
-        // the per-node advanceNodeFrames seek.
-        //
-        // UPPER BOUND = `i < nodes.size()` — DO NOT change to `i+1 < size()`,
-        // and do NOT add a "sentinel" element to _nodes.
-        // The binary exit is `dequeSize - 1 <= idx` (0x6C12D8 / disasm 0x6B7390
-        // SUB X9,X9,#1 / 0x6B7398 B.LS). That `-1` is NOT a source-level
-        // `size()-1` and there is NO trailing sentinel element. The node deque
-        // holds exactly realNodeCount elements (root + N children); ctor
-        // @0x6CED30 pushes 1 (root), buildNodeTree_recursive @0x6B4A6C pushes
-        // each child — no extra push anywhere. The `-1` cancels a `+1` BIAS that
-        // libstdc++ std::deque::size() emits when element>512B → 1-elem/block:
-        // the binary computes size via `(start.last-start.cur)/T`, which for
-        // 1-elem blocks == `size()+1` (magic 248037625 = 329⁻¹ mod 2³², 329 =
-        // 2632/8). So `dequeSize - 1 == real size()`, and the source author
-        // almost certainly wrote `i < _nodes.size()` — the local code IS the
-        // faithful source, not a mere equivalent. Cross-checked vs
-        // Player_buildNodeTree @0x6B51F0 (0x6B531C loop reads index 1..real-1,
-        // no past-the-end read). RUNTIME (2026-06-06): `i+1 < size()` regressed
-        // yuzulogo 468 mismatches (binary DOES seek the last real node);
-        // baseline `i < size()` is byte-exact. Evidence: ida-deep-analyzer
-        // project_node_deque_no_sentinel.md. The earlier "trailing sentinel /
-        // _nodes not 1:1" comment was a misread of the size() inlining and is
-        // corrected here.
-        for (size_t i = 1; i < nodes.size(); ++i) {
-            detail::MotionNode &node = nodes[i];
-            const auto sourceGate = [&]() {
-                const int mask = _preview ? 6153 : 6145;
-                return node.forceVisible != 0 ||
-                    (node.nodeType >= 0 && node.nodeType < 31 &&
-                     ((1 << node.nodeType) & mask) != 0);
-            };
-            const int priorActiveFrame = node.activeSlot().frameIndex;
-            const int priorOtherFrame = node.otherSlot().frameIndex;
-            // Player_advanceNodeFrames (0x6B7E44) seeks this node's two slots to
-            // the node's selection time. The live seek writes node.slots[0/1],
-            // node.activeSlotIndex and node.flags |= 1; Player_evaluateTimeline
-            // (0x699AE4) consumes those fields and its single node+56 ratio. Return value is only
-            // used for tracing in the collapsed model; here we discard it (the
-            // slots are the real output, mirroring the binary).
-            // 砖5/洞2: per-node onAction(label, action) on crossed action frames
-            // (slot mask bit 0x40000 -> ClipSlot.actionValue), matching the inline
-            // sub_6B638C push inside Player_advanceRootAndNodes (0x6B6ADC,
-            // LABEL_86 / push @0x6B74E4) and Player_rewindRootAndNodes (0x6B9A3C,
-            // LABEL_76 / push @0x6BA26C).
-            //
-            // node+8 GATING (0x6B73B0/0x6B73D4 advance, 0x6BA1A8/0x6BA1C4 rewind):
-            // both node loops branch
-            //     if (*(node+8)) { Player_advanceNodeFrames(node, player); continue; }
-            // i.e. PARAMETERIZED nodes (node+8 = parameterEntry != 0) take the
-            // child-advance path (Player_advanceNodeFrames 0x6B7E44), which seeks
-            // its two slots but contains NO action-mask check and NO
-            // pushActionEvent call — so parameterized nodes fire NO per-node
-            // onAction. Only NON-parameterized nodes (node+8 == 0) run the inline
-            // seek that pushes the event. node+8 == parameterEntry (MotionNode.h:71,
-            // node init 0x6B3EA0). Gate accordingly: parameterized -> no events.
-            //
-            // P7 convergence step 1: route the PARAMETERIZED branch through the
-            // dedicated faithful reproduction of Player_advanceNodeFrames
-            // (0x6B7E44) — the exact function the binary caller branches to at
-            // LABEL_104 (`if (*(node+8)) { Player_advanceNodeFrames(node,player);
-            // continue; }`). Non-parameterized nodes (node+8 == 0) keep the
-            // inline 2-slot seek (0x6B73D0..0x6B7338) modelled by
-            // advanceNodeFrameSelectionLike_0x6926B4, which fires the per-node
-            // onAction events the inline path pushes. This mirrors the binary's
-            // node+8 split precisely instead of conflating both into one helper
-            // gated only by the selection time.
-            if(node.parameterEntry != nullptr) {
-                // node+8 != 0 -> Player_advanceNodeFrames (0x6B7E44). NO events.
-                // Same forward+corrective-backward seek in both play directions.
-                advanceNodeFramesLike_0x6B7E44(node, clampedEvalTime);
-                if(sourceGate() &&
-                   (node.activeSlot().frameIndex != priorActiveFrame ||
-                    node.otherSlot().frameIndex != priorOtherFrame)) {
-                    findSourceForNode_guess(node);
-                }
-                continue;
-            }
-            // node+8 == 0 -> single-direction inline seek WITH events: forward
-            // inline (0x6B73DC, advanceRootAndNodes) for forward playback,
-            // backward inline (0x6BA1CC, rewindRootAndNodes) for reverse. The
-            // binary runs exactly one direction's loop here; the forward inline
-            // has NO corrective-backward (loop-wrap repositioning is done by
-            // reseekNodeTimelineSlotsLike_0x6B91B0 in reseekTimelineCursors).
-            if(forward) {
-                advanceNodeFrameForwardInlineSeekLike_0x6B73DC(
-                    node, clampedEvalTime, &_pendingEvents);
-            } else {
-                advanceNodeFrameBackwardInlineSeekLike_0x6BA1CC(
-                    node, clampedEvalTime, &_pendingEvents);
-            }
-            if(sourceGate() &&
-               (node.activeSlot().frameIndex != priorActiveFrame ||
-                node.otherSlot().frameIndex != priorOtherFrame)) {
-                findSourceForNode_guess(node);
-            }
-        }
-    }
-
-    // Player_reseekTimelineCursors node-deque re-seed loop @0x6B91B0 (STEP 4).
-    // ABSOLUTE two-slot re-seed of every non-root node to its target-bracketing
-    // frame, independent of the prior cursor:
-    //   for(m=1; m<dequeSize-1; ++m) Player_initNodeTimeline(player, node[m]);
-    // Player_initNodeTimeline (0x6B64AC) parses slot[0]=frame(v19) +
-    // slot[1]=frame(v19+1) (v19=min(scan(target),count-2)), merges both, sets
-    // activeSlotIndex(+1392)=0 and seeded(+44)=1; selection target per-node is
-    // (*(node+8)) ? *(node+8)+40 : player+456 — computed inside
-    // initializeNodeTimelineSlotsLike_0x6B64AC via frameSelectionTimeLike_0x6B7E44.
-    // This is what makes the loop-wrap path's subsequent FORWARD-ONLY inline seek
-    // sufficient (no corrective-backward needed). The binary breaks at
-    // m == dequeSize-1; this `-1` is a libstdc++ std::deque::size() inlining
-    // BIAS (element>512B → 1-elem/block → size computed as `size()+1`), NOT a
-    // trailing sentinel. The node deque holds exactly realNodeCount elements,
-    // so `dequeSize - 1 == real size()` and the proven node-walk range is
-    // `i < nodes.size()` (matches progressSeekNodeSlotsLike). UPPER BOUND
-    // verified vs fresh-decompile 0x6B9200 (`... - 1 <= m` -> break) — same
-    // size() inlining exit term as all node-walks; the `-1` cancels the +1 bias,
-    // NOT a sentinel or the last real node. (See progressSeekNodeSlotsLike_0x6C106C
-    // for the full mechanism; do NOT change to `i+1 < size()`, do NOT push a
-    // sentinel.)
-    // The 0x6B9234 pruneHM3 / 0x6B9650 aux-list tail is housekeeping (inert on
-    // node slots) and stays DEFERRED. (Only reached at loop-wrap, which the logo
-    // cases never hit — empirically reseekTimelineCursors is never called for
-    // m2logo.)
-    void Player::reseekNodeTimelineSlotsLike_0x6B91B0(double targetTime) {
-        auto &nodes = _nodes;
-        for (size_t i = 1; i < nodes.size(); ++i) {
-            detail::MotionNode &node = nodes[i];
-            // 砖5/洞2: Player_initNodeTimeline (0x6B64AC) fires a per-node onAction
-            // in its tail @0x6B674C when the re-seed lands exactly on an action
-            // frame; pass _pendingEvents so reseekTimelineCursors' node re-seed
-            // (the binary's @0x6B91B0 loop) reproduces those onAction pushes.
-            if(initializeNodeTimelineSlotsLike_0x6B64AC(
-                   node, targetTime, &_pendingEvents)) {
-                const int mask = _preview ? 6153 : 6145;
-                if(node.forceVisible != 0 ||
-                   (node.nodeType >= 0 && node.nodeType < 31 &&
-                    ((1 << node.nodeType) & mask) != 0)) {
-                    findSourceForNode_guess(node);
-                }
-            }
-        }
-    }
-
-    // 砖5/洞1: Player_preProgressDirtyNodes (0x6B6878) — progress_inner's first
-    // step (called at 0x6C10AC, before the firstFrame/cursor logic). For each
-    // node (deque idx >= 1) whose forceVisible (node+1996) != 0 and whose
-    // emoteEdit dispatch (node+1980) has "modified" set: clear the flag and rebuild
-    // the node's two timeline slots via initializeNodeTimelineSlotsLike_0x6B64AC
-    // (= Player_initNodeTimeline_guess 0x6B64AC at 0x6B6A1C).
-    //
-    // The raw emoteEdit variant is mutable TJS state; 0x6B6A08 clears modified
-    // with PropSet(TJS_MEMBERENSURE) before rebuilding the two slots.
-    void Player::preProgressDirtyNodesLike_0x6B6878() {
-        // UPPER BOUND = `i < _nodes.size()` — do NOT change to `i+1 < size()`,
-        // do NOT push a sentinel. Fresh-decompile 0x6B6920 (`... - 1 <= v2` ->
-        // return; v2 starts at 1) is the SAME libstdc++ std::deque::size()
-        // inlining BIAS as the other 3 node-walks (progress_inner 0x6C12D8 /
-        // advanceRootAndNodes 0x6B7398 / reseek 0x6B9200). The `-1` cancels the
-        // `+1` bias that size() emits for >512B 1-elem/block deques — there is NO
-        // trailing sentinel; dequeSize == realNodeCount. The walk covers all real
-        // nodes [1, realNodeCount-1] == `i < _nodes.size()`. (Full mechanism +
-        // runtime proof in progressSeekNodeSlotsLike_0x6C106C.)
+    // Extracted node phase of the native progress-pass cursor machine. The two
+    // four-stream functions inline this walk after their layer, root and variable
+    // phases. It starts at deque index 1: the root belongs to the root stream,
+    // while every non-root node fills its two live ClipSlots here for the later
+    // read-only updateLayers pass. Parameterized nodes select by their eased
+    // parameter value; ordinary nodes select by Player's live evaluation field.
+    // First-frame and loop-wrap paths seed the slots absolutely before entering
+    // this phase, so no port-local lazy initialization is needed.
+    void Player::seekNodeTimelineSlotsIncrementalPhase_guess(bool forward) {
+        // The half-open range is [1, nodes.size()). There is no trailing sentinel:
+        // the apparent subtraction in the Android deque size arithmetic cancels
+        // the one-element-per-block implementation bias. Thus the last real node
+        // must be included. The size expression is re-evaluated after every
+        // node because dynamic frame access and source lookup can re-enter.
         for (size_t i = 1; i < _nodes.size(); ++i) {
             detail::MotionNode &node = _nodes[i];
-            if (node.forceVisible == 0 ||
-                !rawDispatchObject(node.emoteEditVariant)) { // node+1996/+1980
+            const auto finishOrdinarySeek = [&]() {
+                // Native publishes the byte only after the complete crossing
+                // loop. It overwrites stale bits rather than ORing bit zero.
+                node.flags = 1;
+                if(!node.slots[0].merged) {
+                    mergeNodeFrameContent_guess(
+                        node.slots[0], node.nodeType,
+                        node.frameListVariant);
+                }
+                if(!node.slots[1].merged) {
+                    mergeNodeFrameContent_guess(
+                        node.slots[1], node.nodeType,
+                        node.frameListVariant);
+                }
+
+                const int mask = _preview ? 6153 : 6145;
+                // The four native tails feed nodeType directly to the target
+                // shift instruction; there is no source-level range guard.
+                if(node.forceVisible != 0 ||
+                   (((1 << node.nodeType) & mask) != 0)) {
+                    findSourceForNode_guess(node);
+                }
+            };
+            // The seek updates the live slots, active-slot index and dirty bit;
+            // those slots are the real output consumed by updateLayers. The
+            // parameter pointer is also the native branch discriminator:
+            // parameterized nodes use the event-free bidirectional helper, while
+            // ordinary nodes use the direction-specific inline phase and emit
+            // action events for crossed frames.
+            if(node.parameterEntry != nullptr) {
+                // Same forward-plus-corrective-backward seek in both directions;
+                // the parameterized path emits no action events.
+                seekParameterizedNodeFrames_guess(node, *this);
                 continue;
             }
-            // sub_6636D4(emoteEdit, "modified") — 0x6B69C0.
+
+            const auto fireNodeAction = [&](
+                const detail::MotionNode::ClipSlot &slot) {
+                if((slot.contentMask & 0x40000) != 0) {
+                    enqueueActionEvent_guess(
+                        tTJSVariant(node.layerName), slot.actionValue);
+                }
+            };
+
+            if(forward) {
+                // The active selector is snapshotted before CopyRef/count. The
+                // local owner is used only by count but remains alive through
+                // parse, action, merge and source refresh. Those later helpers
+                // deliberately re-read the persistent node field.
+                const int cursor = node.activeSlotIndex;
+                const tTJSVariant frameListOwner = node.frameListVariant;
+                const int count =
+                    detail::motionPropGetCount(frameListOwner);
+                const int limit = subtractTwoWrapping32_guess(count);
+                auto *active = &node.slots[cursor];
+                auto *other = &node.slots[(cursor & 1) == 0];
+                bool seeked = false;
+
+                while(active->frameIndex < limit) {
+                    // Ordered less-than break: NaN evaluation continues.
+                    if(_clampedEvalTime < other->clipStartTime) {
+                        break;
+                    }
+                    node.activeSlotIndex =
+                        (node.activeSlotIndex & 1) == 0;
+                    parseNodeFrame_guess(
+                        *active, node.frameListVariant,
+                        incrementWrapping32_guess(other->frameIndex));
+                    // Forward action follows parse and observes the crossed
+                    // old-other slot. An exception precedes dirty/merge/source.
+                    fireNodeAction(*other);
+                    seeked = true;
+                    std::swap(active, other);
+                }
+
+                if(seeked) {
+                    finishOrdinarySeek();
+                }
+                continue;
+            }
+
+            // Rewind has no dynamic count lookup and creates no frame-list
+            // owner. It flips first, parses the newly entered previous frame,
+            // then emits that frame's action before the next live-time test.
+            const int cursor = node.activeSlotIndex;
+            auto *active = &node.slots[cursor];
+            if(!(active->clipStartTime > _clampedEvalTime)) {
+                continue;
+            }
+            auto *other = &node.slots[(cursor & 1) == 0];
+            bool seeked = false;
+            for(;;) {
+                node.activeSlotIndex =
+                    (node.activeSlotIndex & 1) == 0;
+                parseNodeFrame_guess(
+                    *other, node.frameListVariant,
+                    decrementWrapping32_guess(active->frameIndex));
+                fireNodeAction(*other);
+                seeked = true;
+                // Ordered greater-than continuation: NaN stops rewind.
+                if(!(other->clipStartTime > _clampedEvalTime)) {
+                    break;
+                }
+                std::swap(active, other);
+            }
+            if(seeked) {
+                finishOrdinarySeek();
+            }
+        }
+    }
+
+    // Independently callable in three references and emitted as an adjacent
+    // function after boundary recovery in Android arm64. The loop reloads the
+    // live node count because the stepper can re-enter script/resource code.
+    void Player::refreshParameterizedNodeTimelines_guess() {
+        for(size_t i = 1; i < _nodes.size(); ++i) {
+            detail::MotionNode &node = _nodes[i];
+            if(node.parameterEntry != nullptr) {
+                seekParameterizedNodeFrames_guess(node, *this);
+            }
+        }
+    }
+
+    // Full-reseek STEP 4: absolutely seed both timeline slots for every non-root
+    // node, independent of its previous cursor.  All four current references use
+    // the real half-open range [1, nodeCount); Android's libstdc++ and iOS's
+    // libc++ spell the deque arithmetic differently, but none has a tail sentinel.
+    // The following STEP 5 is live as well: reseekTimelineCursors restores/prunes
+    // HM3/HM4 and rebuilds every HM1 entry after this loop.  Current four-binary
+    // addresses and container-layout details live in the analysis record, not in
+    // this compiled source comment.
+    void Player::reseedNodeTimelineSlots_guess() {
+        auto &nodes = _nodes;
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            detail::MotionNode &node = nodes[i];
+            // The native helper reads the Player's committed evaluation time
+            // and owns parse/merge, source refresh, and exact-frame onAction.
+            initializeNodeTimelineSlots_guess(*this, node);
+        }
+    }
+
+    // Pre-progress dirty-node pass. For every non-root force-visible node whose
+    // emoteEdit object is marked modified, clear that flag and rebuild both
+    // timeline slots. The emoteEdit variant is mutable TJS state, so the clear
+    // uses PropSet(TJS_MEMBERENSURE) before rebuilding.
+    void Player::refreshModifiedNodeTimelines_guess() {
+        // This is the same half-open [1, size()) deque walk as the incremental
+        // node phase. The native implementation has no trailing sentinel.
+        for (size_t i = 1; i < _nodes.size(); ++i) {
+            detail::MotionNode &node = _nodes[i];
+            if (node.forceVisible == 0) {
+                continue;
+            }
+
+            // Copy the persistent Variant first, then retain one independent
+            // dispatch owner before releasing the copy. A re-entrant getter
+            // may clear node.emoteEditVariant without invalidating the getter,
+            // setter, or the following timeline rebuild.
+            tTJSVariant emoteEditOwner(node.emoteEditVariant);
+            ncbPropAccessor emoteEdit(emoteEditOwner);
+            emoteEditOwner.Clear();
+            iTJSDispatch2 *const emoteEditDispatch =
+                emoteEdit.GetDispatch();
             const bool modified = detail::motionPropGetBool(
-                node.emoteEditVariant, TJS_W("modified"));
+                emoteEditDispatch, TJS_W("modified"), 0,
+                &detail::emoteEditModifiedHint_guess);
             if (!modified) {
                 continue;
             }
-            tTJSVariant zero(static_cast<tjs_int>(0));
-            iTJSDispatch2 *emoteEdit =
-                node.emoteEditVariant.AsObjectNoAddRef();
-            (void)emoteEdit->PropSet(
-                TJS_MEMBERENSURE, TJS_W("modified"), nullptr,
-                &zero, emoteEdit);
-            // Player_initNodeTimeline_guess(player, node) — 0x6B6A1C.
-            // 砖5/洞2: the dirty-node rebuild is a direct Player_initNodeTimeline
-            // (0x6B64AC) call, so its tail @0x6B674C onAction push fires here too;
-            // pass _pendingEvents to reproduce it.
-            if(initializeNodeTimelineSlotsLike_0x6B64AC(
-                   node, _clampedEvalTime, &_pendingEvents)) {
-                const int mask = _preview ? 6153 : 6145;
-                if(node.forceVisible != 0 ||
-                   (node.nodeType >= 0 && node.nodeType < 31 &&
-                    ((1 << node.nodeType) & mask) != 0)) {
-                    findSourceForNode_guess(node);
-                }
+            {
+                // The setter's Integer temporary is destroyed before the
+                // potentially-throwing absolute initializer begins.
+                tTJSVariant zero(static_cast<tjs_int>(0));
+                (void)emoteEditDispatch->PropSet(
+                    TJS_MEMBERENSURE, TJS_W("modified"),
+                    &detail::emoteEditModifiedHint_guess, &zero,
+                    emoteEditDispatch);
             }
+            // The dirty-node rebuild uses the complete absolute helper.
+            initializeNodeTimelineSlots_guess(*this, node);
         }
     }
 
@@ -1339,11 +1407,10 @@ namespace motion {
         auto &nodes = _nodes;
         // === PHASE 1: Pre-loop setup ===
 
-        // Camera velocity → root delta block (0x6BB360..0x6BB3DC).
-        // Writes node+1584 (delta.dirty) and node+1592/+1600/+1608 (delta pos).
-        // Reads player+592 = _deltaTime (speedMul·dt): 0x6BB37C/3A4/3CC each
-        // `LDR D1,[X19,#0x250]; FMUL D0,D1,velXYZ`. (Was _frameLastTime, a
-        // port-invented raw-dt field with no binary backing — see Player.h.)
+        // Integrate each nonzero camera-velocity component into root delta
+        // position using the Player frame delta. Each active component publishes
+        // root dirty before the multiply/add; signed zero is inactive, while NaN
+        // follows the active path. The four ABI layouts are recorded in analysis/.
         {
             auto &rootNode = nodes[0];
             if (_cameraVelocityX != 0.0) {
@@ -1358,10 +1425,9 @@ namespace motion {
                 rootNode.delta.dirty = true;
                 rootNode.delta.posZ += _deltaTime * _cameraVelocityZ;
             }
-            // Camera friction (0x6BB3E0..0x6BB428): pow(damp, player+592/60.0).
-            // Gate is ONLY `damp != 1.0` (0x6BB3EC FCMP D0,#1.0) — the binary has
-            // no `>0` subgate; the former `&& _frameLastTime > 0.0` was a port
-            // invention. Reads +592=_deltaTime (0x6BB3F4 LDR D1,[X19,#0x250]).
+            // Damping is applied after root integration. The sole gate is exact
+            // equality with 1.0; otherwise pow(damping, frameDelta/60) scales all
+            // three velocity components. There is no positive-delta/base guard.
             if (_cameraDamping != 1.0) {
                 const double dampFactor = std::pow(_cameraDamping,
                                                     _deltaTime / 60.0);
@@ -1381,15 +1447,10 @@ namespace motion {
         // Step 2: Evaluate root node (index 0)
         auto &root = nodes[0];
         {
-            // Player_buildNodeTree @0x6B51F0 always retains node 0 as the
-            // synthetic root. Player_updateLayers @0x6BB4D4 copies its delta
-            // block directly; no PSB layer/frame dispatch is evaluated here.
-            root.delta.flipX = _rootFlipX;
-
-            // Aligned to libkrkr2.so 0x6BB4E0..0x6BB4E8:
-            //   memcpy(root+1504, root+1584, 0x50); *(root+1584) = 0;
+            // Root zero is retained across node-tree rebuilds. Its delta block
+            // is copied directly; no PSB layer/frame dispatch or Player-level
+            // transform shadow participates here.
             copyDeltaBlockToAccum(root.accumulated, root.delta);
-            root.accumulated.blendMode = 16;
             root.delta.dirty = false;
             const std::array<std::uint32_t, 4> rootColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u};
@@ -1397,15 +1458,15 @@ namespace motion {
 
         }
 
-        // Player_updateLayers @0x6BB33C calls this unconditionally at
-        // 0x6BB4EC, immediately after copying/clearing the root delta block.
-        // Player_interpolateVarTrackValues @0x6BBE20 walks Player+1296's
-        // VariableLabelScope deque, writes item+16 and binds each live value.
-        interpolateVarTrackValuesLike_0x6BBE20(_clampedEvalTime);
+        // All four reference targets call this unconditionally immediately
+        // after copying/clearing the root delta block. The helper reads the
+        // Player's current evaluation time; it has no explicit time argument.
+        interpolateVarTrackValues_guess();
 
-        // 0x6BB4F0 calls sub_699940 only when Player+908 is zero.  A type-3
-        // child's root 2x2 was already propagated by the parent motion pass;
-        // particle children retain the ctor's zero flag and rebuild normally.
+        // The marker is constructor-zero and set only while linking a type-3
+        // child. Such a child's root 2x2 was already propagated by the parent
+        // motion pass; ordinary Players and particle children retain false and
+        // rebuild the root local matrix here.
         if(!_type3RootTransformAlreadyPropagated) {
             Affine2x3 rootAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
             applyLocalTransform(rootAffine, root);
@@ -1420,7 +1481,14 @@ namespace motion {
     // Phase 2: Main node evaluation loop (non-root nodes)
     void Player::updateLayersPhase2_MainLoop(double currentTime) {
         auto &nodes = _nodes;
-        const std::string motionPath = matchedMotionPath();
+        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
+        std::string motionPath;
+        bool logoTraceEnabledForPath = false;
+        if(logoTraceEnabled) {
+            motionPath = matchedMotionPath();
+            logoTraceEnabledForPath =
+                detail::logoChainTraceEnabledForPath(motionPath);
+        }
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
 
@@ -1439,10 +1507,11 @@ namespace motion {
             }
             const auto &parent = nodes[parentIdx];
 
-            if (detail::logoChainTraceEnabledForPath(motionPath)) {
+            if (logoTraceEnabledForPath) {
                 const auto &parentNode = nodes[parentIdx];
                 detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.parent_lookup", "0x6BB598",
+                    motionPath, "updateLayers.phase2.parent_lookup",
+                    "Player::updateLayersPhase2_MainLoop",
                     currentTime,
                     "nodeIndex={} label={} type={} inheritFlags=0x{:x} origParentIdx={} resolvedParentIdx={} parentLabel={} parentType={} parentInheritFlags=0x{:x} walkSteps={} independentLayerInherit={}",
                     node.index,
@@ -1460,71 +1529,68 @@ namespace motion {
                     _independentLayerInherit ? 1 : 0);
             }
 
-            // M1/P7 step-1: the per-node frame seek no longer runs here. In
-            // libkrkr2.so Player_updateLayers (0x6BB33C) does NOT cursor-step;
-            // the node's two parsed-frame slots (node+320/+856) were already
-            // filled by the progress pass (Player_progress_inner 0x6C106C ->
-            // Player_advanceNodeFrames 0x6B7E44, hoisted to
-            // Player::progressSeekNodeSlotsLike_0x6C106C). Here we only READ the
-            // already-positioned live ClipSlots — exactly what the binary's
-            // Player_evaluateTimeline (0x699AE4) consumes. The following object
-            // is a diagnostic-only projection built at this logging boundary.
-            auto state = readNodeFrameSlotsForTrace(node, currentTime);
-            if (detail::logoChainTraceEnabledForPath(motionPath)
-                && state.debugEvaluated) {
-                detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.framesel",
-                    "0x6926B4", currentTime,
-                    "nodeIndex={} label={} type={} activeIndex={} nextIndex={} frameA[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] frameB[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] t={:.6f} interpolated={} final[src={},opacity={:.6f},scale=({:.6f},{:.6f})]",
-                    node.index,
-                    node.layerName.IsEmpty() ? std::string("<root>")
-                                             : detail::narrow(node.layerName),
-                    node.nodeType,
-                    state.debugActiveIndex,
-                    state.debugNextIndex,
-                    state.debugFrameATime,
-                    state.debugFrameAType,
-                    state.debugFrameAInvisible ? 1 : 0,
-                    state.debugFrameASrc.empty() ? std::string("<none>")
-                                                : state.debugFrameASrc,
-                    state.debugFrameAOpacity,
-                    state.debugFrameAScaleX,
-                    state.debugFrameAScaleY,
-                    state.debugFrameBTime,
-                    state.debugFrameBType,
-                    state.debugFrameBInvisible ? 1 : 0,
-                    state.debugFrameBSrc.empty() ? std::string("<none>")
-                                                : state.debugFrameBSrc,
-                    state.debugFrameBOpacity,
-                    state.debugFrameBScaleX,
-                    state.debugFrameBScaleY,
-                    state.debugInterpT,
-                    state.debugInterpolated ? 1 : 0,
-                    state.debugFrameASrc.empty()
-                        ? std::string("<none>") : state.debugFrameASrc,
-                    state.opacity,
-                    state.scaleX,
-                    state.scaleY);
+            // The per-node cursor seek already ran in the progress pass. Here
+            // updateLayers only reads the positioned live ClipSlots; this trace
+            // state is a diagnostic projection at that read boundary.
+            std::optional<TimelineTraceState> traceState;
+            if(logoTraceEnabledForPath) {
+                traceState.emplace(
+                    readNodeFrameSlotsForTrace(node, currentTime));
+                const auto &state = *traceState;
+                if(state.debugEvaluated) {
+                    detail::logoChainTraceLogf(
+                        motionPath, "updateLayers.phase2.framesel",
+                        "seekNodeFrameSelection", currentTime,
+                        "nodeIndex={} label={} type={} activeIndex={} nextIndex={} frameA[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] frameB[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] t={:.6f} interpolated={} final[src={},opacity={:.6f},scale=({:.6f},{:.6f})]",
+                        node.index,
+                        node.layerName.IsEmpty() ? std::string("<root>")
+                                                 : detail::narrow(node.layerName),
+                        node.nodeType,
+                        state.debugActiveIndex,
+                        state.debugNextIndex,
+                        state.debugFrameATime,
+                        state.debugFrameAType,
+                        state.debugFrameAInvisible ? 1 : 0,
+                        state.debugFrameASrc.empty() ? std::string("<none>")
+                                                    : state.debugFrameASrc,
+                        state.debugFrameAOpacity,
+                        state.debugFrameAScaleX,
+                        state.debugFrameAScaleY,
+                        state.debugFrameBTime,
+                        state.debugFrameBType,
+                        state.debugFrameBInvisible ? 1 : 0,
+                        state.debugFrameBSrc.empty() ? std::string("<none>")
+                                                    : state.debugFrameBSrc,
+                        state.debugFrameBOpacity,
+                        state.debugFrameBScaleX,
+                        state.debugFrameBScaleY,
+                        state.debugInterpT,
+                        state.debugInterpolated ? 1 : 0,
+                        state.debugFrameASrc.empty()
+                            ? std::string("<none>") : state.debugFrameASrc,
+                        state.opacity,
+                        state.scaleX,
+                        state.scaleY);
+                }
             }
 
-            const bool forceDirty = false;
+            // A nonzero camera-constraint translation in the preceding frame
+            // forces every node through evaluation once in the next frame.
+            const bool forceDirty = _cameraConstraintDirty_guess;
             const bool needGround = node.groundCorrection;
             const bool parentDirty = parent.accumulated.dirty;
             const bool deltaDirty = node.delta.dirty;
-            // Player_updateLayers @ 0x6BB5E0 passes only the explicit
-            // dirty sources as a2; node+44 is folded in inside
-            // Player_evaluateTimeline itself.
             const bool timelineDirtyArg =
                 forceDirty || needGround || parentDirty || deltaDirty;
 
-            const bool evalRet = evaluateTimelineLike_0x699AE4(
-                    node, timelineDirtyArg, currentTime);
+            const bool evalRet = evaluateTimeline_guess(
+                    node, currentTime, timelineDirtyArg);
             if (!evalRet) {
                 continue;
             }
 
-            // Player_updateLayers clears node+1584 after evaluateTimeline but
-            // keeps the active/visible override bytes intact.
+            // After a successful evaluation, neutralize the transient transform
+            // overrides while preserving the active/visible override bytes.
             neutralizeDeltaTransformOverrides(node.delta);
             node.delta.dirty = false;
 
@@ -1535,34 +1601,6 @@ namespace motion {
                 node.accumulated.dirty = copiedDirty ? true : (node.flags != 0);
                 node.accumulated.visible =
                     node.accumulated.visible && node.delta.visibleOverride;
-                node.accumulated.m11 = parent.accumulated.m11;
-                node.accumulated.m21 = parent.accumulated.m21;
-                node.accumulated.m12 = parent.accumulated.m12;
-                node.accumulated.m22 = parent.accumulated.m22;
-                continue;
-            }
-
-            if (node.activeSlot().hasSync) {
-                node.accumulated.dirty = parent.accumulated.dirty;
-                node.accumulated.active = parent.accumulated.active;
-                node.accumulated.visible = parent.accumulated.visible;
-                node.accumulated.flipX = parent.accumulated.flipX;
-                node.accumulated.flipY = parent.accumulated.flipY;
-                node.accumulated.posX = parent.accumulated.posX;
-                node.accumulated.posY = parent.accumulated.posY;
-                node.accumulated.posZ = parent.accumulated.posZ;
-                node.accumulated.angle = parent.accumulated.angle;
-                node.accumulated.scaleX = parent.accumulated.scaleX;
-                node.accumulated.scaleY = parent.accumulated.scaleY;
-                node.accumulated.slantX = parent.accumulated.slantX;
-                node.accumulated.slantY = parent.accumulated.slantY;
-                node.accumulated.opacity = parent.accumulated.opacity;
-                const bool postDirty = node.accumulated.dirty;
-                const bool postVisible = node.accumulated.visible;
-                node.accumulated.active = false;
-                node.accumulated.dirty = postDirty ? true : (node.flags != 0);
-                node.accumulated.visible =
-                    postVisible ? node.delta.visibleOverride : false;
                 node.accumulated.m11 = parent.accumulated.m11;
                 node.accumulated.m21 = parent.accumulated.m21;
                 node.accumulated.m12 = parent.accumulated.m12;
@@ -1593,7 +1631,7 @@ namespace motion {
             node.accumulated.angle += node.delta.angle;
 
             if (parent.meshType != 0) {
-                sub_69AE74_meshDeform(parent, node);
+                deformChildByParentBezierPatch_guess(parent, node);
             }
 
             {
@@ -1619,11 +1657,16 @@ namespace motion {
                 }
             }
 
-            sub_6BAA10_groundCorrection(node, parent);
+            if(node.groundCorrection) {
+                // The native worker follows Player.rootPlayer before reading
+                // the raw, non-owning current-dispatch bridge slot.
+                applyGroundCorrection_guess(
+                    _rootPlayer->_currentDispatch, node, parent);
+            }
 
             {
-                const int v46 = node.inheritFlags;
-                if ((v46 & 0x400) != 0) {
+                const int opacityInheritFlags = node.inheritFlags;
+                if ((opacityInheritFlags & 0x400) != 0) {
                     node.accumulated.opacity =
                         parent.accumulated.opacity * node.accumulated.opacity / 255;
                 } else if (!_independentLayerInherit) {
@@ -1738,9 +1781,11 @@ namespace motion {
                 }
             }
 
-            if (detail::logoChainTraceEnabledForPath(motionPath)) {
+            if (logoTraceEnabledForPath) {
+                const auto &state = *traceState;
                 detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.accum_final", "0x6BBB6C",
+                    motionPath, "updateLayers.phase2.accum_final",
+                    "Player::updateLayersPhase2_MainLoop",
                     currentTime,
                     "nodeIndex={} label={} type={} parentIdx={} parentLabel={} state[visible={},evaluated={},opacity={:.3f},scale=({:.3f},{:.3f}),localPos=({:.3f},{:.3f},{:.3f})] parentAccum[pos=({:.3f},{:.3f},{:.3f}),m=({:.3f},{:.3f},{:.3f},{:.3f}),opacity={},visible={}] accum[pos=({:.3f},{:.3f},{:.3f}),m=({:.3f},{:.3f},{:.3f},{:.3f}),scale=({:.3f},{:.3f}),opacity={},visible={},active={}]",
                     node.index,

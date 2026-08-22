@@ -27,10 +27,10 @@ STATIC_PARSE_PROJECTION = "static_parse-semantic-v1"
 STATIC_PARSE_SAMPLE_POINTS = {
     "init_non_emote_enter": "initNonEmoteMotionLike_0x6B365C.enter",
     "init_non_emote_leave": "initNonEmoteMotionLike_0x6B365C.leave",
-    "parse_parameter_enter": "appendParameterEntryLike_0x6B1718.enter",
-    "parse_parameter_leave": "appendParameterEntryLike_0x6B1718.leave",
-    "parse_parameter_list_enter": "parseParameterListLike_0x6B202C.enter",
-    "parse_parameter_list_leave": "parseParameterListLike_0x6B202C.leave",
+    "parse_parameter_enter": "appendParameterEntry_guess.enter",
+    "parse_parameter_leave": "appendParameterEntry_guess.leave",
+    "parse_parameter_list_enter": "parseParameterList_guess.enter",
+    "parse_parameter_list_leave": "parseParameterList_guess.leave",
 }
 STATIC_PARSE_PARAMETER_FIELDS = (
     "index", "id", "discretization", "rangeBegin", "rangeEnd", "value", "mode",

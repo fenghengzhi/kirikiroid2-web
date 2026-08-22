@@ -2,13 +2,26 @@
 // Split out for maintainability.
 //
 #include "PlayerInternal.h"
+#include "D3DAdaptor.h"
 #include "MotionDispatch.h"
+#include "PlayerRenderInternal.h"
+#include "SeparateLayerAdaptor.h"
+#include "LayerIntf.h"
+#include "impl/LayerImpl.h"
 #include "ncbind.hpp"
 
 using namespace motion::internal;
 
 namespace motion {
     namespace {
+        struct TimelineDispatchReleaseGuard_guess {
+            iTJSDispatch2 *dispatch = nullptr;
+
+            ~TimelineDispatchReleaseGuard_guess() {
+                if(dispatch) dispatch->Release();
+            }
+        };
+
         bool shouldEmitPlaybackDiag(std::uint32_t seq) {
             return seq <= 200 || (seq % 100) == 0;
         }
@@ -19,30 +32,48 @@ namespace motion {
 
     }
 
-    // Player_skipToSync @0x6D3504. Despite the member name, the binary does
-    // not mutate an auxiliary timeline map. It preserves the raw tag-dispatch
-    // traversal (including its otherwise-dead property reads), then seeds the
-    // ordinary Player frame cursor and the two +480/+481 one-shot flags.
+    // Despite the member name, this does not mutate an auxiliary timeline map.
+    // It takes an independent owner of the persistent tag stream, preserves the
+    // otherwise-dead property reads, then seeds the ordinary frame cursor and
+    // its two one-shot flags.
     void Player::skipToSync() {
         if(_allplaying && _loopTime < 0.0) {
             const tTJSVariant tagFrames = _tagFrameSourceVariant;
             const tjs_int count = detail::motionPropGetCount(tagFrames);
+            const double initialLastTime = _cachedTotalFrames;
+            double upperLimit = initialLastTime;
             for(tjs_int index = 0; index < count; ++index) {
                 const tTJSVariant frame =
                     detail::motionPropGetByNum(tagFrames, index);
-                if(detail::motionPropGetInt(frame, TJS_W("type")) == 1) {
+                if(detail::motionPropGetInt(
+                       frame, TJS_W("type"), 0,
+                       &detail::typeMemberHint_guess) == 1) {
                     (void)detail::motionPropGetDouble(
-                        frame, TJS_W("time"));
+                        frame, TJS_W("time"), 0,
+                        &detail::timeMemberHint_guess);
                     const tTJSVariant content =
-                        detail::motionPropGet(frame, TJS_W("content"));
+                        detail::motionPropGet(
+                            frame, TJS_W("content"), 0,
+                            &detail::contentMemberHint_guess);
                     (void)detail::motionPropGetBool(
                         content, TJS_W("sync"));
                 }
             }
+            if(count >= 1) {
+                // The tag dispatch can re-enter Player while it is traversed.
+                // Native therefore observes lastTime again after a non-empty
+                // traversal instead of reusing the pre-loop snapshot.
+                upperLimit = _cachedTotalFrames;
+            }
 
-            const double cursor = std::fmax(_cachedTotalFrames, 0.0);
-            const double clamped =
-                std::fmin(_cachedTotalFrames, cursor);
+            double cursor = initialLastTime;
+            if(cursor < 0.0) {
+                cursor = 0.0;
+            }
+            double clamped = cursor;
+            if(cursor > upperLimit) {
+                clamped = upperLimit;
+            }
             _queuing = true;
             _firstFrame = true;
             _frameTickCount = cursor;
@@ -50,100 +81,134 @@ namespace motion {
         }
     }
 
-    bool Player::playMotionLike_0x6B2284(ttstr label, tjs_int flags) {
-        // Player_play @0x6B21E8: a stealth request cannot enter playImpl until
-        // the live +968 stealth-chara slot exists. Retain it in the independent
-        // +768 owner, exactly as Player_setMotion_stealth @0x6D9584 does.
+    void Player::playMotion_guess(tjs_int flags, const ttstr &label) {
+        // A stealth request cannot enter playImpl until the live stealth-chara
+        // slot exists. Retain it in the independent pending-motion owner.
         if((flags & PlayFlagStealth) != 0 && _stealthChara.IsEmpty()) {
-            _pendingStealthMotion = std::move(label);
-            return false;
+            _pendingStealthMotion = label;
+            return;
         }
 
-        bool started = playMotionImplLike_0x6B2284(std::move(label), flags);
+        playMotionImpl_guess(label, flags);
 
-        // Both Player_play and the two motion property setters flush +768 by
-        // invoking playImpl with PlayFlagStealth, then release/null +768.
+        // Player and both motion setters flush the persistent pending owner by
+        // invoking playImpl with PlayFlagStealth, then release/null it. The
+        // field remains populated throughout the nested call.
         if(!_pendingStealthMotion.IsEmpty()) {
-            const ttstr pending = _pendingStealthMotion;
+            playMotionImpl_guess(
+                _pendingStealthMotion, PlayFlagStealth);
             _pendingStealthMotion.Clear();
-            started = playMotionImplLike_0x6B2284(
-                          pending, PlayFlagStealth) ||
-                      started;
         }
-        return started;
     }
 
-    bool Player::playMotionImplLike_0x6B2284(ttstr label, tjs_int flags) {
+    void Player::playMotionImpl_guess(const ttstr &label, tjs_int flags) {
         static std::uint32_t s_diagSeq = 0;
-        const auto diagSeq = ++s_diagSeq;
-        const bool emitDiag = shouldEmitPlaybackDiag(diagSeq);
+        std::uint32_t diagSeq = 0;
+        bool emitDiag = false;
+        if(detail::logoChainTraceEnabled() && LOGGER) {
+            diagSeq = ++s_diagSeq;
+            emitDiag = shouldEmitPlaybackDiag(diagSeq);
+        }
+
+        // Path conversion, sequence mutation and formatting are Web diagnostic
+        // sidecars. None belongs to the four-reference playback body, so keep
+        // the ordinary load/commit path free of those extra failure points.
+        std::string entryMotionPath;
         if(emitDiag && LOGGER) {
+            entryMotionPath = matchedMotionPath();
             LOGGER->info(
                 "PRTDIAG Player::playMotionLike enter seq={} this={} label='{}' flags=0x{:x} chara='{}' motionKey='{}' stealth='{}' active={} activePath='{}' allplaying={}",
                 diagSeq, static_cast<const void *>(this),
                 detail::narrow(label), static_cast<unsigned int>(flags),
                 detail::narrow(_chara), detail::narrow(_motionKey),
                 detail::narrow(_stealthMotion), hasMotionContent(),
-                matchedMotionPath().empty()
-                    ? std::string("<none>") : matchedMotionPath(),
+                entryMotionPath.empty()
+                    ? std::string("<none>") : entryMotionPath,
                 boolText(_allplaying));
         }
 
-        // 0x6B22B8..0x6B22D4: select +984 for stealth and +976 otherwise;
-        // Force/AsCan enter unconditionally, all other calls enter only when
-        // the requested UTF-16 string differs from the selected live slot.
+        // Select the stealth label for Stealth and the primary label otherwise.
+        // Force/AsCan enter unconditionally; other calls enter only when the
+        // requested UTF-16 string differs from the selected live slot.
         const ttstr &selectedMotion =
             (flags & PlayFlagStealth) != 0 ? _stealthMotion : _motionKey;
         if((flags & (PlayFlagForce | PlayFlagAsCan)) == 0 &&
            selectedMotion == label) {
-            return true;
+            return;
         }
 
-        // 0x6B22D4: AsCan suppresses a reload only while Player+1099 is set.
-        // `_allplaying` is the proven +1099 owner (Player_getPlaying
-        // @0x6D9794); the compatibility snapshot is not part of this gate.
+        // AsCan suppresses reload only while the Player playing byte is set;
+        // the compatibility snapshot is not part of this gate.
         if((flags & PlayFlagForce) == 0 &&
            (flags & PlayFlagAsCan) != 0 && _allplaying) {
-            return true;
+            return;
         }
 
-        // Player_playImpl @0x6B22E4: when (flags & 8 == PlayFlagJoin), rebuild
-        // the var-track HM4 snapshot from the CURRENT motion before loading the
-        // new one. Inert for content without a "variable" list (empty deque).
+        // Join rebuilds the var-track snapshot from the current motion before
+        // loading the new one. It is inert for an empty variable-list deque.
         if((flags & PlayFlagJoin) != 0) {
-            resetMotionStateLike_0x6B2D3C();
+            resetMotionState_guess();
         }
 
-        // Player_loadMotion @0x6B2330 always receives +968 stealthChara and
-        // the current request, regardless of whether this is the primary or
-        // stealth motion slot. The explicit overload always traverses that raw
-        // lookup; it has no port-local loaded-state guard.
-        const auto motionPathBeforeLoad = matchedMotionPath();
-        const bool ensureOk = ensureMotionLoaded(_stealthChara, label);
-        const auto motionPathAfterLoad = matchedMotionPath();
+        // The load helper always receives the live stealth-chara slot and the
+        // current request, regardless of which motion-name slot will later be
+        // committed. It has no loaded-state guard.
+        std::string motionPathBeforeLoad;
         if(emitDiag && LOGGER) {
+            motionPathBeforeLoad = matchedMotionPath();
+        }
+        const tTJSVariant loadResult =
+            loadMotionResult_guess(_stealthChara, label);
+        const bool loadSucceeded = loadResult.Type() != tvtVoid;
+        if(!loadSucceeded) {
+            // Failure logs the original request pair before clearing the two
+            // persistent result owners and the playing byte. Labels are not
+            // written on this branch.
+            TVPAddLog(TJS_W("motion not found ") + _stealthChara +
+                      TJS_W("/") + label);
+            _motionContentVariant.Clear();
+            _findMotionContextVariant.Clear();
+            _allplaying = false;
+            return;
+        }
+
+        // Native commit order is observable under exceptions: write both live
+        // request labels before converting/indexing the non-Void load result.
+        _stealthMotion = label;
+        if((flags & PlayFlagStealth) == 0) {
+            _motionKey = label;
+        }
+
+        // Keep the complete result container alive and force it through the
+        // owning Object conversion before reading elements 0 and 1.
+        tTJSVariant loadResultCopy(loadResult);
+        TimelineDispatchReleaseGuard_guess loadResultObject{
+            loadResultCopy.AsObject()};
+        loadResultCopy.Clear();
+        {
+            tTJSVariant value;
+            (void)loadResultObject.dispatch->PropGetByNum(
+                0, 0, &value, loadResultObject.dispatch);
+            _motionContentVariant = value;
+        }
+        {
+            tTJSVariant value;
+            (void)loadResultObject.dispatch->PropGetByNum(
+                0, 1, &value, loadResultObject.dispatch);
+            _findMotionContextVariant = value;
+        }
+
+        std::string motionPathAfterLoad;
+        if(emitDiag && LOGGER) {
+            motionPathAfterLoad = matchedMotionPath();
             LOGGER->info(
                 "PRTDIAG Player::playMotionLike after-ensure seq={} this={} ok={} activeChanged={} activePath='{}' motionKey='{}'",
-                diagSeq, static_cast<const void *>(this), boolText(ensureOk),
+                diagSeq, static_cast<const void *>(this),
+                boolText(loadSucceeded),
                 boolText(motionPathBeforeLoad != motionPathAfterLoad),
                 motionPathAfterLoad.empty()
                     ? std::string("<none>") : motionPathAfterLoad,
                 detail::narrow(_motionKey));
-        }
-        if(!ensureOk) {
-            // 0x6B27E8..0x6B27F4: failed load releases +528/+1012 and clears
-            // +1099. The two live motion labels are written only on success.
-            _motionContentVariant.Clear();
-            _findMotionContextVariant.Clear();
-            _allplaying = false;
-            return false;
-        }
-
-        // 0x6B2354..0x6B23AC: every successful load stores the request in
-        // +984; a non-stealth load additionally owns the same ttstr in +976.
-        _stealthMotion = label;
-        if((flags & PlayFlagStealth) == 0) {
-            _motionKey = label;
         }
         if(emitDiag && LOGGER) {
             LOGGER->info(
@@ -153,24 +218,35 @@ namespace motion {
                 detail::narrow(_motionKey), hasMotionContent(),
                 boolText(_motionKey == label));
         }
-        // 0x6B2560..0x6B26F0: the raw +528 motion dispatch owns the type
-        // branch. Type 1 enters the emote wrapper/secondary-load path, type 0
-        // enters the ordinary initializer, and every other non-zero value
-        // performs neither initialization.
-        const tjs_int motionType = detail::motionPropGetInt(
-            _motionContentVariant, TJS_W("type"));
+        // Retain the just-committed motion Object across type/property reads
+        // and the selected initializer. Re-entrant getters cannot redirect the
+        // remainder of this branch by replacing the canonical field.
+        tTJSVariant motionContentCopy(_motionContentVariant);
+        TimelineDispatchReleaseGuard_guess motionContent{
+            motionContentCopy.AsObject()};
+        motionContentCopy.Clear();
+        const auto readMotionProperty = [&](const tjs_char *member,
+                                            tjs_uint32 *hint) {
+            tTJSVariant value;
+            (void)motionContent.dispatch->PropGet(
+                0, member, hint, &value, motionContent.dispatch);
+            return value;
+        };
+        const tjs_int motionType = static_cast<tjs_int>(
+            readMotionProperty(TJS_W("type"),
+                               &detail::typeMemberHint_guess).AsInteger());
         if(motionType == 1) {
             if(!_directEdit) {
                 _emoteAngle = _nodes.front().delta.angle;
                 _nodes.front().delta.angle = 0.0;
             }
             _directEdit = true;
-            _emoteDivisionVariant = detail::motionPropGet(
-                _motionContentVariant, TJS_W("division"));
-            _emoteMotionListVariant = detail::motionPropGet(
-                _motionContentVariant, TJS_W("motionList"));
+            _emoteDivisionVariant = readMotionProperty(
+                TJS_W("division"), &detail::divisionMemberHint_guess);
+            _emoteMotionListVariant = readMotionProperty(
+                TJS_W("motionList"), &detail::motionListMemberHint_guess);
             _emoteMotionIndex = -1;
-            initEmoteMotionLike_0x6B2E90(
+            initEmoteMotion_guess(
                 static_cast<std::uint32_t>(flags));
         } else if(motionType == 0) {
             if(_directEdit) {
@@ -178,133 +254,125 @@ namespace motion {
                 _emoteAngle = 0.0;
             }
             _directEdit = false;
-            initNonEmoteMotionLike_0x6B365C(
+            initNonEmoteMotion_guess(
                 static_cast<std::uint32_t>(flags));
-        } else {
-            return true;
         }
         if(emitDiag && LOGGER) {
+            const auto exitMotionPath = matchedMotionPath();
             LOGGER->info(
                 "PRTDIAG Player::playMotionLike exit seq={} this={} activePath='{}' motionKey='{}' allplaying={}",
                 diagSeq, static_cast<const void *>(this),
-                matchedMotionPath().empty()
-                    ? std::string("<none>") : matchedMotionPath(),
+                exitMotionPath.empty()
+                    ? std::string("<none>") : exitMotionPath,
                 detail::narrow(_motionKey), boolText(_allplaying));
         }
-        return true;
     }
 
     tjs_error Player::playCompat(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
-        if(result) {
-            result->Clear();
-        }
+        // The native void wrapper never writes the TJS result slot.
+        (void)result;
 
         auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
 
-        // Player_playCompat @0x6D2C08 rejects fewer than two arguments, then
-        // converts param[1] to integer flags and forwards param[0] unchanged to
-        // Player_play @0x6B21E8. It has no independent motion/timeline state.
+        // The native wrapper rejects fewer than two arguments, converts
+        // param[1] to flags, and forwards param[0] to Player::play.
         if(numparams < 2 || !param || !param[0] || !param[1]) {
             return TJS_E_BADPARAMCOUNT;
         }
-        const ttstr label = *param[0];
+        // The native wrapper exposes objthis to loadMotion/onFindMotion through
+        // a raw Player field. It deliberately does not AddRef. All four
+        // wrappers install it before either argument conversion and clear it
+        // only on normal return: if conversion/play throws, unwind destroys
+        // any constructed local label but leaves this raw slot unchanged.
+        self->_currentDispatch = objthis;
         const tjs_int flags = param[1]->AsInteger();
-        (void)self->playMotionLike_0x6B2284(label, flags);
+        const ttstr label = *param[0];
+        self->playMotion_guess(flags, label);
+        self->_currentDispatch = nullptr;
         return TJS_S_OK;
     }
 
-    tjs_error Player::stopCompat(tTJSVariant *result, tjs_int numparams,
-                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
-        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
-        if(!self) {
-            return TJS_E_INVALIDOBJECT;
-        }
-
-        // Aligned to libkrkr2.so Player_stop (0x6D9A30):
-        // Binary simply clears the Player-level playing flag (player+1099).
-        self->_allplaying = false;
-
-        if(result) {
-            *result = tTJSVariant(true);
-        }
-        return TJS_S_OK;
+    void Player::stop() {
+        // The complete four-reference native body is a single byte store. In
+        // particular it retains motion labels, loaded content/context,
+        // timeline cursors, sync flags and pending owners.
+        _allplaying = false;
     }
 
-    // clear #72 — raw-callback entry, aligned with libkrkr2.so
-    // Player_drawToLayerCompat @0x6D2D80. Despite the member name "clear", the
-    // binary callback is a gated draw-to-layer routine: param[0] is the target
-    // Layer object, param[1] is the fill value (a3 in the binary, switched on
-    // its variant type at *(a3+16)). The whole body is gated on the player+544
-    // dword, which is the type tag of the motion tTJSVariant at player+528, not
-    // Player+1144 `completionType`. If no motion is loaded, the binary returns
-    // immediately doing nothing. (Corrected after the 0x6D9624/0x6D962C NCB
-    // literal binding disproved the former clearEnabled label.)
-    tjs_error Player::clearCompat(tTJSVariant *result, tjs_int numparams,
-                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
-        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
-        if(!self) {
-            return TJS_E_INVALIDOBJECT;
+    // Despite the script member name "clear", this is a gated draw-to-target
+    // routine. The typed NCB adapter supplies two owned Variant values. No
+    // loaded motion means a successful no-op.
+    void Player::drawToLayerRecursive_guess(tTJSVariant targetLayer,
+                                            tTJSVariant fillValue) {
+        if(!hasMotionContent()) {
+            return;
         }
-        // Binary: `if (*(player+544))` — gate directly on player+528 motion
-        // variant's non-void type tag.
-        if(self->hasMotionContent() && numparams >= 1 && param[0]) {
-            tTJSVariant fill =
-                (numparams >= 2 && param[1]) ? *param[1] : tTJSVariant();
-            self->drawToLayerCompat(*param[0], fill);
-        }
-        if(result) {
-            *result = tTJSVariant();
-        }
-        return TJS_S_OK;
-    }
 
-    // Instance worker for clear — aligned with libkrkr2.so
-    // Player_drawToLayerCompat @0x6D2D80 (recursive body).
-    //
-    // Binary structure (post-gate):
-    //   1. FAST PATH: PropGetByNum(targetLayer, flags=2, num=dword_1AB8820) — a
-    //      runtime-resolved member index that, when present with a non-null
-    //      +8 sub-object, routes the fill through sub_6ADCAC(subObj, fillInt).
-    //      dword_1AB8820 is a member-index cache (0xffffffff placeholder in the
-    //      static .so), so the exact UTF-16 member name cannot be resolved
-    //      statically. DOCUMENTED GAP: this fast path is not ported; the port
-    //      always takes the general fillRect path below (observably equivalent
-    //      for a plain Layer target, which is the common case).
-    //   2. GENERAL PATH: builds a "Layer" class wrapper, lazily recomputes the
-    //      tTVPComplexRect bound via sub_7E3ECC(player+864), reads it as
-    //      {left=+884, top=+888, w=+892-+884, h=+896-+888}, then calls
-    //      fillRect(left, top, w, h, fillValue) on the target layer instance.
-    //   3. RECURSION: iterates _nodes[1..]; for each node with nodeType==3,
-    //      resolves the child Player and recurses drawToLayerCompat with the
-    //      same target layer + fill value.
-    void Player::drawToLayerCompat(const tTJSVariant &targetLayer,
-                                   const tTJSVariant &fillValue) {
-        iTJSDispatch2 *layer = targetLayer.Type() == tvtObject
-                                   ? targetLayer.AsObjectNoAddRef()
-                                   : nullptr;
-        if(layer) {
-            // General path: FuncCall(L"fillRect", left, top, w, h, fillValue).
-            const tTVPRect &bound = _drawRegion.GetBound();
-            tTJSVariant left(bound.left);
-            tTJSVariant top(bound.top);
-            tTJSVariant w(bound.get_width());
-            tTJSVariant h(bound.get_height());
+        // AsObjectNoAddRef deliberately preserves the native conversion error
+        // for a non-object target before either adaptor check is attempted.
+        iTJSDispatch2 *targetObject = targetLayer.AsObjectNoAddRef();
+
+        if(auto *d3d = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(
+               targetObject, false)) {
+            const tjs_int color = fillValue.Type() == tvtObject
+                                      ? 0
+                                      : static_cast<tjs_int>(
+                                            fillValue.AsInteger());
+            d3d->clearTargetTexture(color);
+            return;
+        }
+
+        if(auto *separate =
+               ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                   targetObject, false)) {
+            targetLayer = separate->getTargetLayer();
+            targetObject = targetLayer.AsObjectNoAddRef();
+        }
+
+        auto *nativeLayer = tTJSNI_Layer::FromVariant(targetLayer);
+        if(nativeLayer && !nativeLayer->GetHasImage()) {
+            return;
+        }
+
+        tTJSVariant layerClass;
+        if(!render_detail::getLayerClassDispatchVariant_guess(
+               layerClass)) {
+            return;
+        }
+        iTJSDispatch2 *layerClassObject = layerClass.AsObjectNoAddRef();
+
+        const tTVPRect &bound = _drawRegion.GetBound();
+        tTJSVariant left(bound.left);
+        tTJSVariant top(bound.top);
+        tTJSVariant width(bound.get_width());
+        tTJSVariant height(bound.get_height());
+        tTJSVariant *rectArgs[] = {&left, &top, &width, &height};
+
+        if(fillValue.Type() == tvtObject) {
+            const auto fillClosure = fillValue.AsObjectClosureNoAddRef();
+            fillClosure.Object->FuncCall(0, nullptr, nullptr, nullptr, 4,
+                                         rectArgs, fillClosure.ObjThis);
+        } else {
             tTJSVariant fill(fillValue);
-            tTJSVariant *args[] = {&left, &top, &w, &h, &fill};
-            tjs_uint32 hint = 0;
-            layer->FuncCall(0, TJS_W("fillRect"), &hint, nullptr, 5, args,
-                            layer);
+            tTJSVariant *fillArgs[] = {
+                &left, &top, &width, &height, &fill,
+            };
+            layerClassObject->FuncCall(
+                0, TJS_W("fillRect"),
+                &detail::fillRectMemberHint_guess, nullptr, 5, fillArgs,
+                targetObject);
         }
-        // Recurse over nodeType==3 children (binary loop i=1.. over _nodes).
+
         for(size_t ni = 1; ni < _nodes.size(); ++ni) {
             auto &node = _nodes[ni];
             if(node.nodeType == 3) {
                 if(auto *child = node.getChildPlayer()) {
-                    child->drawToLayerCompat(targetLayer, fillValue);
+                    child->drawToLayerRecursive_guess(
+                        tTJSVariant(targetLayer), tTJSVariant(fillValue));
                 }
             }
         }

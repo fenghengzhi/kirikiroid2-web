@@ -127,6 +127,9 @@ protected:
 public:
     void SetEnabled(bool enabled);
 
+    // Deliberately unlocked.  The reference Begin path writes Interval first
+    // and then enters SetEnabled's critical section; do not turn this into a
+    // validating/clamping setter without changing the native edge behaviour.
     void SetInterval(tjs_uint64 interval) { Interval = interval; }
 
 } static *TVPContinuousHandlerCallLimitThread = nullptr;
@@ -165,6 +168,8 @@ void tTVPContinuousHandlerCallLimitThread::Execute() {
 
             if(Enabled) {
                 if(NextEventTick <= curtick) {
+                    // The pending flag is published before the native event,
+                    // while CS is still held.  Catch-up also stays under CS.
                     TVPProcessContinuousHandlerEventFlag =
                         true; // set flag to process event on next
                               // idle
@@ -200,9 +205,14 @@ void tTVPContinuousHandlerCallLimitThread::SetEnabled(bool enabled) {
     Enabled = enabled;
     if(enabled) {
         tjs_uint64 curtick = TVPGetTickCount() << TVP_SUBMILLI_FRAC_BITS;
+        // This is floor-to-grid after adding one fixed-point unit, not a
+        // conventional ceil-to-next-period calculation.  Interval == 0 is
+        // intentionally unchecked in all four reference targets.
         NextEventTick = ((curtick + 1) / Interval) * Interval;
         Event.Set();
     }
+    // Disabling does not signal Event.  A sleeping worker observes the change
+    // at its already scheduled wake-up (or after the disabled 10-second wait).
 }
 //---------------------------------------------------------------------------
 
@@ -220,6 +230,8 @@ void TVPBeginContinuousEvent() {
         if(TVPGetCommandLine(TJS_W("-contfreq"), &val)) {
             TVPContinousHandlerLimitFrequency = (tjs_int)val;
         }
+        // If the option is absent, retain the value from the preceding command
+        // line generation.  The native code does not restore the default zero.
     }
     //	if(!TVPIsWaitVSync())
     {
@@ -234,6 +246,10 @@ void TVPBeginContinuousEvent() {
             if(!TVPContinuousHandlerCallLimitThread)
                 TVPContinuousHandlerCallLimitThread =
                     new tTVPContinuousHandlerCallLimitThread();
+            // Every Begin rewrites the interval and resets the next grid point,
+            // even when another raw hook merely duplicates an existing hook.
+            // Signed frequency is not validated before this division; the
+            // result is stored in the unsigned interval exactly as compiled.
             TVPContinuousHandlerCallLimitThread->SetInterval(
                 (1 << TVP_SUBMILLI_FRAC_BITS) * 1000 /
                 TVPContinousHandlerLimitFrequency);
@@ -248,11 +264,12 @@ void TVPBeginContinuousEvent() {
 
 //---------------------------------------------------------------------------
 void TVPEndContinuousEvent() {
-    // anyway
+    // Stop both scheduling mechanisms unconditionally.  Begin does not stop
+    // the previously selected mechanism when -contfreq changes generation, so
+    // the system-control pump and limit thread can otherwise overlap.
     if(TVPContinuousHandlerCallLimitThread)
         TVPContinuousHandlerCallLimitThread->SetEnabled(false);
 
-    // anyway
     if(TVPSystemControl)
         TVPSystemControl->EndContinuousEvent();
 }
@@ -260,6 +277,8 @@ void TVPEndContinuousEvent() {
 
 //---------------------------------------------------------------------------
 static void TVPReleaseContinuousHandlerCallLimitThread() {
+    // The object is retained across ordinary End calls and destroyed only by
+    // this shutdown-priority callback.  Clear the global after destruction.
     if(TVPContinuousHandlerCallLimitThread)
         delete TVPContinuousHandlerCallLimitThread,
             TVPContinuousHandlerCallLimitThread = nullptr;

@@ -228,6 +228,8 @@ void layerExMovie::stopMovie() {
 bool layerExMovie::isPlayingMovie() { return playing; }
 
 void layerExMovie::start() {
+    // Remove-all then append exactly as the references do.  The registry stores
+    // this raw callback pointer without retaining the layerExMovie object.
     stop();
     TVPAddContinuousEventHook(this);
     playing = true;
@@ -292,6 +294,10 @@ void layerExMovie::OnContinuousCallback(tjs_uint64 tick) {
         std::vector<KRMovieEvent> vecEvent;
         {
             std::lock_guard<std::mutex> lk(mtxEvent);
+            // Detach the complete producer range before invoking script-facing
+            // handlers.  Events posted during those calls remain for a later
+            // callback; the callbacks themselves may stop/restart and append a
+            // new raw hook visible later in the current registry pass.
             vecEvent.swap(PostEvents);
         }
         for(KRMovieEvent msg : vecEvent) {

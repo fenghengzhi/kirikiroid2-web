@@ -896,6 +896,8 @@ public:
 
 protected:
     TVPTextureFormat::e Format;
+    // Deliberately left unwritten by the base constructor. The manual-init
+    // static-texture constructor leaves them for a later InitPixel call.
     unsigned int internalW;
     unsigned int internalH;
     unsigned char *PixelData = nullptr; // read only
@@ -918,6 +920,9 @@ protected:
     }
 
     ~tTVPOGLTexture2D() override {
+        // AdapterTexture2D instances own references back to this object but are
+        // not owned by it. Destruction only accounts GPU storage, frees the
+        // optional CPU readback buffer, then deletes the current GL name.
         _totalVMemSize -= internalW * internalH * getPixelSize();
         if(PixelData)
             delete[] PixelData;
@@ -977,6 +982,9 @@ protected:
                 break;
         }
 
+        // The four mobile release references retain this call, but their
+        // TVPCheckMemory implementation is an empty return. Commit dimensions
+        // and accounting only after the upload, in the original order.
         TVPCheckMemory();
         _glBindTexture2D(texture);
         glTexImage2D(GL_TEXTURE_2D, 0, internalfmt, intw, inth, 0, pixfmt,
@@ -991,6 +999,9 @@ protected:
     void InternalUpdate(const void *pixel, int pitch, int x, int y, int w,
                         int h) {
         if(_scaleW != 1.f || _scaleH != 1.f) {
+            // RestoreNormalSize is deliberately best-effort here.  All four
+            // references ignore its false result and continue the upload
+            // against the current (still scaled) GL name after the warning.
             RestoreNormalSize();
         }
         const unsigned char *src = (const unsigned char *)pixel;
@@ -1058,6 +1069,9 @@ protected:
         }
 
         ~AdapterTexture2D() override {
+            // Prevent cocos2d::Texture2D from deleting the borrowed owner GL
+            // name, then release the owner through its deferred texture queue.
+            // The raw _owner slot is deliberately not cleared.
             _name = 0;
             _owner->Release();
         }
@@ -1069,12 +1083,22 @@ protected:
         if(orig) {
             if(orig->getPixelsWide() == internalW &&
                orig->getPixelsHigh() == internalH) {
+                // Same-size reuse updates only the GL name. It does not rebind
+                // AdapterTexture2D::_owner or transfer the held owner reference.
+                // TVPWindowLayer passes its Sprite's current texture here;
+                // rebuilding Front/Back targets for a screen-size change can
+                // preserve the independent primary dimensions, so orig can
+                // belong to an older, different owner on a normal code path.
                 static_cast<AdapterTexture2D *>(orig)->update(texture);
                 return orig;
             }
         }
         AdapterTexture2D *ret =
             new AdapterTexture2D(this, texture, internalW, internalH);
+        // Ref starts at one and autorelease only appends the raw pointer to the
+        // current Cocos pool. TVPWindowLayer's Sprite::setTexture retains the
+        // new adapter before releasing its old texture; a later pool clear
+        // discharges this creator reference and leaves the Sprite's one ref.
         ret->autorelease();
         return ret;
     }
@@ -1245,6 +1269,10 @@ public:
         Bitmap->AddRef();
     }
     ~tTVPOGLTexture2D_split() override {
+        // Split/cache GL names are never added to _totalVMemSize. Zeroing the
+        // dimensions also suppresses any base subtraction. Bitmap Release is
+        // deliberately unconditional: AsSingleTexture has already nulled it
+        // on the converted route, preserving the native null-dereference edge.
         internalW = 0;
         internalH = 0;
         ClearTextureCache();
@@ -1371,6 +1399,9 @@ public:
     }
 
     void AsSingleTexture() {
+        // This is a non-transactional state transition: discard cached names
+        // before allocation/resize, then release Bitmap before the replacement
+        // GL name exists. Native EH cleans the cv::Mat wrappers but not tmp.
         ClearTextureCache();
         internalW = Bitmap->GetWidth(), internalH = Bitmap->GetHeight();
         if(internalW > GetMaxTextureWidth()) {
@@ -1382,6 +1413,8 @@ public:
             internalH = GetMaxTextureHeight();
         }
 
+        // Always resize through four-channel storage, even for Gray/RGB. The
+        // final GL upload still selects its format from the original Format.
         unsigned char *tmp = new unsigned char[internalW * internalH * 4];
 #ifndef KRKR2_NO_OPENCV
         cv::Size dsize(internalW, internalH);
@@ -1446,6 +1479,9 @@ public:
         glTexImage2D(GL_TEXTURE_2D, 0, internalfmt, internalW, internalH, 0,
                      pixfmt, GL_UNSIGNED_BYTE, tmp);
 
+        // Do not add this single name to _totalVMemSize. The split destructor
+        // also zeros dimensions before the base destructor, so it remains
+        // wholly unaccounted, exactly as in all four references.
         delete[] tmp;
     }
 
@@ -2360,6 +2396,9 @@ class tTVPOGLRenderMethod_BoxBlur : public tTVPOGLRenderMethod_Script {
 };
 
 bool tTVPOGLTexture2D::RestoreNormalSize() {
+    // This is a non-transactional GPU-name replacement, not a CPU readback.
+    // PixelData, logical Width/Height and Format all remain untouched.  The
+    // strict max-size rejection happens before a new name is allocated.
     tjs_uint w = internalW / _scaleW, h = internalH / _scaleH;
     if(w < GetMaxTextureWidth() && h < GetMaxTextureHeight()) {
         GLuint newtex;
@@ -2373,6 +2412,10 @@ bool tTVPOGLTexture2D::RestoreNormalSize() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         GLfloat minx = -1, maxx = 1, miny = -1, maxy = 1;
+        // Keep both function-local statics in this source form.  Naming the
+        // ordinary local floats gives vertices a guarded dynamic initializer;
+        // method is a separate guarded raw-pointer cache and is never refreshed
+        // if the process-wide render manager later changes.
         static const GLfloat vertices[12] = { minx, miny, maxx,
                                               miny, minx, maxy,
 
@@ -2400,6 +2443,9 @@ bool tTVPOGLTexture2D::RestoreNormalSize() {
         glDrawArrays(GL_TRIANGLES, 0, 6);
         CHECK_GL_ERROR_DEBUG();
 
+        // The fresh name has no rollback owner before this point: an escaping
+        // method lookup/ApplyVertex allocation leaks it and can leave the FBO
+        // cache targeting it.  After the draw, commit in this exact order.
         _totalVMemSize -= internalW * internalH * getPixelSize();
         cocos2d::GL::deleteTexture(texture);
 
@@ -2418,7 +2464,13 @@ bool tTVPOGLTexture2D::RestoreNormalSize() {
 }
 
 const void *tTVPOGLTexture2D::GetScanLineForRead(tjs_uint l) {
+    // Refresh the countdown even when a cached PixelData buffer is returned or
+    // the scale restoration fails.  Existing PixelData bypasses restoration;
+    // RestoreNormalSize itself never refreshes or clears that buffer.
     PixelDataCounter = 5;
+    // Android arm64 and both iOS references test both axes here.  Android
+    // armv7 emits a scaleW-only gate; keep the three-target shared source shape
+    // and record that platform/version divergence in the four-binary report.
     if(_scaleW == 1.f && _scaleH == 1.f) {
         if(!PixelData) {
             PixelData = new unsigned char[internalW * internalH * 4];
@@ -2440,6 +2492,8 @@ const void *tTVPOGLTexture2D::GetScanLineForRead(tjs_uint l) {
     } else {
         if(!PixelData) {
             if(RestoreNormalSize())
+                // This remains a virtual recursive dispatch in all four
+                // references; a derived GetScanLineForRead override can win.
                 return GetScanLineForRead(l); // route of 1:1 size
             return nullptr;
         }

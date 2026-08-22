@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cmath>
 #include <iterator>
+#include <memory>
 #include <mutex>
 
 #include <spdlog/spdlog.h>
@@ -20,149 +21,19 @@
 
 #include "tjsArray.h"
 #include "tjsDictionary.h"
+#include "ScriptMgnIntf.h"
 
 #define LOGGER spdlog::get("plugin")
 
 namespace motion::detail {
 
-    // MotionNode_destroy_guess @0x6F4C8C: the persistent render item is owned
-    // by the node and is destroyed before the node's remaining C++ members.
+    // All four current references destroy the persistent render item first,
+    // delete it, clear the node slot, and only then destroy the node suffix.
     MotionNode::~MotionNode() {
         delete preparedRenderItem;
         preparedRenderItem = nullptr;
     }
 
-    MotionNode &MotionNode::operator=(const MotionNode &sourceNode) {
-        if(this == &sourceNode) {
-            return *this;
-        }
-
-#define COPY_NODE_MEMBER(name) name = sourceNode.name
-        COPY_NODE_MEMBER(index);
-        COPY_NODE_MEMBER(parentIndex);
-        COPY_NODE_MEMBER(layerId1);
-        COPY_NODE_MEMBER(layerId2);
-        COPY_NODE_MEMBER(nodeType);
-        COPY_NODE_MEMBER(coordinateMode);
-        COPY_NODE_MEMBER(inheritFlags);
-        COPY_NODE_MEMBER(flags);
-        COPY_NODE_MEMBER(joinTarget);
-        COPY_NODE_MEMBER(groundCorrection);
-        COPY_NODE_MEMBER(tjsLayerObject);
-        std::copy(std::begin(sourceNode.transformOrder),
-                  std::end(sourceNode.transformOrder),
-                  std::begin(transformOrder));
-        COPY_NODE_MEMBER(layerName);
-        COPY_NODE_MEMBER(meshType);
-        COPY_NODE_MEMBER(meshFlags);
-        COPY_NODE_MEMBER(meshDivision);
-        COPY_NODE_MEMBER(meshDivX);
-        COPY_NODE_MEMBER(meshDivY);
-        COPY_NODE_MEMBER(objTriPriority);
-        COPY_NODE_MEMBER(parameterizeIndex);
-        COPY_NODE_MEMBER(parameterEntry);
-        COPY_NODE_MEMBER(meshInvM11);
-        COPY_NODE_MEMBER(meshInvM12);
-        COPY_NODE_MEMBER(meshInvM21);
-        COPY_NODE_MEMBER(meshInvM22);
-        COPY_NODE_MEMBER(meshInvOffX);
-        COPY_NODE_MEMBER(meshInvOffY);
-        COPY_NODE_MEMBER(hasMeshData);
-        COPY_NODE_MEMBER(stencilCompositeMaskReferenced);
-        COPY_NODE_MEMBER(meshCombineEnabled);
-        COPY_NODE_MEMBER(stencilTypeBase);
-        COPY_NODE_MEMBER(stencilType);
-        COPY_NODE_MEMBER(currentFrameType);
-        COPY_NODE_MEMBER(meshControlPoints);
-        COPY_NODE_MEMBER(compositeMeshPoints);
-        COPY_NODE_MEMBER(transformedMeshControlPoints);
-        COPY_NODE_MEMBER(frameListVariant);
-        COPY_NODE_MEMBER(emoteEditVariant);
-        COPY_NODE_MEMBER(particleMotionListVariant);
-        COPY_NODE_MEMBER(stencilCompositeMaskLayerListVariant);
-        COPY_NODE_MEMBER(priorDraw);
-        slots[0] = sourceNode.slots[0];
-        slots[1] = sourceNode.slots[1];
-        COPY_NODE_MEMBER(activeSlotIndex);
-        COPY_NODE_MEMBER(timelineEvalRatio);
-        COPY_NODE_MEMBER(delta);
-        COPY_NODE_MEMBER(accumulated);
-        COPY_NODE_MEMBER(prevPosX);
-        COPY_NODE_MEMBER(prevPosY);
-        COPY_NODE_MEMBER(prevPosZ);
-
-        // MotionNode_copy@0x6F468C intentionally omits preparedRenderItem.
-        COPY_NODE_MEMBER(drawFlag);
-        COPY_NODE_MEMBER(drawnThisFrame);
-        COPY_NODE_MEMBER(forceVisible);
-        COPY_NODE_MEMBER(visibleAncestorIndex);
-        COPY_NODE_MEMBER(stencilCompositeMaskNodes);
-        COPY_NODE_MEMBER(childPlayerVar);
-        COPY_NODE_MEMBER(particleArrayVar);
-        COPY_NODE_MEMBER(shapeType);
-        std::copy(std::begin(sourceNode.shapeAABB),
-                  std::end(sourceNode.shapeAABB), std::begin(shapeAABB));
-        COPY_NODE_MEMBER(shapeGeomType);
-        std::copy(std::begin(sourceNode.shapeVertices),
-                  std::end(sourceNode.shapeVertices),
-                  std::begin(shapeVertices));
-        COPY_NODE_MEMBER(vertexPosX);
-        COPY_NODE_MEMBER(vertexPosY);
-        COPY_NODE_MEMBER(vertexPosZ);
-        std::copy(std::begin(sourceNode.vertices),
-                  std::end(sourceNode.vertices), std::begin(vertices));
-        std::copy(std::begin(sourceNode.bounds),
-                  std::end(sourceNode.bounds), std::begin(bounds));
-        COPY_NODE_MEMBER(source);
-        COPY_NODE_MEMBER(cameraFov);
-        COPY_NODE_MEMBER(anchorType);
-        COPY_NODE_MEMBER(feedbackTimespan);
-        COPY_NODE_MEMBER(anchorOpaScale);
-        std::copy(std::begin(sourceNode.anchorColorScale),
-                  std::end(sourceNode.anchorColorScale),
-                  std::begin(anchorColorScale));
-        COPY_NODE_MEMBER(cameraConstraintType);
-        std::copy(std::begin(sourceNode.particleInterp),
-                  std::end(sourceNode.particleInterp),
-                  std::begin(particleInterp));
-        COPY_NODE_MEMBER(particleType);
-        COPY_NODE_MEMBER(particleMaxNum);
-        COPY_NODE_MEMBER(particleAccelRatio);
-        COPY_NODE_MEMBER(particleInheritAngle);
-        COPY_NODE_MEMBER(particleInheritVelocity);
-        COPY_NODE_MEMBER(particleFlyDirection);
-        COPY_NODE_MEMBER(particleApplyZoomToVelocity);
-        COPY_NODE_MEMBER(particleDeleteOutside);
-        COPY_NODE_MEMBER(particleTriVolume);
-        COPY_NODE_MEMBER(prevM11);
-        COPY_NODE_MEMBER(prevM21);
-        COPY_NODE_MEMBER(prevM12);
-        COPY_NODE_MEMBER(prevM22);
-        COPY_NODE_MEMBER(prevParticleAngle);
-        COPY_NODE_MEMBER(emitterTimerAccum);
-        COPY_NODE_MEMBER(particleEmitterFlagActive);
-        COPY_NODE_MEMBER(emitterActive);
-        COPY_NODE_MEMBER(emitterTimer);
-        COPY_NODE_MEMBER(emitterDtgt);
-        COPY_NODE_MEMBER(emitterOffsetActive);
-        COPY_NODE_MEMBER(emitterOffsetX);
-        COPY_NODE_MEMBER(emitterOffsetY);
-        COPY_NODE_MEMBER(emitterOffsetZ);
-        COPY_NODE_MEMBER(deltaPosX);
-        COPY_NODE_MEMBER(deltaPosY);
-        COPY_NODE_MEMBER(deltaPosZ);
-        COPY_NODE_MEMBER(clipOriginX);
-        COPY_NODE_MEMBER(clipOriginY);
-        COPY_NODE_MEMBER(clipAABB);
-        COPY_NODE_MEMBER(meshAncestor);
-        COPY_NODE_MEMBER(anchorEnabled);
-        std::copy(std::begin(sourceNode.colorBytes),
-                  std::end(sourceNode.colorBytes), std::begin(colorBytes));
-        COPY_NODE_MEMBER(prtTrigger);
-#undef COPY_NODE_MEMBER
-
-        return *this;
-    }
     tjs_uint32 widthMemberHint_guess = 0;
     tjs_uint32 heightMemberHint_guess = 0;
     tjs_uint32 originXMemberHint_guess = 0;
@@ -175,29 +46,178 @@ namespace motion::detail {
     tjs_uint32 bottomMemberHint_guess = 0;
     tjs_uint32 xMemberHint_guess = 0;
     tjs_uint32 yMemberHint_guess = 0;
+    tjs_uint32 positionControlTMemberHint_guess = 0;
+    tjs_uint32 positionControlSMemberHint_guess = 0;
+    tjs_uint32 controllerPhaseHint_guess = 0;
+    tjs_uint32 controllerFrameHint_guess = 0;
+    tjs_uint32 controllerVHint_guess = 0;
+    tjs_uint32 controllerTargetHint_guess = 0;
+    tjs_uint32 controllerLengthHint_guess = 0;
+    tjs_uint32 controllerLengthDoneHint_guess = 0;
+    tjs_uint32 controllerExponentHint_guess = 0;
+    tjs_uint32 controllerSpeedHint_guess = 0;
+    tjs_uint32 controllerRequestQueueHint_guess = 0;
+    tjs_uint32 controllerP0Hint_guess = 0;
+    tjs_uint32 controllerP1Hint_guess = 0;
+    tjs_uint32 controllerMouthHint_guess = 0;
+    tjs_uint32 controllerPrevHint_guess = 0;
+    tjs_uint32 controllerTickHint_guess = 0;
+    tjs_uint32 emoteControllerBeginFrameHint_guess = 0;
+    tjs_uint32 emoteControllerEndFrameHint_guess = 0;
+    tjs_uint32 emoteControllerBlinkIntervalMinHint_guess = 0;
+    tjs_uint32 emoteControllerBlinkIntervalMaxHint_guess = 0;
+    tjs_uint32 emoteControllerBlinkFrameCountHint_guess = 0;
+    tjs_uint32 emoteControllerBlinkEnabledHint_guess = 0;
+    tjs_uint32 emoteControllerEdgeHint_guess = 0;
+    tjs_uint32 emoteControllerNodeHint_guess = 0;
+    tjs_uint32 emoteVariableRangeMinHint_guess = 0;
+    tjs_uint32 emoteVariableRangeMaxHint_guess = 0;
+    tjs_uint32 emoteSpringGravityHint_guess = 0;
+    tjs_uint32 emoteSpringCoefficientHint_guess = 0;
+    tjs_uint32 emoteSpringFrictionHint_guess = 0;
+    tjs_uint32 emoteSpringScaleXHint_guess = 0;
+    tjs_uint32 emoteSpringScaleYHint_guess = 0;
+    tjs_uint32 emoteBustChainFrictionXHint_guess = 0;
+    tjs_uint32 emoteBustChainFrictionYHint_guess = 0;
+    tjs_uint32 emoteBustChainBRateHint_guess = 0;
+    tjs_uint32 emoteBustChainVBoundHint_guess = 0;
+    tjs_uint32 emoteBustChainUdEftHint_guess = 0;
+    tjs_uint32 emoteBustChainBendSpdHint_guess = 0;
+    tjs_uint32 emoteBustChainBendVolHint_guess = 0;
+    // One native mutable word backs the descriptor-key reader and every
+    // render/serialization publisher; keep its address identity process-wide.
+    // The reference BSS places an ABI-aligned OwnerFilter std::function after
+    // this word rather than the next declaration below, so do not treat this
+    // portable consolidation order as recovered native adjacency.
     tjs_uint32 commandKeyMemberHint_guess = 0;
-    tjs_uint32 commandIdMemberHint_guess = 0;
-    tjs_uint32 commandSrcMemberHint_guess = 0;
-    tjs_uint32 coordinateMemberHint_guess = 0;
-    tjs_uint32 opacityMemberHint_guess = 0;
-    tjs_uint32 blendModeMemberHint_guess = 0;
-    tjs_uint32 coordMemberHint_guess = 0;
     tjs_uint32 mtxMemberHint_guess = 0;
-    tjs_uint32 colorMemberHint_guess = 0;
     tjs_uint32 triPriorityMemberHint_guess = 0;
     tjs_uint32 clipRectMemberHint_guess = 0;
     tjs_uint32 meshTransformMemberHint_guess = 0;
-    tjs_uint32 bezierPatchMemberHint_guess = 0;
     tjs_uint32 compositeMeshMemberHint_guess = 0;
     tjs_uint32 stencilChainMemberHint_guess = 0;
-    tjs_uint32 patchMemberHint_guess = 0;
-    tjs_uint32 divisionMemberHint_guess = 0;
     tjs_uint32 vtxMemberHint_guess = 0;
     tjs_uint32 divxMemberHint_guess = 0;
     tjs_uint32 divyMemberHint_guess = 0;
+    tjs_uint32 timeMemberHint_guess = 0;
     tjs_uint32 typeMemberHint_guess = 0;
+    tjs_uint32 contentMemberHint_guess = 0;
+    tjs_uint32 maskMemberHint_guess = 0;
+    tjs_uint32 actMemberHint_guess = 0;
+    tjs_uint32 srcMemberHint_guess = 0;
+    tjs_uint32 nodeFrameOxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameOyMemberHint_guess = 0;
+    tjs_uint32 coordMemberHint_guess = 0;
+    tjs_uint32 nodeFrameBmMemberHint_guess = 0;
+    tjs_uint32 colorMemberHint_guess = 0;
+    tjs_uint32 nodeFrameOpaMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFyMemberHint_guess = 0;
+    tjs_uint32 angleMemberHint_guess = 0;
+    tjs_uint32 nodeFrameZxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameZyMemberHint_guess = 0;
+    tjs_uint32 nodeFrameSxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameSyMemberHint_guess = 0;
+    tjs_uint32 nodeFrameTiMemberHint_guess = 0;
+    tjs_uint32 nodeFrameCccMemberHint_guess = 0;
+    tjs_uint32 nodeFrameOccMemberHint_guess = 0;
+    tjs_uint32 nodeFrameAccMemberHint_guess = 0;
+    tjs_uint32 nodeFrameZccMemberHint_guess = 0;
+    tjs_uint32 nodeFrameSccMemberHint_guess = 0;
+    tjs_uint32 nodeFrameCpMemberHint_guess = 0;
     tjs_uint32 meshMemberHint_guess = 0;
+    tjs_uint32 nodeFrameObjMemberHint_guess = 0;
+    tjs_uint32 nodeFrameCcMemberHint_guess = 0;
+    tjs_uint32 nodeFrameMccMemberHint_guess = 0;
+    tjs_uint32 nodeFrameBpMemberHint_guess = 0;
+    tjs_uint32 bezierPatchMemberHint_guess = 0;
+    tjs_uint32 motionMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFlagsMemberHint_guess = 0;
+    tjs_uint32 nodeFrameDtMemberHint_guess = 0;
+    tjs_uint32 nodeFrameDocmplMemberHint_guess = 0;
+    tjs_uint32 nodeFrameDofstMemberHint_guess = 0;
+    tjs_uint32 nodeFrameDtgtMemberHint_guess = 0;
+    tjs_uint32 nodeFrameTimeOffsetMemberHint_guess = 0;
+    tjs_uint32 nodeFrameModelMemberHint_guess = 0;
+    tjs_uint32 nodeFrameLoopMemberHint_guess = 0;
+    tjs_uint32 nodeFramePrtMemberHint_guess = 0;
+    tjs_uint32 nodeFrameTriggerMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFminMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFmaxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameVminMemberHint_guess = 0;
+    tjs_uint32 nodeFrameVmaxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameAminMemberHint_guess = 0;
+    tjs_uint32 nodeFrameAmaxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameZminMemberHint_guess = 0;
+    tjs_uint32 nodeFrameZmaxMemberHint_guess = 0;
+    tjs_uint32 nodeFrameRangeMemberHint_guess = 0;
+    tjs_uint32 nodeFrameCameraMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFovMemberHint_guess = 0;
+    tjs_uint32 nodeFrameTargetMemberHint_guess = 0;
+    tjs_uint32 nodeFrameAnchorMemberHint_guess = 0;
+    tjs_uint32 nodeFrameFeedbackMemberHint_guess = 0;
+    tjs_uint32 nodeFrameTimespanMemberHint_guess = 0;
+    tjs_uint32 requestCharaMemberHint_guess = 0;
+    tjs_uint32 onFindMotionMemberHint_guess = 0;
+    tjs_uint32 findMotionMemberHint_guess = 0;
+    tjs_uint32 commandIdMemberHint_guess = 0;
+    tjs_uint32 playerParameterDiscretizationHint_guess = 0;
+    tjs_uint32 playerParameterRangeBeginHint_guess = 0;
+    tjs_uint32 playerParameterRangeEndHint_guess = 0;
+    tjs_uint32 divisionMemberHint_guess = 0;
+    tjs_uint32 motionListMemberHint_guess = 0;
+    tjs_uint32 nodeEmoteEditMemberHint_guess = 0;
+    tjs_uint32 nodeLabelMemberHint_guess = 0;
+    tjs_uint32 parameterizeMemberHint_guess = 0;
+    tjs_uint32 coordinateMemberHint_guess = 0;
+    tjs_uint32 nodeJoinTargetMemberHint_guess = 0;
+    tjs_uint32 nodeGroundCorrectionMemberHint_guess = 0;
+    tjs_uint32 nodeFrameListMemberHint_guess = 0;
+    tjs_uint32 nodeInheritMaskMemberHint_guess = 0;
+    tjs_uint32 nodeTransformOrderMemberHint_guess = 0;
+    tjs_uint32 nodeRequireLayerIdMemberHint_guess = 0;
+    tjs_uint32 emoteEditModifiedHint_guess = 0;
+    tjs_uint32 onGroundCorrectionMemberHint_guess = 0;
+    tjs_uint32 emoteEditPriorDrawMemberHint_guess = 0;
+    tjs_uint32 emoteEditFlipXMemberHint_guess = 0;
+    tjs_uint32 emoteEditFlipYMemberHint_guess = 0;
+    tjs_uint32 emoteEditZoomXMemberHint_guess = 0;
+    tjs_uint32 emoteEditZoomYMemberHint_guess = 0;
+    tjs_uint32 emoteEditSlantXMemberHint_guess = 0;
+    tjs_uint32 particleArrayAddMemberHint_guess = 0;
+    tjs_uint32 particleArrayEraseMemberHint_guess = 0;
     tjs_uint32 loadSourceMemberHint_guess = 0;
+    tjs_uint32 blendModeMemberHint_guess = 0;
+    tjs_uint32 assignImagesMemberHint_guess = 0;
+    tjs_uint32 onSyncMemberHint_guess = 0;
+    tjs_uint32 onActionMemberHint_guess = 0;
+    tjs_uint32 meshCopyMemberHint_guess = 0;
+    tjs_uint32 bezierPatchCopyMemberHint_guess = 0;
+    tjs_uint32 affineCopyMemberHint_guess = 0;
+    tjs_uint32 setClipMemberHint_guess = 0;
+    tjs_uint32 bufLayerMemberHint_guess = 0;
+    tjs_uint32 operateMeshMemberHint_guess = 0;
+    tjs_uint32 operateBezierPatchMemberHint_guess = 0;
+    tjs_uint32 operateAffineMemberHint_guess = 0;
+    tjs_uint32 drawMeshFrameMemberHint_guess = 0;
+    tjs_uint32 drawBezierPatchMeshFrameMemberHint_guess = 0;
+    tjs_uint32 drawBezierPatchFrameMemberHint_guess = 0;
+    tjs_uint32 drawLineMemberHint_guess = 0;
+    tjs_uint32 visibleMemberHint_guess = 0;
+    tjs_uint32 setPosMemberHint_guess = 0;
+    tjs_uint32 opacityMemberHint_guess = 0;
+    tjs_uint32 isValidMemberHint_guess = 0;
+    tjs_uint32 parameterMemberHint_guess = 0;
+    tjs_uint32 releaseLayerIdMemberHint_guess = 0;
+    tjs_uint32 windowMemberHint_guess = 0;
+    tjs_uint32 piledCopyMemberHint_guess = 0;
+    tjs_uint32 randomMemberHint_guess = 0;
+    tjs_uint32 calcMbpMemberHint_guess = 0;
+    tjs_uint32 calcInvOffsetMemberHint_guess = 0;
+    tjs_uint32 calcInvMatrixMemberHint_guess = 0;
+    tjs_uint32 patchMemberHint_guess = 0;
+    tjs_uint32 calcCmeshMemberHint_guess = 0;
+    tjs_uint32 calcMatrixMemberHint_guess = 0;
     tjs_uint32 drawLayerMemberHint_guess = 0;
     tjs_uint32 setSizeMemberHint_guess = 0;
     tjs_uint32 copyRectMemberHint_guess = 0;
@@ -206,14 +226,32 @@ namespace motion::detail {
     tjs_uint32 primaryLayerMemberHint_guess = 0;
     tjs_uint32 fillRectMemberHint_guess = 0;
     tjs_uint32 neutralColorMemberHint_guess = 0;
-    tjs_uint32 windowMemberHint_guess = 0;
-    tjs_uint32 piledCopyMemberHint_guess = 0;
-    tjs_uint32 assignImagesMemberHint_guess = 0;
+    tjs_uint32 updateMemberHint_guess = 0;
+    tjs_uint32 positionControlPMemberHint_guess = 0;
     tjs_uint32 layerClassMemberHint_guess = 0;
-    tjs_uint32 meshCopyMemberHint_guess = 0;
-    tjs_uint32 bezierPatchCopyMemberHint_guess = 0;
-    tjs_uint32 affineCopyMemberHint_guess = 0;
-    tjs_uint32 bufLayerMemberHint_guess = 0;
+    tjs_uint32 absoluteMemberHint_guess = 0;
+    tjs_uint32 hitThresholdMemberHint_guess = 0;
+
+    tTJSVariant createLayerVariant_guess(
+        const tTJSVariant &owner, const tTJSVariant &parent) {
+        // The references keep both factory outputs as raw locals. CreateNew's
+        // status is ignored, and no null check or scope guard is present: a
+        // normal failure that leaves created null reaches created->Release(),
+        // while an exception from CreateNew leaks the acquired global ref.
+        iTJSDispatch2 *global = TVPGetScriptDispatch();
+        iTJSDispatch2 *created = nullptr;
+        tTJSVariant *args[] = {
+            const_cast<tTJSVariant *>(&owner),
+            const_cast<tTJSVariant *>(&parent)
+        };
+        (void)global->CreateNew(
+            0, TJS_W("Layer"), &layerClassMemberHint_guess,
+            &created, 2, args, global);
+        tTJSVariant result(created, created);
+        created->Release();
+        global->Release();
+        return result;
+    }
 
     namespace {
 
@@ -280,26 +318,11 @@ namespace motion::detail {
                 }
             }) != 0;
 #else
-            // libkrkr2.so (Android original) has no logo chain trace feature.
-            // Verified via IDA Pro MCP:
-            //   - No "tracelogochain" / "snaplogo" / "logoChain*" strings in
-            //     either UTF-8 or UTF-16LE encoding (ida-search-string skill
-            //     scan across all segments).
-            //   - EmoteObject_init at 0x67DBAC (the PSB load entry) contains
-            //     zero spdlog/LOGGER calls and zero conditional-trace branches
-            //     in its full 1632-byte body.
-            //   - libkrkr2.so's only command-line query helper is sub_90DA50
-            //     (the equivalent of the named-arg TVPGetCommandLine). The
-            //     string pool contains -forcelog / -lowpri / -laxtimer as
-            //     query targets, but not -tracelogochain, so no function in
-            //     libkrkr2.so ever issues a sub_90DA50(L"-tracelogochain", _)
-            //     call. Introducing one here would add a call-site that does
-            //     not exist in the original binary.
-            //
-            // The whole logoChainTrace* subsystem (added in commit 0830b84)
-            // is a pure-logging local debug path, preserved on the EMSCRIPTEN
-            // side only. For non-EMSCRIPTEN builds the aligned behavior is to
-            // never enable it.
+            // The four current native references expose no logo-chain trace or
+            // snapshot switch. Three-encoding searches find none of the Web
+            // sidecar's names, and their load/construct paths have no matching
+            // trace, path-formatting or logger data flow. Keep this opt-in
+            // diagnostic strictly Web-only; native builds always disable it.
             return false;
 #endif
         }
@@ -320,9 +343,7 @@ namespace motion::detail {
                 }
             }) != 0;
 #else
-            // Same rationale as logoTraceQueryEnabled above: verified absent
-            // from libkrkr2.so, non-EMSCRIPTEN builds stay aligned by never
-            // enabling the snapshot feature.
+            // Same Web-only sidecar boundary as logoTraceQueryEnabled above.
             return false;
 #endif
         }
@@ -349,103 +370,97 @@ namespace motion::detail {
 
     } // namespace
 
-    // A8: nodes / nodeLabelMap moved to Player. These helpers now take the
-    // Player so they can mutate the migrated containers while the still-
-    // PlayerRuntime renderItem lifetime map (A9 target) is reached via
-    // player._runtime.
-    void ensureRootNodeLike_0x6CED30(Player &player) {
+    void ensureRootNode_guess(Player &player) {
         if(!player._nodes.empty()) {
-            player._nodes.front().index = 0;
-            player._nodes.front().parentIndex = -1;
             return;
         }
         player._nodes.emplace_back();
         player._nodes.back().index = 0;
-        player._nodes.back().parentIndex = -1;
+        player._nodes.back().parentIndex = 0;
     }
 
-    void resetNodeTreeKeepRootLike_0x6B56F8(Player &player) {
-        ensureRootNodeLike_0x6CED30(player);
-        auto &root = player._nodes.front();
-        root.index = 0;
-        root.parentIndex = -1;
-        if(player._nodes.size() > 1) {
-            for(auto it = std::next(player._nodes.begin());
-                it != player._nodes.end(); ++it) {
-                auto &node = *it;
-                if(node.preparedRenderItem &&
-                   node.preparedRenderItem->rawFlag20) {
-                    player.dispatchReleaseLayerId(
-                        node.preparedRenderItem->renderLayerId);
+    bool visitNodeOwnedPlayerVariants_guess(
+        const std::deque<MotionNode> &nodes,
+        const std::function<bool(const tTJSVariant &)> &visitor) {
+        struct DispatchRelease {
+            void operator()(iTJSDispatch2 *dispatch) const {
+                if(dispatch) {
+                    dispatch->Release();
                 }
             }
-            // sub_6B56F8 delegates the non-root suffix to the deque range-erase
-            // helper; MotionNode::~MotionNode owns render-item destruction.
+        };
+
+        for(const MotionNode &node : nodes) {
+            if(node.nodeType == 4) {
+                tTJSVariant arrayVariant(node.particleArrayVar);
+                std::unique_ptr<iTJSDispatch2, DispatchRelease> array(
+                    arrayVariant.AsObject());
+                arrayVariant.Clear();
+
+                tTJSVariant countValue;
+                (void)array->PropGet(
+                    0, TJS_W("count"), nullptr,
+                    &countValue, array.get());
+                const int count =
+                    static_cast<int>(countValue.AsInteger());
+                for(int index = 0; index < count; ++index) {
+                    tTJSVariant child;
+                    // This constant zero is intentional. All four references
+                    // increment the loop counter but repeatedly fetch element 0.
+                    (void)array->PropGetByNum(
+                        0, 0, &child, array.get());
+                    if(!visitor(child)) {
+                        return false;
+                    }
+                }
+            } else if(node.nodeType == 3) {
+                if(!visitor(node.childPlayerVar)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void eraseNonRootNodesAndClearLabelMap_guess(Player &player) {
+        if(player._nodes.size() > 1) {
             player._nodes.erase(std::next(player._nodes.begin()),
                                 player._nodes.end());
         }
         player._nodeLabelMap.clear();
     }
 
-    // Aligned with libkrkr2.so Player_buildNodePathKey @0x6B5C1C.
-    //
-    // Binary pseudocode (0x6B5C48..0x6B5DCC):
-    //   *a3 = nullptr; accumulated = nullptr;
-    //   while ( nodeIndex ) {                        // 0 == synthetic root → stop
-    //     node = deque_at(nodeIndex);                // 2632-byte stride
-    //     segment = ttstr("/") + *(node+0);          // sub_A0CC68(out,"/",node)
-    //                                                 //   *(node+0) = label ttstr
-    //     accumulated = segment + accumulated;       // sub_A1359C(segment, acc)
-    //     nodeIndex = *(node+36);                    // parentIndex
-    //   }
-    //   return accumulated;
-    //
-    // Each segment is the node's "label" prefixed with '/'. Newer (more
-    // ancestral) segments are prepended, yielding "/top/.../self". The
-    // synthetic root at index 0 contributes nothing. Empty labels still emit a
-    // bare "/" segment, exactly as the binary's concat path does (it does not
-    // skip empty names).
-    //
-    // This ttstr path is HM3's key (_perNodeLayerStateMap, Player+1184) — the
-    // only consumer of this builder (xrefs_to(0x6B5C1C) = 2 callers, both
-    // HM3). It is NOT the Player+24 node-index map key; that map uses the raw
-    // PSB label (see NodeTree.cpp).
-    ttstr buildNodePathKeyLike_0x6B5C1C(
+    ttstr buildNodePathKey_guess(
         const std::deque<motion::detail::MotionNode> &nodes, int nodeIndex) {
         ttstr accumulated;
-        // 0x6B5C54: `if ( a2 )` — index 0 (root) produces an empty key.
         while(nodeIndex) {
-            if(nodeIndex < 0 || nodeIndex >= static_cast<int>(nodes.size())) {
-                break;
-            }
             const motion::detail::MotionNode &node =
                 nodes[static_cast<size_t>(nodeIndex)];
-            // segment = "/" + label  (sub_A0CC68(out, L"/", node))
             const ttstr segment = ttstr(TJS_W("/")) + node.layerName;
-            // accumulated = segment + accumulated  (sub_A1359C(segment, acc))
             accumulated = segment + accumulated;
-            // 0x6B5D98: a2 = *(node+36) = parentIndex; loop while ( a2 ).
             nodeIndex = node.parentIndex;
         }
         return accumulated;
     }
-
-    // A10: makePlayerRuntime() deleted along with the now-empty PlayerRuntime
-    // struct. Player's constructor invokes ensureRootNodeLike_0x6CED30(*this)
-    // directly to seed the root node.
 
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
 
     ttstr widen(const std::string &value) { return ttstr{ value }; }
 
     TJSArrayWithItems_guess createTJSArrayWithItems_guess() {
-        // sub_704CB8 @ 0x704CB8 returns an owning Array Variant together with
-        // a non-owning pointer to tTJSArrayNI::Items.  The Variant keeps that
-        // deque alive; the native instance itself is not retained separately.
+        // All four current references return an owning Array closure together
+        // with a non-owning pointer to tTJSArrayNI::Items.  Object and ObjThis
+        // are the same dispatch, so the Variant constructor performs two
+        // AddRefs; releasing the factory reference leaves those closure refs
+        // as the owner.  The native instance is not retained separately.
         iTJSDispatch2 *dispatch = TJSCreateArrayObject();
         const tTJSVariant value(dispatch, dispatch);
         dispatch->Release();
 
+        // The native output slot is intentionally not pre-zeroed. References
+        // publish the tTJSArrayNI::Items subobject only on the exact zero
+        // result; every nonzero status publishes nullptr without inspecting
+        // the returned native instance.
         tTJSArrayNI *native;
         const tjs_error status = dispatch->NativeInstanceSupport(
             TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
@@ -496,17 +511,6 @@ namespace motion::detail {
 
     bool logoSnapshotMarkEnabledForPath(const std::string &motionPath) {
         return logoSnapshotMarkEnabled() && isTargetLogoMotionPath(motionPath);
-    }
-
-    void resetLogoChainTraceSession(const std::string &motionPath) {
-        if(!logoChainTraceEnabledForPath(motionPath)) {
-            return;
-        }
-        std::lock_guard lock(logoTraceMutex());
-        auto &session = ensureLogoTraceSessionLocked(motionPath);
-        session = {};
-        session.motionPath = motionPath;
-        session.motionName = basename(motionPath);
     }
 
     void logoChainTraceLog(const std::string &motionPath,

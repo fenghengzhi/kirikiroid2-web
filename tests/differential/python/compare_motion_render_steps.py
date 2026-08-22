@@ -56,8 +56,8 @@ EXPECTED_STAGE_KIND_SEQUENCES = {
     "render_prepare": (
         "prepare_enter",
         "prepare_leave",
-        "apply_translate_enter",
-        "apply_translate_leave",
+        "apply_projection_enter",
+        "apply_projection_leave",
     ),
 }
 

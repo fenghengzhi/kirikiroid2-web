@@ -3,7 +3,7 @@
 Prototype (decompiled):
     __int64 Player_hitTest(double *hd, double x, double y);
 
-hd points to HitData = {int32 type; int32 pad; double values[16];}.
+hd points to HitData = {int32 type; ABI padding; double values[15];}.
 Circle: values[0..2] = cx, cy, r
 Rect:   values[3..6] = left, top, right, bottom
 Quad:   values[7..14] = x0, y0, x1, y1, x2, y2, x3, y3
@@ -19,7 +19,7 @@ PLAYER_HIT_TEST_OFFSET = 0x690DF0
 
 def _flatten_shape(shape: dict) -> tuple[int, list[float]]:
     kind = shape["kind"]
-    values = [0.0] * 16
+    values = [0.0] * 15
     if kind == "circle":
         type_id = int(shape.get("type_override", 1))
         values[0] = float(shape["cx"])

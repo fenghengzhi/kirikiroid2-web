@@ -474,6 +474,9 @@ tTVPNativeBaseBitmap::tTVPNativeBaseBitmap(
     FontChanged = true;
     GlobalFontState = -1;
     TextWidth = TextHeight = 0;
+    // Bitmap is intentionally not initialized here. Concrete texture/bitmap
+    // constructors assign it after this base constructor returns; preserve the
+    // native partial-construction boundary rather than value-initializing it.
     // Bitmap = new tTVPBitmap(w, h, bpp);
 }
 //---------------------------------------------------------------------------
@@ -493,6 +496,9 @@ tTVPNativeBaseBitmap::tTVPNativeBaseBitmap(const tTVPNativeBaseBitmap &r) {
 }
 //---------------------------------------------------------------------------
 tTVPNativeBaseBitmap::~tTVPNativeBaseBitmap() {
+    // Bitmap final release is deferred by iTVPTexture2D::Release; destroying a
+    // tTVPBaseTexture wrapper does not synchronously delete its texture. Keep
+    // this order and do not clear either raw member before its Release call.
     if(Bitmap)
         Bitmap->Release();
     if(PrerenderedFont)

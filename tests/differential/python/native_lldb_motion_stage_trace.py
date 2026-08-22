@@ -38,9 +38,9 @@ STAGES: tuple[str, ...] = (
 PROGRESS_COMPAT_SYMBOL = "motion::Player::progressCompatMethod"
 PHASE3_LAST_SYMBOL = "motion::Player::updateLayersPhase3_AnchorNode"
 INIT_NON_EMOTE_SYMBOL = "motion::Player::initNonEmoteMotionLike_0x6B365C"
-PARSE_PARAMETER_SYMBOL = "motion::Player::appendParameterEntryLike_0x6B1718"
-PARSE_PARAMETER_LIST_SYMBOL = "motion::Player::parseParameterListLike_0x6B202C"
-BIND_PARAMETER_SYMBOL = "motion::Player::bindParameterValueLike_0x6C4668"
+PARSE_PARAMETER_SYMBOL = "motion::Player::appendParameterEntry_guess"
+PARSE_PARAMETER_LIST_SYMBOL = "motion::Player::parseParameterList_guess"
+BIND_PARAMETER_SYMBOL = "motion::Player::bindParameterValue_guess"
 EVALUATE_TIMELINE_SYMBOL = "evaluateTimelineLike_0x699AE4"
 SUB_MOTION_SYMBOL = "motion::Player::updateLayersPhase3_MotionSubNode"
 
@@ -48,10 +48,10 @@ STATIC_PARSE_PROJECTION = "static_parse-semantic-v1"
 STATIC_PARSE_SAMPLE_POINTS = {
     "init_non_emote_enter": "initNonEmoteMotionLike_0x6B365C.enter",
     "init_non_emote_leave": "initNonEmoteMotionLike_0x6B365C.leave",
-    "parse_parameter_enter": "appendParameterEntryLike_0x6B1718.enter",
-    "parse_parameter_leave": "appendParameterEntryLike_0x6B1718.leave",
-    "parse_parameter_list_enter": "parseParameterListLike_0x6B202C.enter",
-    "parse_parameter_list_leave": "parseParameterListLike_0x6B202C.leave",
+    "parse_parameter_enter": "appendParameterEntry_guess.enter",
+    "parse_parameter_leave": "appendParameterEntry_guess.leave",
+    "parse_parameter_list_enter": "parseParameterList_guess.enter",
+    "parse_parameter_list_leave": "parseParameterList_guess.leave",
 }
 
 INIT_MOTION_PROJECTION = "init-motion-semantic-v1"

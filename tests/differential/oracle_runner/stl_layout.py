@@ -50,14 +50,15 @@ def build_vector_of_inline_structs(
 
 # ---- project-specific structs ----
 
-HIT_DATA_SIZE = 4 + 4 + 16 * 8  # 136
+HIT_DATA_SIZE = 4 + 4 + 15 * 8  # 128 on Android ARM64
 
 
 def build_hit_data(heap, type_id: int, values: Sequence[float]) -> int:
-    """{int32 type; int32 pad; double values[16];} — 136 B, 8-aligned."""
-    vals = list(values) + [0.0] * (16 - len(values))
-    assert len(vals) == 16
-    payload = struct.pack("<ii16d", int(type_id), 0, *vals)
+    """{int32 type; ABI padding; double values[15];} — 128 B, 8-aligned."""
+    vals = list(values) + [0.0] * (15 - len(values))
+    assert len(vals) == 15
+    payload = struct.pack("<i4x15d", int(type_id), *vals)
+    assert len(payload) == HIT_DATA_SIZE
     return heap.write(payload, align=8)
 
 

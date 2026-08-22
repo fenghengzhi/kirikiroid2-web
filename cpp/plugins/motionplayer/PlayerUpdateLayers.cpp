@@ -7,42 +7,40 @@
 using namespace motion::internal;
 
 namespace motion {
-    // --- updateLayers: 3-phase pipeline ---
-    // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C).
+    // --- updateLayers: four-reference 3-phase pipeline ---
     // Operates on persistent MotionNode deque instead of re-walking PSB tree.
     void Player::updateLayers() {
         detail::motionTraceRecordUpdatePlayer(this);
-        // Player_updateLayers @0x6BB33C clears the producer flag before any
-        // phase can set it again. Post-draw only snapshots it; post-draw never
-        // clears the producer.
+        // Every reference clears the producer flag before any phase can set it
+        // again. Post-draw only snapshots it; post-draw never clears it.
         _needsInternalAssignImages = false;
         auto &nodes = _nodes;
-        if (nodes.empty()) return;
-        const auto motionPath = matchedMotionPath();
+        // Player construction establishes the root deque entry. All four
+        // references dereference it directly; an empty deque is not a
+        // recoverable native state.
+        std::string motionPath;
+        if(detail::logoChainTraceEnabled()) {
+            // Keep the optional Web diagnostic outside the native/default
+            // data path: materializing this Variant as text may allocate.
+            motionPath = matchedMotionPath();
+        }
         const double currentTime = _clampedEvalTime;
-
-        // Keep legacy diagnostic scratch in sync with node count. The native
-        // node+8 path is parameterEntries; do not use this as player+384.
-        if (_perNodeEvalData.size() != nodes.size()) {
-            _perNodeEvalData.resize(nodes.size());
-        }
-        for (size_t ni = 0; ni < nodes.size(); ++ni) {
-            _perNodeEvalData[ni].evalTime = _clampedEvalTime;
-        }
 
         updateLayersPhase1_PreLoop(currentTime);
         updateLayersPhase2_MainLoop(currentTime);
         if(detail::logoChainTraceEnabledForPath(motionPath)) {
             const auto &root = nodes[0];
             detail::logoChainTraceLogf(
-                motionPath, "updateLayers.phase1", "0x6BB33C", currentTime,
+                motionPath, "updateLayers.phase1", "Player::updateLayers",
+                currentTime,
                 "rootPos=({:.3f},{:.3f},{:.3f}) cameraVel=({:.3f},{:.3f},{:.3f}) damping={:.6f} variableCount={}",
                 root.accumulated.posX, root.accumulated.posY,
                 root.accumulated.posZ, _cameraVelocityX, _cameraVelocityY,
                 _cameraVelocityZ, _cameraDamping, _evalResultValues.size());
             for(const auto &[label, value] : _evalResultValues) {
                 detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase1.var", "0x6BB33C",
+                    motionPath, "updateLayers.phase1.var",
+                    "Player::updateLayers",
                     currentTime, "label={} value={:.6f}",
                     detail::narrow(label), value);
             }
@@ -55,9 +53,10 @@ namespace motion {
                 const auto &pc = hasParent ? nodes[node.parentIndex].accumulated
                                            : nodes[0].accumulated;
                 detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.node", "0x6BB33C",
+                    motionPath, "updateLayers.phase2.node",
+                    "Player::updateLayers",
                     currentTime,
-                    "nodeIndex={} label={} type={} parent={} src={} inherit=0x{:x} indep={} interp[x={:.3f},y={:.3f},ox={:.3f},oy={:.3f},w={:.3f},h={:.3f},opacity={:.6f},angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) blend={}] local[pos=({:.3f},{:.3f},{:.3f}),angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) opacity={},blend={}] parentAccum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={}] accum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={},active={},visible={}]",
+                    "nodeIndex={} label={} type={} parent={} src={} inherit=0x{:x} indep={} interp[x={:.3f},y={:.3f},ox={:.3f},oy={:.3f},opacity={:.6f},angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) blend={}] local[pos=({:.3f},{:.3f},{:.3f}),angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) opacity={}] parentAccum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={}] accum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},active={},visible={}]",
                     node.index,
                     node.layerName.IsEmpty() ? std::string("<root>")
                                              : detail::narrow(node.layerName),
@@ -68,60 +67,60 @@ namespace motion {
                     node.inheritFlags,
                     _independentLayerInherit ? 1 : 0,
                     ls.posX, ls.posY, slot.ox, slot.oy,
-                    slot.width, slot.height,
                     static_cast<double>(ls.opacity) / 255.0,
                     ls.angle, ls.scaleX, ls.scaleY, ls.slantX, ls.slantY,
                     ls.flipX ? 1 : 0, ls.flipY ? 1 : 0, slot.blendMode,
                     ls.posX, ls.posY, ls.posZ, ls.angle, ls.scaleX, ls.scaleY,
                     ls.slantX, ls.slantY, ls.flipX ? 1 : 0, ls.flipY ? 1 : 0,
-                    ls.opacity, ls.blendMode,
+                    ls.opacity,
                     pc.posX, pc.posY, pc.posZ, pc.scaleX, pc.scaleY,
                     pc.slantX, pc.slantY, pc.m11, pc.m12, pc.m21, pc.m22,
-                    pc.opacity, pc.blendMode,
+                    pc.opacity,
                     ac.posX, ac.posY, ac.posZ, ac.scaleX, ac.scaleY,
                     ac.slantX, ac.slantY, ac.m11, ac.m12,
-                    ac.m21, ac.m22, ac.opacity, ac.blendMode,
+                    ac.m21, ac.m22, ac.opacity,
                     ac.active ? 1 : 0, ac.visible ? 1 : 0);
             }
         }
 
+        // The camera-constraint dirty state has now been consumed by every
+        // non-root node. Clear it before the constraint pass publishes the
+        // next frame's state.
+        _cameraConstraintDirty_guess = false;
+
         // === PHASE 3: Post-loop processing ===
-        // Call order matches libkrkr2.so Player_updateLayers (0x6BBC60..0x6BBCA8):
-        // sub_6BC000 → sub_6BC4F0 → sub_6BD8DC → sub_6BDA28 →
-        // sub_6BDCC0 → sub_6BDE94 → sub_6BE0C0 → sub_6BEDD0 →
-        // sub_6BF0DC → sub_6C0528
+        // The order is shared by all four current reference binaries.
         updateLayersPhase3_CameraConstraint();
         updateLayersPhase3_VertexComputation();
         updateLayersPhase3_Visibility();
         updateLayersPhase3_CameraNode();
         updateLayersPhase3_ShapeAABB();
         updateLayersPhase3_ShapeGeometry();
-        updateLayersPhase3_MotionSubNode(currentTime);
+        updateLayersPhase3_MotionSubNode();
         updateLayersPhase3_ParticleEmitter();
-        updateLayersPhase3_ParticleSystem(currentTime);
+        updateLayersPhase3_ParticleSystem();
         updateLayersPhase3_AnchorNode();
 
         // === Post-loop cleanup ===
-        // Aligned to 0x6BBCB4..0x6BBE1C: clear per-node flags and timeline state.
+        // All four references clear the same player and per-node state here.
 
-        // Clear player+608 first-frame flag (0x6BBDF8: STRB WZR, [X19,#0x260]).
-        _noUpdateYet = false;
-
-        // Clear player+480 queuing flag (0x6BBDFC: STRB WZR, [X19,#0x1E0]).
-        _queuing = false;
-
-        // Clear node+44 (flags byte) and node+1504 (accumulated dirty) for
-        // all non-root nodes (0x6BBCFC..0x6BBD40).
+        // Clear the complete flags byte and accumulated dirty state for every
+        // non-root node.
         for (size_t ci = 1; ci < nodes.size(); ++ci) {
-            nodes[ci].flags &= ~0x01;           // node+44
-            nodes[ci].accumulated.dirty = false; // node+1504
+            nodes[ci].flags = 0;
+            nodes[ci].accumulated.dirty = false;
         }
 
-        // Clear legacy local scratch flags.
-        for (auto &evalData : _perNodeEvalData) {
-            evalData.dirtyFlag = 0;
+        // Parameter mode is a one-update trigger consumed by the type-3 child
+        // pass above. The value and every other parameter field remain live.
+        for (auto &parameter : _parameterEntries) {
+            parameter.mode = 0;
         }
 
+        // Clear the first-update and parent-queue state only after the two
+        // record ranges have been consumed and reset.
+        _noUpdateYet = false;
+        _queuing = false;
     }
 
 } // namespace motion

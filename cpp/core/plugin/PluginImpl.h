@@ -135,6 +135,11 @@ TJS_EXP_FUNC_DEF(void, TVPProcessApplicationMessages, ());
 
 TJS_EXP_FUNC_DEF(void, TVPHandleApplicationMessage, ());
 
+// Android retains these public plug-in services; both final iOS images
+// dead-strip them because they have no caller.  Register intentionally has no
+// missing-global guard, while Remove returns false for a missing global.  Both
+// convert the protected dispatch call's nonnegative/negative TJS status to
+// true/false and swallow only exceptions from that dispatch call.
 TJS_EXP_FUNC_DEF(bool, TVPRegisterGlobalObject,
                  (const tjs_char *name, iTJSDispatch2 *dsp));
 
@@ -159,6 +164,11 @@ struct tTVPExceptionDesc {
                    // empty).
 };
 
+// Four-reference stack ABI: two adjacent ttstr owners, with no tag, padding
+// field, exception pointer, or callback-owned backing storage.
+static_assert(sizeof(tTVPExceptionDesc) == 2 * sizeof(ttstr),
+              "tTVPExceptionDesc must remain a two-ttstr stack record");
+
 typedef void(TJS_USERENTRY *tTVPTryBlockFunction)(void *data);
 
 typedef bool(TJS_USERENTRY *tTVPCatchBlockFunction)(
@@ -169,6 +179,10 @@ typedef void(TJS_USERENTRY *tTVPFinallyBlockFunction)(void *data);
 
 /*]*/
 
+// Android retains this uncalled compatibility service; both final iOS images
+// dead-strip it.  tryblock and exceptional-path catchblock are mandatory;
+// finallyblock alone is nullable.  Exceptional finally runs before the stack
+// description/catch callback, false swallows, and true rethrows the original.
 TJS_EXP_FUNC_DEF(void, TVPDoTryBlock,
                  (tTVPTryBlockFunction tryblock,
                   tTVPCatchBlockFunction catchblock,

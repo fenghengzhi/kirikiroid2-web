@@ -20,10 +20,10 @@ const PLAYER_DRAW_COMPAT_OFF     = 0x6D5FB8;
 const PLAYER_DRAW_D3D_OFF        = 0x6D5B90;
 const PLAYER_DRAW_SLA_OFF        = 0x6D5658;
 const PLAYER_SLA_RESOLVE_TARGET_OFF = 0x6D5948;
-const PLAYER_RENDER_PREPARE_OFF  = 0x6D5164;
-const PLAYER_APPLY_TRANSLATE_OFF = 0x6D5264;
-const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
-const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
+const PLAYER_RENDER_PREPARE_OFF  = 0x6D2544;
+const PLAYER_APPLY_PREPARED_PROJECTION_OFF = 0x6D2644;
+const PLAYER_BUILD_ITEMS_OFF     = 0x6BF714;
+const PLAYER_BUILD_COMMANDS_OFF  = 0x6C2208;
 const PLAYER_ACCURATE_SLA_RENDER_OFF = 0x6C9CA8;
 const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF = 0x6C8D74;
@@ -54,8 +54,8 @@ const STATIC_PARSE_SAMPLE_POINTS = {
     init_non_emote_leave: 'initNonEmoteMotionLike_0x6B365C.leave',
     parse_parameter_enter: 'appendParameterEntryLike_0x6B1718.enter',
     parse_parameter_leave: 'appendParameterEntryLike_0x6B1718.leave',
-    parse_parameter_list_enter: 'parseParameterListLike_0x6B202C.enter',
-    parse_parameter_list_leave: 'parseParameterListLike_0x6B202C.leave',
+    parse_parameter_list_enter: 'parseParameterList_guess.enter',
+    parse_parameter_list_leave: 'parseParameterList_guess.leave',
 };
 
 const INIT_MOTION_PROJECTION = 'init-motion-semantic-v1';
@@ -3437,7 +3437,7 @@ function installHook() {
                 arg3: ptrHex(args[3]),
                 arg4: readArgInt(args[4]),
                 arg5: readArgInt(args[5]),
-            }, 'sub_6D5164.enter');
+            }, 'Player_prepareRenderItems.enter');
         },
         onLeave(retval) {
             const ctx = currentDrawContextFor(this.player);
@@ -3473,33 +3473,33 @@ function installHook() {
                 addr: PLAYER_RENDER_PREPARE_OFF,
                 player: ptrHex(this.player),
                 retval: ptrHex(retval),
-            }, 'sub_6D5164.leave');
+            }, 'Player_prepareRenderItems.leave');
         },
     });
 
-    attachAt(PLAYER_APPLY_TRANSLATE_OFF, 'Player_applyTranslateOffset', {
+    attachAt(PLAYER_APPLY_PREPARED_PROJECTION_OFF,
+             'Player_applyPreparedRenderItemProjection_guess', {
         onEnter(args) {
             this.player = args[0];
             this.mainList = args[1];
-            emitRender(STAGE_RENDER_PREPARE, 'apply_translate_enter', {}, {
-                addr: PLAYER_APPLY_TRANSLATE_OFF,
+            emitRender(STAGE_RENDER_PREPARE, 'apply_projection_enter', {}, {
+                addr: PLAYER_APPLY_PREPARED_PROJECTION_OFF,
                 player: ptrHex(this.player),
                 mainListPtr: ptrHex(this.mainList),
-                arg2: ptrHex(args[2]),
-            }, 'sub_6D5264.enter');
+            }, 'Player_applyPreparedRenderItemProjection_guess.enter');
         },
         onLeave(retval) {
             const ctx = currentDrawContextFor(this.player);
             if (ctx) {
-                emitDrawStep(ctx, 'apply_translate_offset', 'done');
+                emitDrawStep(ctx, 'apply_prepared_projection', 'done');
             }
-            emitRender(STAGE_RENDER_PREPARE, 'apply_translate_leave', {
+            emitRender(STAGE_RENDER_PREPARE, 'apply_projection_leave', {
                 renderLists: readRenderLists(this.mainList, null),
             }, {
-                addr: PLAYER_APPLY_TRANSLATE_OFF,
+                addr: PLAYER_APPLY_PREPARED_PROJECTION_OFF,
                 player: ptrHex(this.player),
                 retval: ptrHex(retval),
-            }, 'sub_6D5264.leave');
+            }, 'Player_applyPreparedRenderItemProjection_guess.leave');
         },
     });
 
@@ -3516,7 +3516,7 @@ function installHook() {
                 defaultColor: readArgInt(args[3]),
                 arg4: readArgInt(args[4]),
                 arg5: readArgInt(args[5]),
-            }, 'sub_6C2334.enter');
+            }, 'Player_appendPreparedRenderItems.enter');
         },
         onLeave(retval) {
             emitRender(STAGE_RENDER_COMMANDS, 'build_items_leave', {
@@ -3525,7 +3525,7 @@ function installHook() {
                 addr: PLAYER_BUILD_ITEMS_OFF,
                 player: ptrHex(this.player),
                 retval: ptrHex(retval),
-            }, 'sub_6C2334.leave');
+            }, 'Player_appendPreparedRenderItems.leave');
         },
     });
 
@@ -3542,7 +3542,7 @@ function installHook() {
                 mainListPtr: ptrHex(this.mainList),
                 auxListPtr: ptrHex(this.auxList),
                 arg3: ptrHex(args[3]),
-            }, 'sub_6C4E28.enter');
+            }, 'Player_buildRenderCommands.enter');
         },
         onLeave(retval) {
             emitRender(STAGE_RENDER_COMMANDS, 'build_commands_leave', {
@@ -3551,7 +3551,7 @@ function installHook() {
                 addr: PLAYER_BUILD_COMMANDS_OFF,
                 player: ptrHex(this.player),
                 retval: ptrHex(retval),
-            }, 'sub_6C4E28.leave');
+            }, 'Player_buildRenderCommands.leave');
         },
     });
 

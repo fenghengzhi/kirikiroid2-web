@@ -14,6 +14,7 @@
 #include "ncb_invoke.hpp"
 #include <map>
 #include <list>
+#include <type_traits>
 
 inline std::set<ttstr> TVPRegisteredPlugins;
 
@@ -142,6 +143,11 @@ private:
 
 	/// 実インスタンス破棄
 	void _deleteInstance() {
+		// Generated specializations preserve this exact ownership boundary:
+		// sticky adaptors borrow the native object; non-sticky adaptors run the
+		// native ordinary destructor and scalar delete before both fields are
+		// cleared.  A deleting destructor for the adaptor shell is a separate
+		// outer operation and must not be conflated with native destruction.
 		if (_instance && !_sticky) delete _instance;
 		_instance = 0;
 		_sticky   = false;
@@ -2107,11 +2113,28 @@ struct ncbAutoRegister {
 		PostRegist,
 		LINE_COUNT };
 #define NCB_INNER_AUTOREGISTER_LINES_INSTANCE { 0, 0, 0 }
+	// Borrowed literal pointer, not a ttstr and not registrar-owned. The four
+	// references materialize registrar objects with pointer stores only and do
+	// not register a registrar destructor with __cxa_atexit.
 	NameT modulename;
     ncbAutoRegister() = delete;
-	ncbAutoRegister(NameT name, LineT line) : modulename(name), _next(_top[line]) { _top[line] = this; }
+	ncbAutoRegister(NameT name, LineT line) : modulename(name), _next(_top[line]) {
+		// Process-lifetime static registrars form a permanent head-insert chain.
+		// There is no unlink/null operation at shutdown: only the borrowed-pointer
+		// map and registered-key set have destructors. This facility is explicitly
+		// thread-unsafe; optimized reference initializers may publish the head
+		// between individual object-field stores.
+		_top[line] = this;
+	}
 
 	static void AllRegist(  LineT line) {
+		// This is intentionally an append-only index build, not an idempotent
+		// initialization gate. Every call walks the complete head-insert chain
+		// again and push_back's the same borrowed registrar pointers. The four
+		// references neither clear nor deduplicate the per-module lists, so a
+		// repeated startup multiplies callbacks for modules which have not yet
+		// reached the registered-set commit point. An allocation/conversion
+		// exception also leaves the already appended prefix in place.
 		for (ThisClassT const* p = _top[line]; p; p = p->_next) {
 			ttstr name = p->modulename;
 			name.ToLowerCase();
@@ -2119,6 +2142,12 @@ struct ncbAutoRegister {
 		}
 	}
 	static void AllUnregist(LineT line) {
+		// The Android references retain an uncalled aggregate traversal with
+		// exactly this direct head-chain behavior; both iOS final images
+		// dead-strip it. It walks each static registrar once, independent of
+		// duplicate internal-map list occurrences and registered markers.
+		// The outer overload below uses the same forward Pre/Class/Post order,
+		// not a reverse module-unload pipeline, and it clears neither container.
 		for (ThisClassT const* p = _top[line]; p; p = p->_next)
 			p->Unregist();
 	}
@@ -2126,6 +2155,12 @@ struct ncbAutoRegister {
 	static void AllRegist()   { for (int line = 0; line < LINE_COUNT; line++) AllRegist(  static_cast<LineT>(line)); }
 	static void AllUnregist() { for (int line = 0; line < LINE_COUNT; line++) AllUnregist(static_cast<LineT>(line)); }
 	static bool LoadModule(const ttstr &_name);
+	// Source/test-only diagnostic in this integrated port. None of the four
+	// final reference images retains a HasModule function or a third runtime
+	// consumer of _internal_plugins: their complete map xrefs are global init,
+	// AllRegist, and the inner loader. Consequently this exact, non-lowercasing
+	// lookup is useful to tests but must not be described as a reference ABI or
+	// script-visible surface.
 	static bool HasModule(const ttstr &_name) {
 		return _internal_plugins.find(_name) != _internal_plugins.end();
 	}
@@ -2142,6 +2177,11 @@ private:
 
 	static std::map<ttstr, INTERNAL_PLUGIN_LISTS > _internal_plugins;
 };
+
+static_assert(sizeof(ncbAutoRegister) == 3 * sizeof(void *),
+	"ncbAutoRegister must remain vptr/module/next only");
+static_assert(std::is_trivially_destructible<ncbAutoRegister>::value,
+	"static NCB registrar heads rely on having no registrar teardown phase");
 
 ////////////////////////////////////////
 template <class T>
@@ -2374,6 +2414,11 @@ protected:
 private:
 	CallbackT _init, _term;
 };
+
+static_assert(sizeof(ncbCallbackAutoRegister) == 5 * sizeof(void *),
+	"callback registrar must remain base plus two borrowed function pointers");
+static_assert(std::is_trivially_destructible<ncbCallbackAutoRegister>::value,
+	"callback registrars must not acquire an atexit destructor");
 
 #define NCB_REGISTER_CALLBACK(pos, init, term, tag) static ncbCallbackAutoRegister ncbCallbackAutoRegister_ ## pos ## _ ## tag (NCB_MODULE_NAME, ncbAutoRegister::pos, init, term)
 #define NCB_PRE_REGIST_CALLBACK(cb)    NCB_REGISTER_CALLBACK(PreRegist,  &cb, 0, cb ## _0)

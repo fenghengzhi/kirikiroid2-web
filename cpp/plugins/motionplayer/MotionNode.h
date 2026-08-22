@@ -1,19 +1,16 @@
 //
-// Persistent per-node state for MotionPlayer rendering pipeline.
-// Aligned to libkrkr2.so 2632-byte node structure in std::deque.
+// Persistent per-node state for the MotionPlayer rendering pipeline.
 //
-// PSB key → node offset mapping (from IDA decompilation of sub_6B3C78 at 0x6B3C78):
-//   "label"            → node+0   (name)
-//   "type"             → node+28  (nodeType)
-//   "coordinate"       → node+24  (coordinateMode)
-//   "inheritMask"      → node+40  (inheritFlags, bits 2-8, default 0x1FC)
-//   "groundCorrection" → node+47  (bool)
-//   "transformOrder"   → node+84..96 (4 ints, default [0,1,2,3])
-//   "frameList"        → node+64  (PSB variant for keyframes)
-//   "meshTransform"    → node+2000 (meshType)
-//   "stencilType"      → node+52
-//   parentIndex        → node+36  (set during tree walk)
-//   node+344, node+880 → clip slot done flags (initialized to 1=done)
+// The portable declaration groups recovered source-level members. Exact
+// per-target offsets and deque strides are documented under analysis/.
+//
+// The current four-reference comparison establishes the common logical field
+// mapping below. ABI-specific offsets and deque strides belong in analysis/:
+//   label -> layerName; type -> nodeType; coordinate -> coordinateMode;
+//   inheritMask -> inheritFlags; frameList -> frameListVariant;
+//   meshTransform -> meshType; stencilType -> stencilType.
+// Ordinary value construction zeroes parentIndex, inheritFlags, and all four
+// transformOrder entries, while both clip-slot done bytes start true.
 //
 #pragma once
 
@@ -22,8 +19,9 @@
 #include <string>
 #include <vector>
 
+#include "HitTestInternal.h"
 #include "MeshPoint.h"
-#include "tjs.h"  // tTJSVariant, iTJSDispatch2 for TJS↔Native bridge (node+1912, node+2296)
+#include "tjs.h"  // tTJSVariant and iTJSDispatch2 bridge ownership
 
 class iTVPTexture2D;
 
@@ -34,214 +32,213 @@ namespace motion {
 namespace motion::detail {
 
     struct MotionParameterEntry;
+    struct PerNodeLayerState;
     struct PreparedRenderItem;
+
+    // Native temporary object wrappers retain a Variant's dispatch once and
+    // keep the same receiver across a multi-call operation. Type-4 uses one
+    // for its child Array and a second one for the motion-source list. Exact
+    // target layouts live in analysis/.
+    class ScopedVariantObjectDispatch_guess final {
+    public:
+        explicit ScopedVariantObjectDispatch_guess(
+            const tTJSVariant &arrayVariant);
+        ~ScopedVariantObjectDispatch_guess();
+
+        ScopedVariantObjectDispatch_guess(
+            const ScopedVariantObjectDispatch_guess &) = delete;
+        ScopedVariantObjectDispatch_guess &operator=(
+            const ScopedVariantObjectDispatch_guess &) = delete;
+
+        [[nodiscard]] iTJSDispatch2 *get() const { return dispatch_; }
+
+    private:
+        iTJSDispatch2 *dispatch_;
+    };
+
+    // Compatibility name retained for already-recovered child-Array callers.
+    using ScopedParticleArrayDispatch_guess =
+        ScopedVariantObjectDispatch_guess;
+
+    tjs_int particleArrayCount_guess(iTJSDispatch2 *array);
+    motion::Player *particleArrayGetNativePlayerAt_guess(
+        iTJSDispatch2 *array, tjs_int index);
+    void particleArrayAdd_guess(iTJSDispatch2 *array,
+                                const tTJSVariant &playerVariant);
+    void particleArrayErase_guess(iTJSDispatch2 *array, tjs_int index,
+                                  tTJSVariant *result = nullptr);
 
     struct MotionNode {
         MotionNode() = default;
         ~MotionNode();
-        // MotionNode_copy@0x6F468C deliberately preserves the destination's
-        // persistent render-item owner while assigning every other member.
-        MotionNode(const MotionNode &) = delete;
-        MotionNode &operator=(const MotionNode &);
+        // The four native deque range-erase instantiations expose the
+        // compiler-generated memberwise copy assignment. In particular, the
+        // raw preparedRenderItem owner is shallow-copied like every other
+        // scalar member. The normal non-root suffix erase does not execute the
+        // relocation branch, but deleting these operations changes which STL
+        // paths
+        // are well-formed and therefore does not match the native type.
+        MotionNode(const MotionNode &) = default;
+        MotionNode &operator=(const MotionNode &) = default;
+
+        // Four-reference out-of-line MotionNode operations used by the Join
+        // snapshot producer/consumer. Both sides transfer Variant ownership,
+        // so neither the node nor the snapshot argument is const.
+        void initJoinSnapshot_guess(PerNodeLayerState &snapshot);
+        void restoreJoinSnapshot_guess(PerNodeLayerState &snapshot);
 
         // Identity (from PSB, set once during tree build)
         int index = 0;
-        int parentIndex = -1;          // node+36
-        int layerId1 = 0;              // node+16: first requireLayerId result
-        int layerId2 = 0;              // node+20: second requireLayerId result
-        int nodeType = 0;              // node+28
-        int coordinateMode = 0;        // node+24
-        int inheritFlags = 0x1FC;      // node+40. Player_updateLayers (0x6BB33C)
-                                        // also tests byte(node+42)&0x40, i.e.
-                                        // inheritMask bit 0x00400000.
-        uint8_t flags = 0;             // node+44 (sub_6BE0C0 at 0x6BE37C, sub_6BF0DC at 0x6BF310)
-        // node+46 — PSB "joinTarget" bool. The ONLY writer is
-        // Player_initNodeFields @0x6b3ef0 (`*(BYTE)(node+46) =
-        // Motion_propGetBool("joinTarget",default 0) & 1`), set once at
-        // tree-build. NOT a visibility/active byte (the prior MEMORY annotation
-        // calling node+46 "visible" was falsified by the 0x6b3ef0 decompile).
-        // Gates HM3 populate (resetMotionState loop3 @0x6b2dcc:
-        // `if(!node+46) continue`) and HM3 restore (pruneHM3 loop2 @0x6b855c:
-        // `if(*(BYTE)(node+46))` before the nodeType match).
-        bool joinTarget = false;       // node+46
-        bool groundCorrection = false; // node+47
-        // TJS layer dispatch object for callbacks (sub_6BAA10 onGroundCorrection).
-        // In libkrkr2.so this is at *(node+0)+16 (the layer's iTJSDispatch2*).
-        // Stored as void* to avoid iTJSDispatch2 header dependency here;
-        // cast to iTJSDispatch2* in Player.cpp where tjs.h is included.
-        void *tjsLayerObject = nullptr;  // non-owning reference
-        int transformOrder[4] = {0, 1, 2, 3}; // node+84..96
-        // Player_initNodeFields @0x6B3C78 stores Motion_propGetString("label")
-        // directly at node+0. Player_buildNodeTree_recursive @0x6B4A6C reuses
-        // this same ttstr as the Player+24 map key and event payload source.
+        // The native value-constructor zeroes this field. Recursive tree build
+        // overwrites it before reading the raw layer; the synthetic root keeps
+        // zero because index zero terminates every parent walk.
+        int parentIndex = 0;
+        // Two independent ResourceManager.requireLayerId results acquired
+        // before raw node-field initialization.
+        int layerId1 = 0;
+        int layerId2 = 0;
+        int nodeType = 0;              // raw layer "type"
+        int coordinateMode = 0;
+        int inheritFlags = 0;
+        uint8_t flags = 0;
+        // Read once from the raw layer during node initialization. joinTarget
+        // gates later per-node state snapshot/restore participation; it is not
+        // a visibility or active byte.
+        bool joinTarget = false;
+        bool groundCorrection = false;
+        // Ordinary node construction leaves all four entries zero. The Player
+        // constructor alone overwrites the synthetic root with the class-level
+        // default order; raw layer initialization overwrites every real node.
+        int transformOrder[4] = {0, 0, 0, 0};
+        // Recursive construction reads "label" once for the raw-label map, then
+        // node initialization independently reads it again into this owner.
         ttstr layerName;
-        int meshType = 0;             // "meshTransform" from PSB (node+2000)
-        int meshFlags = 0;            // "meshSyncChildMask" from PSB (node+2004)
-        int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
-        int meshDivX = 0;             // node+2012: horizontal cell count
-        int meshDivY = 0;             // node+2016: vertical cell count
-        int objTriPriority = 0;       // node+2136: "objTriPriority" for type==0
-        // Aligned to libkrkr2.so Player_initNodeFields (0x6B3C78):
-        // node+8 points to an entry selected from the player's 56-byte
-        // parameter table using the PSB "parameterize" index.
+        int meshType = 0;              // raw "meshTransform" property
+        int meshFlags = 0;             // raw "meshSyncChildMask" property
+        int meshDivision = 0;          // raw "meshDivision" property
+        // Persistent raw "meshCombine" property. This is distinct from the
+        // per-frame inheritance separator derived below.
+        bool meshCombine = false;
+        int meshDivX = 0;              // current horizontal grid cell count
+        int meshDivY = 0;              // current vertical grid cell count
+        int objTriPriority = 0;        // raw "objTriPriority" for type 0
+        // The four Player_initNodeFields_guess implementations store either a
+        // pointer into the Player parameter vector (integer `parameterize`) or
+        // null (every other variant type). Entry size is ABI-specific.
         int parameterizeIndex = -1;
         MotionParameterEntry *parameterEntry = nullptr;
-        // Mesh inverse matrix for sub_69AE74 child deformation (node+2096..2132)
-        double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
-        double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120
-        float meshInvOffX = 0, meshInvOffY = 0;  // node+2128, node+2132
-        // Computed mesh flags (sub_6BC4F0 at 0x6BC6E4..0x6BC818)
-        bool hasMeshData = false;        // node+1962: has active mesh data
-        bool stencilCompositeMaskReferenced = false; // node+1961: post-build mask-layer reference
-        bool meshCombineEnabled = false; // node+1963: mesh combines with children
-        // libkrkr2.so seeds node+52 from PSB "stencilType" in
-        // Player_initNodeFields (0x6B3C78) and later runtime stages only read
-        // the field; they do not rebuild it from frame state.
-        int stencilTypeBase = 0;      // raw PSB "stencilType"
-        int stencilType = 0;          // runtime node+52, init-time owned
-        int currentFrameType = 0;     // current frameList type (0/2/3), for trace
-        // REMOVED 2026-06-21: hasLastActivePayload / lastActiveFrameIndex /
-        // lastActiveSrc / lastActiveMotionFlags / lastActiveMotionDtgt — these
-        // backed the invented markNodePayloadDirtyFromState node+44 dirtying
-        // channel (no libkrkr2.so counterpart; see PlayerUpdateLayerEval.cpp).
+        // Mesh inverse matrix and float inverse offsets used by child
+        // deformation. Their target offsets differ across all four ABIs.
+        double meshInvM11 = 0, meshInvM12 = 0;
+        double meshInvM21 = 0, meshInvM22 = 0;
+        float meshInvOffX = 0, meshInvOffY = 0;
+        // Computed by the vertex/mesh pass after layer evaluation.
+        bool hasMeshData = false;
+        // Set when post-build stencil-mask resolution references this node.
+        bool stencilCompositeMaskReferenced = false;
+        // True when an inherited mesh chain exists and inheritMask bit 25 does
+        // not request a separator. It is recomputed by the vertex pass and is
+        // not the raw PSB "meshCombine" property.
+        bool meshInheritanceSeparator_guess = false;
+        // Dirty propagation local to the vertex/mesh pass. A node is processed
+        // when its accumulated transform is dirty or its mesh ancestor carried
+        // this state earlier in the same parent-first traversal.
+        bool meshVertexPassDirty_guess = false;
+        // The raw layer's optional stencilType property seeds this field;
+        // absence writes zero. For a type-3 node, all four initializers then
+        // read Player.preview live and clear bit 4 when preview is true.
+        int stencilType = 0;
+        // Three independent std::vector<MeshPoint> owners, destroyed in
+        // reverse declaration order. Layer evaluation keeps the raw 4x4
+        // patch, builds a composite grid, and writes the own-affine-transformed
+        // 4x4 patch; none is a "previous frame" alias of another. Exact target
+        // offsets live in analysis/.
+        std::vector<MeshPoint> meshControlPoints;
+        std::vector<MeshPoint> compositeMeshPoints;
+        std::vector<MeshPoint> transformedMeshControlPoints;
 
-        // Three independent std::vector<MeshPoint> owners copied by
-        // MotionNode_copy@0x6F468C (0x6F47F4..0x6F480C) and destroyed in
-        // reverse order by MotionNode_destroy_guess@0x6F4C8C
-        // (0x6F4CFC..0x6F4D1C).  Player_updateLayers@0x6BC4F0 keeps the raw
-        // 4x4 patch at +2024, builds a composite grid at +2048, and writes the
-        // own-affine-transformed 4x4 patch at +2072; none is a "previous
-        // frame" alias of another.
-        std::vector<MeshPoint> meshControlPoints;             // node+2024
-        std::vector<MeshPoint> compositeMeshPoints;           // node+2048
-        std::vector<MeshPoint> transformedMeshControlPoints;  // node+2072
+        // Raw TJS owners copied independently from the layer dispatch. Their
+        // CopyRef lifetimes must not be replaced by one decoded-tree owner.
+        tTJSVariant frameListVariant;
+        tTJSVariant emoteEditVariant;
+        tTJSVariant particleMotionListVariant;
+        tTJSVariant stencilCompositeMaskLayerListVariant;
 
-        // Raw TJS owners copied directly from the layer dispatch by
-        // Player_initNodeFields @0x6B3C78. These mirror the source-level
-        // tTJSVariant members at node+64/+1980/+2200/+2576; their independent
-        // CopyRef lifetimes must not be replaced by a decoded PSB tree owner.
-        tTJSVariant frameListVariant;                     // node+64
-        tTJSVariant emoteEditVariant;                     // node+1980
-        tTJSVariant particleMotionListVariant;            // node+2200
-        tTJSVariant stencilCompositeMaskLayerListVariant; // node+2576
-
-        // Prior draw flag (node+48, from PSB emoteEdit "priorDraw")
-        // sub_6636D4 collapses the property to bool and 0x6BC6C4 masks & 1.
-        int priorDraw = 0;
+        // One-byte Boolean derived later from the retained emoteEdit owner;
+        // node initialization itself does not read the nested priorDraw member.
+        bool priorDraw = false;
 
         // ========== Dual Clip Slot Architecture ==========
-        // Aligned to libkrkr2.so's two 536-byte clip slots per node:
-        //   slot0 @ node+320, slot1 @ node+856, activeSlotIndex @ node+1392.
-        // When a new motion is played, data is written to the inactive slot,
-        // then activeSlotIndex ^= 1 flips. The old slot is preserved for
-        // crossfade blending.
+        // All four current references keep two parsed slots and one active-slot
+        // selector. Exact offsets/strides differ by ABI and STL; see the
+        // four-binary node-slot analysis. Incremental stepping overwrites the
+        // inactive slot and flips the selector, preserving the old slot for
+        // crossfade interpolation.
         //
         struct ClipSlot {
-            // Player_parseFrame @0x6926B4 / Player_mergeFrameContent
-            // @0x692AB0 state. `merged` is the byte at slot+26; parse clears it
-            // and merge sets it before the invisible early-return.
+            // Header written by the frame parser. The merger sets `merged`
+            // before its done-frame early return.
+            int frameIndex = -1;
+            double clipStartTime = 0.0;
+            std::uint32_t ti = 0;
+            std::uint32_t contentMask = 0;
             bool done = true;
-            bool crossfading = false;      // slot+25: currently blending with other slot
-            bool merged = false;           // slot+26
-            int frameIndex = -1;            // cached frameList index for this slot
-            int frameType = 0;              // frame["type"]: 0 invisible, 2 static, 3 interpolate
-            std::uint32_t ti = 0;            // slot+16, mask 0x04000000
+            bool crossfading = false;
+            bool merged = false;
 
-            // Source. Player_mergeFrameContent @0x692AB0 stores two distinct
-            // ttstr owners: icon at slot+28 and src at slot+36. All native
-            // consumers read these owners directly; narrow strings are created
-            // only at Web/PSB raw-node API boundaries.
+            // The merger stores distinct icon/src owners. Consumers read these
+            // directly; narrow strings exist only at Web/PSB API boundaries.
             ttstr iconValue;
             ttstr srcValue;
 
-            // Position (slot+96..112)
-            double x = 0, y = 0, z = 0;
-            double ox = 0, oy = 0;
-
-            // Transform
-            double width = 0, height = 0;
-            int opacity = 255;
-            double angle = 0.0;
-            double scaleX = 1.0, scaleY = 1.0;
-            double slantX = 0.0, slantY = 0.0;
-            bool flipX = false, flipY = false;
+            // Base presentation and transform payload, in native declaration
+            // order rather than evaluator-consumption order.
             int blendMode = 16;
+            double ox = 0, oy = 0;
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
+            int opacity = 255;
+            double x = 0, y = 0, z = 0;
+            bool flipX = false, flipY = false;
+            double angle = 0.0;
+            double scaleX = 1.0, scaleY = 1.0;
+            double slantX = 0.0, slantY = 0.0;
 
-            // Raw curve owners consumed through TJS dispatch at evaluation
-            // time, matching 0x69A754/0x698454/0x69A4D4.
-            tTJSVariant cccVariant;          // slot+168
-            tTJSVariant occVariant;          // slot+188
-            tTJSVariant accVariant;          // slot+208
-            tTJSVariant zccVariant;          // slot+228
-            tTJSVariant sccVariant;          // slot+248
-            tTJSVariant cpVariant;           // slot+268
-            tTJSVariant meshCurveVariant;    // slot+296, cc/mcc
+            // Raw curve/action owners. Their relative declaration order is
+            // observable through reset and reverse destruction.
+            tTJSVariant cccVariant;
+            tTJSVariant occVariant;
+            tTJSVariant accVariant;
+            tTJSVariant zccVariant;
+            tTJSVariant sccVariant;
+            tTJSVariant cpVariant;
+            ttstr actionValue;
+            tTJSVariant meshCurveVariant;
+            std::vector<MeshPoint> meshControlPoints;
 
-            // Time (slot+328)
-            double clipStartTime = 0.0;
-
-            // Raw frame content mask (slot+340 = parseSlot+20). parseFrame
-            // @0x6926E8 writes content["mask"] (Motion_propGetInt) here; bit
-            // 0x40000 gates the "act" action field. resetFrameSlot defaults it
-            // to 0. Snapshotted into the HM3 PerNodeLayerState (V+28) by
-            // Player_HM3_initValueFromNode @0x699654 and restored from V by
-            // Player_HM3_restoreValueToNode @0x6998b8 (slot+340 <- V[7]).
-            int contentMask = 0;            // slot+340
-
-            // Mesh control-point vector (slot+640). Per-slot mesh source read by
-            // Player_evaluateTimeline @0x699c08 (copyVector node+2024 <- slot+640
-            // when node+2000==meshType==1), snapshotted node+2024 -> V+568 by
-            // Player_HM3_initValueFromNode @0x699588, and restored slot+640 <-
-            // V+568 by Player_HM3_restoreValueToNode @0x699828. The element is
-            // the binary's exact 8B {float x, float y} source-level point.
-            std::vector<MeshPoint> meshControlPoints; // slot+640
-
-            // Motion sub-object (mask 0x80000)
-            int motionDt = 0, motionFlags = 0;
-            double motionDofst = 0.0;
+            // motion sub-object (content mask 0x80000). Reset clears only the
+            // first two words; merger writes the remaining defaults/fields.
+            int motionFlags = 0;
+            int motionDt = 0;
             bool motionDocmpl = false;
-            double motionTimeOffset = 0.0;
+            double motionDofst = 0.0;
             ttstr motionDtgtValue;
+            double motionTimeOffset = 0.0;
 
-            // Model/camera/anchor/feedback blocks occupy the tail of the same
-            // parsed-frame slot and are written by 0x693AE8..0x6941E4.
-            double modelTimeOffset = 0.0;
+            // model sub-object (content mask 0x01000000).
+            // The type-6 emitter uses model.{dt,dtgt,timeOffset} for mode,
+            // mode-4 target label and timer offset. Its separately retained
+            // source identity still comes from ClipSlot::srcValue.
             bool modelLoop = false;
             int modelDt = 0;
             ttstr modelDtgt;
-            double cameraFov = 0.0;
-            ttstr cameraTarget;
-            ttstr anchorTarget;
-            double feedbackTimespan = 0.0;
+            double modelTimeOffset = 0.0;
 
-            // Particle sub-object (mask 0x100000). slot+416..488 PSB prt block,
-            // written by Player_mergeFrameContent @0x693c64 (gate frame mask
-            // 0x100000, sub-mask PSB "prt.mask"). Reset defaults @0x693d20:
-            // {trigger=0, fmin=fmax=10.0, vmin=vmax=0, amin=amax=0, zmin=zmax=1.0,
-            // range=0}. Field offsets byte-verified: trigger slot+416(slot[104]),
-            // fmin slot+424, fmax slot+432, vmin slot+440, vmax slot+448, amin
-            // slot+456, amax slot+464, zmin slot+472, zmax slot+480, range slot+488.
-            //
-            // This slot+424..488 9-double block is the SINGLE physical particle
-            // block for type-4 nodes. It has TWO writers:
-            //   (1) mergeFrameContent @0x693d98..0x693ecc — main per-frame writer
-            //       during normal playback (PSB prt fields).
-            //   (2) Player_HM3_restoreValueToNode @0x699890 — HM3 restore path only
-            //       (memcpy V+600..664 -> slot+744, 0x48) when V.nodeType==4 &&
-            //       V+32==0.
-            // It has TWO readers, both in Player_evaluateTimeline's type-4 case:
-            //   - COPY branch @0x699c2c (single-slot / no-crossfade): node+2224..2288
-            //     <- slot+744..808 (v11[93..101], v11=node+536*idx).
-            //   - INTERP branch @0x69a0f8 (crossfade): per-field lerp of active/other
-            //     slots' slot+424..488 into node+2224..2288.
-            // ALIAS (self-disassembled, see PlayerUpdateLayerEval.cpp): the COPY
-            // offset 744 is slot-base 320: node+536*idx+744 == node+320+536*idx+424
-            // == slot+424. So slot+744 IS slot+424; COPY reads the SAME prt block
-            // INTERP reads and merge/restore write. There is NO separate result
-            // region — prtFmin..prtRange below cover the whole block.
+            // prt sub-object (content mask 0x100000). The merger initializes
+            // this whole block before applying the nested prt.mask overrides.
+            // The evaluator copies/interpolates these same nine doubles into
+            // the node-level particle mirror; there is no second slot region.
             int prtTrigger = 0;
             double prtFmin = 10.0, prtF = 10.0;
             double prtVmin = 0.0, prtV = 0.0;
@@ -249,54 +246,32 @@ namespace motion::detail {
             double prtZmin = 1.0, prtZ = 1.0;
             double prtRange = 0.0;
 
-            // TransformOrder
-            bool hasTransformOrder = false;
-            int transformOrder[4] = {0,1,2,3};
-            ttstr actionValue;               // slot+288, content.act
-            bool hasSync = false;
+            // camera, anchor and feedback tail blocks. Their string owners are
+            // replaced in place when the corresponding outer mask is present.
+            double cameraFov = 0.0;
+            ttstr cameraTarget;
+            ttstr anchorTarget;
+            double feedbackTimespan = 0.0;
         };
 
         ClipSlot slots[2];
-        int activeSlotIndex = 0;       // node+1392
+        int activeSlotIndex = 0;
         ClipSlot& activeSlot() { return slots[activeSlotIndex]; }
         const ClipSlot& activeSlot() const { return slots[activeSlotIndex]; }
         ClipSlot& otherSlot() { return slots[activeSlotIndex ^ 1]; }
         const ClipSlot& otherSlot() const { return slots[activeSlotIndex ^ 1]; }
-        // Player_evaluateTimeline (0x699AE4) stores exactly one previous blend
-        // ratio at node+56. A parameterized node reads parameterEntry->value
-        // directly; there is no secondary override/cache-validity state.
+        // Timeline evaluation stores exactly one previous blend ratio. A
+        // parameterized node reads parameterEntry->value directly; there is no
+        // secondary override/cache-validity state.
         double timelineEvalRatio = 0.0;
 
-        // TJS setter / camera velocity override block.
-        // Aligned to libkrkr2.so node+1584..+1660: delta block consumed by
-        // Player_updateLayers phase2 (0x6BB630..0x6BB700). Written by root
-        // TJS setters (setX/setY/setFlipX @ 0x6CD028/0x6CD048/0x6CD068) and
-        // camera velocity @ 0x6BB378..0x6BB3DC.
+        // TJS setter / camera velocity override block. Root position accessors
+        // in all four references read/write this same logical delta state; the
+        // exact per-target offsets live in analysis/.
         struct DeltaState {
-            bool dirty = true;               // node+1584
-            bool activeOverride = true;      // node+1585
-            bool visibleOverride = true;     // node+1586
-            bool flipX = false;              // node+1587
-            bool flipY = false;              // node+1588
-            double posX = 0.0;               // node+1592
-            double posY = 0.0;               // node+1600
-            double posZ = 0.0;               // node+1608
-            double angle = 0.0;              // node+1616
-            double scaleX = 1.0;             // node+1624
-            double scaleY = 1.0;             // node+1632
-            double slantX = 0.0;             // node+1640
-            double slantY = 0.0;             // node+1648
-            int opacity = 255;               // node+1656
-        } delta;
-
-        // Working/evaluated state (built during updateLayers inheritance loop)
-        // Aligned to libkrkr2.so node+0x5E0..0x628 block written by
-        // Player_evaluateTimeline (0x699AE4) and further composed by
-        // Player_updateLayers (0x6BB33C).
-        struct AccumulatedState {
-            bool visible = true;
-            bool active = true;
-            bool dirty = true;      // node+1504
+            bool dirty = true;
+            bool activeOverride = true;
+            bool visibleOverride = true;
             bool flipX = false;
             bool flipY = false;
             double posX = 0.0;
@@ -307,8 +282,31 @@ namespace motion::detail {
             double scaleY = 1.0;
             double slantX = 0.0;
             double slantY = 0.0;
-            int opacity = 255;         // 0-255 integer, matching libkrkr2.so int math
-            int blendMode = 16;        // node+1656: accumulated blend mode (default 0x10)
+            int opacity = 255;
+        } delta;
+
+        // Working/evaluated state built by the timeline evaluator and then
+        // composed through the updateLayers inheritance pass in all four
+        // current references.
+        struct AccumulatedState {
+            bool visible = true;
+            bool active = true;
+            bool dirty = true;
+            bool flipX = false;
+            bool flipY = false;
+            double posX = 0.0;
+            double posY = 0.0;
+            double posZ = 0.0;
+            double angle = 0.0;
+            double scaleX = 1.0;
+            double scaleY = 1.0;
+            double slantX = 0.0;
+            double slantY = 0.0;
+            // This is the final member of the native 0x50-byte evaluated
+            // transform block. Particle creation writes the parent particle
+            // node's evaluated opacity into the child root's matching delta
+            // member; no accumulated blend-mode member follows it.
+            int opacity = 255;
             // 2x2 matrix (local × parent accumulated)
             double m11 = 1.0;
             double m12 = 0.0;
@@ -321,92 +319,108 @@ namespace motion::detail {
         double prevPosY = 0.0;
         double prevPosZ = 0.0;
 
-        // MotionNode_destroy_guess @0x6F4C8C owns and deletes node+1904.
-        // sub_6C2334 @0x6C32D0 reuses this raw render item across calls and
-        // allocates it only when the pointer is null.  The caller's main/aux
+        // MotionNode owns and deletes this raw render item. The recursive
+        // prepared-item builder reuses it across calls and allocates it only
+        // when the pointer is null. The caller's main/aux
         // vectors contain borrowed pointers to this object; they never own it.
         PreparedRenderItem *preparedRenderItem = nullptr;
 
-        // Path B visibility flag (node+1960), written by sub_6BD8DC @
-        // 0x6BD958. Consumed by: the visibleAncestor chain walk in the
-        // same sub_6BD8DC pass (PlayerUpdateLayerEval.cpp), copied to
-        // PreparedRenderItem::drawFlag (item+19) in sub_6C2334's item
-        // build, and exposed to TJS via the layerVisible getter
-        // (PlayerLayerQuery.cpp). NOT read by Player_calcBounds — that
-        // function gates on nodeType mask + source.valid instead
-        // (see PlayerRenderItems.cpp comment). NOT the Path A main
-        // render gate either.
+        // Path-B visibility flag. The visibility pass rewrites non-root nodes
+        // and follows the previous nodes' values to build the visible-ancestor
+        // chain; it deliberately leaves the constructor-zeroed root untouched.
+        // Render-item construction consumes it. LayerGetter.layerVisible is a
+        // separate conjunction of accumulated.visible and accumulated.active.
         bool drawFlag = false;
 
-        // node+1944 in libkrkr2.so sub_6C2334 — set to 1 when a node
-        // enters the Path A render list (mainList), cleared at the top
-        // of the outer loop. Mirrors a real native field for parity but
-        // currently has no port consumer; kept for the Phase 4
-        // motion_playback differential oracle.
+        // Per-frame render-admission publication byte. Priority selection
+        // clears only the selected nodes; ordinary/type-3/particle admission
+        // sets it at their native commit points. Main-list filtering and the
+        // type-12 stencil-composite pass consume it later in the same build.
         bool drawnThisFrame = false;
 
-        int forceVisible = 0;              // node+1996
-        int visibleAncestorIndex = -1;     // replaces pointer at node+1952
+        int forceVisible = 0;
+        // Portable replacement for the native nullable MotionNode pointer.
+        // Only -1 represents null. Consumers deliberately do not range-check
+        // or exclude self before resolving every other value.
+        int visibleAncestorIndex = -1;
 
-        // node+2600 std::vector<MotionNode *> populated by the type-12
-        // post-pass in Player_buildNodeTree @0x6B51F0.
+        // Native std::vector<MotionNode *> populated by the type-12 tree-build
+        // post-pass.
         std::vector<MotionNode *> stencilCompositeMaskNodes;
 
-        // Child Player for nodeType=3 (Motion).
-        // Aligned to libkrkr2.so node+1912: tTJSVariant holding iTJSDispatch2-wrapped
-        // Player object, created by sub_6B3C78 case 3 via sub_6F1794 (NCB CreateAdaptor).
-        // Use getChildPlayer() helper to extract native Player*.
+        // Child Player owner for nodeType=3 (Motion). The Variant receives the
+        // NCB adaptor returned after the native child has been fully linked and
+        // initialized. A null adaptor leaves this Variant void while leaking the
+        // allocated native child, matching all four references.
         tTJSVariant childPlayerVar;
 
-        // Particle children for nodeType=4 (Particle).
-        // Aligned to libkrkr2.so node+2296: tTJSVariant holding TJS Array of
-        // iTJSDispatch2-wrapped Player objects, created by sub_6B3C78 case 4 via
-        // sub_704CB8 (TJSCreateArrayObject).
-        // Use getParticleCount()/getParticleChild(i)/addParticleChild()/eraseParticleChild()
-        // helpers for Array operations matching sub_56C694/sub_6C1678.
+        // Particle children for nodeType=4 (Particle), held by a TJS Array.
+        // Old-tree teardown deliberately fetches element zero once per reported
+        // count, so later elements are not invalidated by that visitor.
         tTJSVariant particleArrayVar;
 
-        // Shape type for nodeType=1 (from PSB "shape" key, sub_6B3C78 case 1)
-        int shapeType = 0;             // node+32: 0=point, 1=circle, 2=rect, 3=quad
+        // Shape type for nodeType=1, read from the PSB "shape" key.
+        int shapeType = 0;             // 0=point, 1=circle, 2=rect, 3=quad
 
-        // Shape AABB for nodeType=7 (sub_6BDCC0 at 0x6BDCC0)
-        float shapeAABB[4] = {};       // node+2144: minX, minY, maxX, maxY
+        // Shape AABB for nodeType=7. Native construction deliberately leaves
+        // the four floats unwritten; an eligible shape-AABB pass publishes
+        // them before clipAABB points here.
+        float shapeAABB[4];
 
-        // Shape geometry for nodeType=1 (sub_6BDE94 at 0x6BDE94)
-        int shapeGeomType = 0;         // node+1664: stored shape type
-        double shapeVertices[16] = {}; // node+1672..1784: shape geometry
+        // Shape geometry for nodeType=1.  This is the same complete record
+        // copied into Motion.Point/Circle/Rect/Quad by LayerGetter.shape.
+        // Construction leaves the whole record unwritten. Each eligible pass
+        // writes type plus only the slots owned by that shape kind.
+        HitData shapeGeometry;
 
-        // Vertex-computed position (sub_6BC4F0 at 0x6BC4F0)
-        double vertexPosX = 0.0;       // node+152
-        double vertexPosY = 0.0;       // node+160
-        double vertexPosZ = 0.0;       // node+168
+        // Position output of the vertex-computation phase. CameraNode focus and
+        // stereovision consume this block rather than `accumulated.pos*`.
+        double vertexPosX = 0.0;
+        double vertexPosY = 0.0;
+        double vertexPosZ = 0.0;
 
-        // Vertex output (sub_6BC4F0)
-        float vertices[8] = {};        // node+1856..1884: 4 corners x 2 floats
+        // Vertex/mesh pass output.
+        // Four source/mesh output corners in TL, TR, BR, BL order, with an X/Y
+        // float pair per corner.
+        float vertices[8] = {};
 
-        // Bounding box output (Player_calcBounds, 0x6C3D04)
-        float bounds[4] = { 1.0f, 1.0f, -1.0f, -1.0f }; // node+1888..1900
+        // Per-node float AABB written by Player::calcBounds.
+        float bounds[4] = { 1.0f, 1.0f, -1.0f, -1.0f };
 
         // Player::findSourceForNode_guess writes this persistent node-level
         // descriptor. The texture pointer is non-owning: the loaded module's
-        // group-atlas cache owns it, so MotionNode destruction/copy never
-        // Release/AddRef it (MotionNode_destroy @0x6F4C8C, copy @0x6F468C).
+        // group-atlas cache owns it, so MotionNode destruction never
+        // Release/AddRef it.
         struct SourceState {
-            bool valid = false;             // node+200
-            bool blank = false;             // node+201
-            tTJSVariant object;              // node+204
-            iTVPTexture2D *texture = nullptr; // node+224, non-owning
-            double width = 0.0;              // node+232
-            double height = 0.0;             // node+240
-            double originX = 0.0;            // node+248
-            double originY = 0.0;             // node+256
-            double clipLeft = 0.0;           // node+264
-            double clipTop = 0.0;            // node+272
-            double clipRight = 1.0;          // node+280
-            double clipBottom = 1.0;         // node+288
-            std::array<int, 4> textureRect{0, 0, 0, 0}; // node+296..308
-            std::string path;                // node+312 (ttstr in Android)
+            // Native construction establishes only the lifetime-bearing
+            // members and the validity gate. The remaining scalar payload is
+            // deliberately dormant/indeterminate. Native writer paths publish
+            // the subset used by their admitted node kind, and downstream
+            // source consumers reach it only through the corresponding
+            // valid/node-kind gates.
+            SourceState() : valid(false), texture(nullptr) {}
 
+            bool valid;
+            bool blank;
+            tTJSVariant object;
+            iTVPTexture2D *texture; // non-owning
+            double width;
+            double height;
+            double originX;
+            double originY;
+            double clipLeft;
+            double clipTop;
+            double clipRight;
+            double clipBottom;
+            std::array<int, 4> textureRect;
+            // Retained native ttstr owner. The KRKR atlas loader copies this
+            // owner for its entry split, but keeps reading this live field for
+            // the cache probe/retry key across atlas-building callbacks.
+            ttstr path;
+
+            // Deterministic local reset helper used by the reconstruction
+            // harness. Native construction and loader failures do not perform
+            // this whole-record reset.
             void clear() {
                 valid = false;
                 blank = false;
@@ -416,134 +430,102 @@ namespace motion::detail {
                 clipLeft = clipTop = 0.0;
                 clipRight = clipBottom = 1.0;
                 textureRect = {0, 0, 0, 0};
-                path.clear();
+                path.Clear();
             }
         } source;
 
-        // Per-frame type-specific eval outputs written by
-        // Player_evaluateTimeline @0x699AE4.
-        // MotionNode_initFields @0x6F19B4 deliberately leaves both evaluator
-        // output channels uninitialized; Player_evaluateTimeline writes them
-        // before their type-specific consumers run.
-        double cameraFov;             // node+2368: camera.fov (nodeType=5)
+        // Per-frame type-specific evaluator output for type-5 CameraNode.
+        // Construction deliberately leaves it uninitialized; evaluation writes
+        // it before an active camera node is consumed.
+        double cameraFov;
 
-        // Anchor node data for nodeType=10 (sub_6C0528 at 0x6C0528)
-        int anchorType = 0;            // node+2376: "anchor" from PSB
-        double feedbackTimespan;      // node+2432: feedback.timespan
-        double anchorOpaScale = 1.0;   // node+2440: opacity damping scale
-        // Anchor color channel scales (4 channels × gamma factor, node+2448..2504)
+        // One physical integer stores the raw "anchor" property used by the
+        // type-9 camera-constraint pass. The exact source member name is not
+        // present in the binaries.
+        int anchorType_guess = 0;
+        double feedbackTimespan;
+        double anchorOpaScale = 1.0;
+        // Four packed-color sets, each with four persistent damping residuals.
         double anchorColorScale[16] = {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1};
 
-        // Camera constraint for nodeType=9 (sub_6BC000 at 0x6BC000)
-        int cameraConstraintType = 0;  // node+2376: "anchor" type
-
-        // Particle eval-output mirror node+2224..2288 (9 doubles, the type-4
-        // analog of the +1512.. transform mirror). WRITTEN by
-        // Player_evaluateTimeline @0x699AE4 type-4 branches:
-        //   - COPY branch @0x699c2c (single slot / no crossfade): node+2224..2288
-        //     <- active slot prt block slot+744..808 (== slot+424..488, same bytes);
-        //   - INTERP branch @0x69a0f8 (crossfade): node+2224..2288 <- lerp(
-        //     activeSlot prt block slot+424..488, otherSlot prt block, ratio).
-        // READ by the particle emitter Player_particleEmitterPass @0x6BF0DC
-        // (node4[139..143] == node+2224..2288: fmin/fmax velocity/accel/zoom/range)
-        // and snapshotted into HM3 V+600..664 by Player_HM3_initValueFromNode
-        // @0x6995dc. Field map (binary slot+424..488 / prt names):
-        //   [0] node+2224 fmin (prtFmin)   [1] node+2232 fmax (prtF)
-        //   [2] node+2240 vmin (prtVmin)   [3] node+2248 vmax (prtV)
-        //   [4] node+2256 amin (prtAmin)   [5] node+2264 amax (prtA)
-        //   [6] node+2272 zmin (prtZmin)   [7] node+2280 zmax (prtZ)
-        //   [8] node+2288 range (prtRange)
-        double particleInterp[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};  // node+2224..2288
+        // Nine-double particle evaluator-output mirror. The type-4 timeline
+        // branches either copy the active slot's prt block or interpolate it
+        // against the other slot. The type-4 particle-system pass consumes
+        // this mirror; the separate type-6 emitter pass does not. Indices are
+        // fmin, fmax, vmin, vmax, amin, amax, zmin, zmax and range.
+        double particleInterp[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
         // (particleChildren replaced by particleArrayVar above — TJS Array)
-        int particleType = 0;          // node+2164: particle subtype
-        int particleMaxNum = 0;        // node+2168: max particle count
-        // Binary: node+2192 is a SINGLE field used as both "accel ratio" (decay
-        // factor in exponential velocity mode) and "camera damping" (copied to
-        // child player). PSB key: "particleAccelRatio". See sub_6BF0DC.
-        double particleAccelRatio = 0; // node+2192 — also used as cameraDamping
-        bool particleInheritAngle = false; // node+2172
-        int particleInheritVelocity = 0;   // node+2176
-        int particleFlyDirection = 0;      // node+2180
-        int particleApplyZoomToVelocity = 0; // node+2184
-        bool particleDeleteOutside = false;  // node+2188
-        bool particleTriVolume = false;    // node+2189: PSB "particleTriVolume", 3D particle flag
-        // Previous frame matrix for change detection (node+2320..2336)
+        int particleType = 0;
+        int particleMaxNum = 0;
+        // One field serves both as the exponential velocity decay ratio and as
+        // the camera-damping value copied into each new child Player. Its PSB
+        // key is "particleAccelRatio".
+        double particleAccelRatio = 0;
+        bool particleInheritAngle = false;
+        int particleInheritVelocity = 0;
+        int particleFlyDirection = 0;
+        int particleApplyZoomToVelocity = 0;
+        bool particleDeleteOutside = false;
+        bool particleTriVolume = false;
+
+        // Existing-child inheritance snapshots. A changed transform commits
+        // all five values before the pass tests a positive child count or
+        // unwraps an Array element, so empty arrays and thrown getters still
+        // advance the snapshot prefix.
         double prevM11 = 1.0, prevM21 = 0.0;
         double prevM12 = 0.0, prevM22 = 1.0;
-        double prevParticleAngle = 0.0;        // node+2352
-        double emitterTimerAccum = 0.0;        // node+2360: frequency timer
-        bool particleEmitterFlagActive = false; // v8[135].u8[0]
+        double prevParticleAngle = 0.0;
 
-        // Particle emitter state for nodeType=6 (sub_6BEDD0 at 0x6BEDD0)
-        bool emitterActive = false;    // node+2380
-        double emitterTimer = 0.0;     // node+2392
-        ttstr emitterDtgt;             // node+2384, CopyRef of active slot src
-        bool emitterOffsetActive = false; // node+2400
-        double emitterOffsetX = 0.0;   // node+2408
-        double emitterOffsetY = 0.0;   // node+2416
-        double emitterOffsetZ = 0.0;   // node+2424
+        // Frequency-mode timer and its persistent activation latch. Only
+        // accumulated inactivity clears the latch; completed slots and the
+        // zero-minimum frequency shortcut leave its previous value intact.
+        double emitterTimerAccum = 0.0;
+        bool particleEmitterFlagActive = false;
 
-        // Delta position (post-loop: accumulated - prev, node+176/184/192)
+        // Persistent state of the four-reference type-6 emitter pass.
+        bool emitterActive = false;
+        double emitterTimer = 0.0;
+        ttstr emitterDtgt;             // CopyRef of active slot srcValue
+        bool emitterOffsetActive = false;
+        double emitterOffsetX = 0.0;
+        double emitterOffsetY = 0.0;
+        double emitterOffsetZ = 0.0;
+
+        // Per-frame accumulated-position delta consumed by child inheritance.
         double deltaPosX = 0.0;
         double deltaPosY = 0.0;
         double deltaPosZ = 0.0;
 
-        // Clip origin offsets (from clip slot+376/384, used by sub_6BC4F0)
-        double clipOriginX = 0.0;      // node+248 local
-        double clipOriginY = 0.0;      // node+256 local
-
-        // sub_6BDCC0 @0x6BDCC0: node+1936 points directly to the inherited
-        // type-7 clip AABB (node+2144).  This pointer may cross Player node
-        // containers through child-motion propagation at 0x6BE278.
+        // Direct pointer to the nearest active type-7 ancestor's four-float
+        // AABB. An active type-7 node publishes its own array; every other node
+        // forwards its parent's pointer. The pointer may cross child Players.
         const float *clipAABB = nullptr;
 
-        // sub_6BC4F0 @0x6BC4F0: node+1968 is the independent mesh-transform
-        // ancestor chain.  Keep it separate from node+1936 exactly as the
-        // child-motion propagation at 0x6BE278/0x6BE290 does.
+        // Independent mesh-transform ancestor chain. Keep it separate from
+        // the visibility/clip ancestor exactly as child-motion propagation
+        // does in all four references.
         MotionNode *meshAncestor = nullptr;
 
-        bool anchorEnabled = false;
-
-        // Color bytes for anchor damping (node+100..115: 4 sets of RGBA)
-        uint8_t colorBytes[16] = {
-            0x80, 0x80, 0x80, 0xFF,
-            0x80, 0x80, 0x80, 0xFF,
-            0x80, 0x80, 0x80, 0xFF,
-            0x80, 0x80, 0x80, 0xFF
-        };
-
-        // Particle trigger type used by sub_6BEDD0; refreshed with timeline eval.
-        int prtTrigger = 0;
+        // Four opaque packed-color byte groups. Construction clears all bytes;
+        // timeline evaluation later copies the active slot's packed values.
+        uint8_t colorBytes[16] = {};
 
         // === TJS↔Native bridge helpers ===
         // These are implemented in MotionNodeBridge.cpp to avoid circular
         // dependency (MotionNode.h cannot include Player.h or ncbind.hpp).
 
-        // nodeType=3: Get native Player* from childPlayerVar (node+1912).
-        // Aligned to sub_6BE0C0 NativeInstanceSupport pattern.
-        // Returns nullptr if childPlayerVar is void/invalid.
+        // nodeType=3: resolve the native Player from childPlayerVar. Invalid
+        // non-object values throw; null/wrong-native objects return nullptr.
         Player* getChildPlayer() const;
 
-        // nodeType=4: Get particle count from TJS Array (node+2296).
-        // Aligned to sub_56C694: Array.count.
+        // nodeType=4: Get particle count from the retained TJS Array.
         int getParticleCount() const;
 
         // nodeType=4: Get native Player* for particle child at index.
-        // Aligned to sub_6C1678: Array[i] + NativeInstanceSupport.
+        // Conversion and native-instance errors deliberately propagate.
         Player* getParticleChild(int index) const;
 
-        // nodeType=4: Get iTJSDispatch2* for particle child at index.
-        // Returns the TJS dispatch object (for passing to sub_6B29C0 etc).
-        iTJSDispatch2* getParticleChildDispatch(int index) const;
-
-        // nodeType=4: Add a TJS-wrapped Player to the particle Array.
-        // Aligned to TJS Array.add.
-        void addParticleChild(const tTJSVariant &playerVar);
-
-        // nodeType=4: Erase particle child at index from TJS Array.
-        // Aligned to TJS Array.erase(index).
-        void eraseParticleChild(int index);
     };
 
 } // namespace motion::detail

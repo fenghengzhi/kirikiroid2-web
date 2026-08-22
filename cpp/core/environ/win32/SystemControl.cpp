@@ -21,16 +21,24 @@
 #include "Application.h"
 #include "TickCount.h"
 #include "Random.h"
+#if defined(EMSCRIPTEN) &&                                             \
+    defined(TVP_ENABLE_WCHAIN_CONTINUOUS_EVENT_TRACE) &&              \
+    TVP_ENABLE_WCHAIN_CONTINUOUS_EVENT_TRACE
 #include <spdlog/spdlog.h>
-#ifdef EMSCRIPTEN
 #include <emscripten.h>
+#define TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE 1
+#else
+#define TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE 0
 #endif
 
 tTVPSystemControl *TVPSystemControl;
 bool TVPSystemControlAlive = false;
 
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
+// Keep the Web-only WCHAIN probe out of the reconstructed default path.  The
+// reference Begin/End/pump state transitions contain no JS query, logger lookup
+// or diagnostic sequence counter.
 static bool TVPSystemControlLogoTraceEnabled() {
-#ifdef EMSCRIPTEN
     return EM_ASM_INT({
         try {
             if(typeof window !== 'undefined' &&
@@ -47,9 +55,6 @@ static bool TVPSystemControlLogoTraceEnabled() {
             return 0;
         }
     }) != 0;
-#else
-    return false;
-#endif
 }
 
 static bool TVPSystemControlTraceSeqAllowed(uint32_t seq) {
@@ -74,6 +79,7 @@ static void TVPTraceSystemControlContinuous(const char *stage,
             eventEnable ? 1 : 0, TVPProcessContinuousHandlerEventFlag ? 1 : 0);
     }
 }
+#endif
 
 //---------------------------------------------------------------------------
 // Get whether to control main thread priority or to insert wait
@@ -81,6 +87,8 @@ static void TVPTraceSystemControlContinuous(const char *stage,
 static bool TVPMainThreadPriorityControlInit = false;
 static bool TVPMainThreadPriorityControl = false;
 static bool TVPGetMainThreadPriorityControl() {
+    // One-shot cache: unlike -contfreq, -lowpri is not refreshed when the
+    // command-line generation changes.  Only the exact string "yes" enables it.
     if(TVPMainThreadPriorityControlInit)
         return TVPMainThreadPriorityControl;
     tTJSVariant val;
@@ -119,10 +127,14 @@ void tTVPSystemControl::CallDeliverAllEventsOnIdle() {
 }
 
 void tTVPSystemControl::BeginContinuousEvent() {
+    // Boolean/idempotent gate.  CallDeliverAllEventsOnIdle is empty in all four
+    // targets, but the one-shot -lowpri getter is still evaluated on first entry.
     if(!ContinuousEventCalling) {
         ContinuousEventCalling = true;
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
         TVPTraceSystemControlContinuous("system.beginContinuousEvent",
                                         ContinuousEventCalling, EventEnable);
+#endif
         InvokeEvents();
         if(TVPGetMainThreadPriorityControl()) {
             // make main thread priority lower
@@ -134,8 +146,10 @@ void tTVPSystemControl::BeginContinuousEvent() {
 void tTVPSystemControl::EndContinuousEvent() {
     if(ContinuousEventCalling) {
         ContinuousEventCalling = false;
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
         TVPTraceSystemControlContinuous("system.endContinuousEvent",
                                         ContinuousEventCalling, EventEnable);
+#endif
         if(TVPGetMainThreadPriorityControl()) {
             // make main thread priority normal
             //			SetThreadPriority(GetCurrentThread(),
@@ -165,10 +179,13 @@ bool tTVPSystemControl::ApplicationIdle() {
 
 void tTVPSystemControl::DeliverEvents() {
     if(ContinuousEventCalling) {
+        // Publish pending even when EventEnable suppresses actual delivery.
         TVPProcessContinuousHandlerEventFlag = true; // set flag
     }
+#if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
     TVPTraceSystemControlContinuous("system.deliverEvents",
                                     ContinuousEventCalling, EventEnable);
+#endif
 
     if(EventEnable) {
         TVPDeliverAllEvents();
@@ -228,6 +245,8 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         win->TickBeat();
     }
 
+    // Continuous mode suppresses maintenance, but never the window TickBeat
+    // loop above.  Keep the native strict comparisons and wraparound arithmetic.
     if(!ContinuousEventCalling && tick - LastCompactedTick > 4000) {
         // idle state over 4 sec.
         LastCompactedTick = tick;

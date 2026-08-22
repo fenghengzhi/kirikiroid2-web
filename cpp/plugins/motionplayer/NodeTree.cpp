@@ -1,8 +1,4 @@
-//
 // Build the persistent node tree from the raw TJS layer hierarchy.
-// Aligned to Player_buildNodeTree_recursive @0x6B4A6C,
-// Player_initNodeFields @0x6B3C78 and Player_buildNodeTree @0x6B51F0.
-//
 
 #include "NodeTree.h"
 
@@ -13,106 +9,67 @@
 #include "ncbind.hpp"
 #include "tjsArray.h"
 
-#include <atomic>
-#include <cstdio>
-#include <spdlog/spdlog.h>
+#include <memory>
 
 namespace motion::detail {
 
     namespace {
-
-        bool rawTryGet(const tTJSVariant &holder, const tjs_char *member,
-                       tTJSVariant &value) {
-            return holder.Type() == tvtObject &&
-                   motionTryPropGet(holder, member, value);
-        }
-
-        bool rawTryGetByNum(const tTJSVariant &holder, tjs_int index,
-                            tTJSVariant &value) {
-            if(holder.Type() != tvtObject) {
-                return false;
-            }
-            iTJSDispatch2 *dispatch = holder.AsObjectNoAddRef();
-            return TJS_SUCCEEDED(dispatch->PropGetByNum(
-                TJS_MEMBERMUSTEXIST, index, &value, dispatch));
-        }
-
-        tTJSVariant rawGet(const tTJSVariant &holder,
-                           const tjs_char *member) {
-            return holder.Type() == tvtObject
-                       ? motionPropGet(holder, member)
-                       : tTJSVariant{};
-        }
-
-        int rawInt(const tTJSVariant &holder, const tjs_char *member,
-                   int fallback = 0) {
-            return holder.Type() == tvtObject
-                       ? static_cast<int>(
-                             motionPropGet(holder, member).AsInteger())
-                       : fallback;
-        }
-
-        double rawReal(const tTJSVariant &holder, const tjs_char *member,
-                       double fallback = 0.0) {
-            return holder.Type() == tvtObject
-                       ? motionPropGet(holder, member).AsReal()
-                       : fallback;
-        }
-
-        bool rawBool(const tTJSVariant &holder, const tjs_char *member,
-                     bool fallback = false) {
-            return holder.Type() == tvtObject
-                       ? motionPropGetBool(holder, member)
-                       : fallback;
-        }
-
-        int rawCount(const tTJSVariant &holder) {
-            return holder.Type() == tvtObject
-                       ? motionPropGetCount(holder)
-                       : 0;
-        }
-
-        void createChildPlayerLike_0x6B3C78(Player &player, MotionNode &node,
-                                             const tTJSVariant &rawLayer) {
-            using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-            {
-                static std::atomic<long> createCount{0};
-                const long count = ++createCount;
-                if(count <= 80 || (count >= 10000 && count <= 10060) ||
-                   count % 2000 == 0) {
-                    std::string chain;
-                    Player *root = &player;
-                    int depth = 0;
-                    for(Player *p = &player; p && depth < 4000; ++depth) {
-                        if(depth < 10) {
-                            if(depth) chain += " <- ";
-                            chain += narrow(p->getChara());
-                        }
-                        root = p;
-                        p = p->parentPlayerForDiag();
-                    }
-                    const std::string childLabel = narrow(node.layerName);
-                    std::fprintf(
-                        stderr,
-                        "CREATESITE n=%ld childLabel='%s' nodeIdx=%d depth=%d "
-                        "rootChara='%s' rootPtr=%p chain='%s'\n",
-                        count,
-                        node.layerName.IsEmpty() ? "<none>" : childLabel.c_str(),
-                        node.index, depth, narrow(root->getChara()).c_str(),
-                        static_cast<void *>(root), chain.c_str());
+        struct DispatchRelease {
+            void operator()(iTJSDispatch2 *dispatch) const {
+                if(dispatch) {
+                    dispatch->Release();
                 }
             }
+        };
+
+        using RetainedDispatch =
+            std::unique_ptr<iTJSDispatch2, DispatchRelease>;
+
+        RetainedDispatch retainObjectDispatch_guess(
+            const tTJSVariant &source) {
+            // The references first copy the Variant, then retain its Object and
+            // destroy the temporary Variant. This leaves one independent
+            // dispatch reference across callbacks and recursive work.
+            tTJSVariant copy(source);
+            iTJSDispatch2 *dispatch = copy.AsObject();
+            copy.Clear();
+            return RetainedDispatch(dispatch);
+        }
+
+        tjs_int requireLayerId_guess(iTJSDispatch2 *resourceManager,
+                                     tTJSVariant &result) {
+            (void)resourceManager->FuncCall(
+                0, TJS_W("requireLayerId"),
+                &nodeRequireLayerIdMemberHint_guess, &result,
+                0, nullptr, resourceManager);
+            return static_cast<tjs_int>(result.AsInteger());
+        }
+
+        void createType3ChildPlayer_guess(
+            Player &player, MotionNode &node,
+            ncbPropAccessor &layer) {
+            using PlayerAdaptor = ncbInstanceAdaptor<Player>;
 
             auto *childNative = new Player(player.getResourceManager());
-            player.linkType3ChildPlayerLike_0x6B43DC(*childNative);
-            const bool independentLayerInherit = rawBool(
-                rawLayer, TJS_W("motionIndependentLayerInherit"), false);
-            player.initializeType3ChildStateLike_0x6B4604(
+            player.linkType3ChildPlayer_guess(*childNative);
+
+            bool independentLayerInherit = false;
+            if(layer.HasValue(
+                   TJS_W("motionIndependentLayerInherit"))) {
+                independentLayerInherit = layer.GetValue(
+                    TJS_W("motionIndependentLayerInherit"),
+                    ncbTypedefs::Tag<bool>());
+            }
+            player.initializeType3ChildState_guess(
                 *childNative, node, independentLayerInherit);
-            // 0x6B4688..0x6B46E0 always CopyRefs a local Variant into
-            // node+1912.  If CreateAdaptor returns null, that Variant remains
-            // void and the just-constructed native is deliberately not
-            // deleted; sub_6F1794@0x6F1794 never owns the native argument.
+
+            // Both internal child producers use CreateAdaptor(child,false,false).
+            // A null result leaves the Variant void and deliberately leaks the
+            // newly allocated Player. If CreateNew succeeds but the fresh
+            // adaptor lookup fails non-throwingly, ncbind instead returns a
+            // non-null empty shell; the Variant is then Object but its native
+            // Player slot is null, while childNative still leaks. Old-tree
+            // teardown only exposes the Void form at its initial Object cast.
             tTJSVariant childVariant;
             if(auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
                 childVariant = tTJSVariant(dispatch, dispatch);
@@ -121,194 +78,261 @@ namespace motion::detail {
             node.childPlayerVar = childVariant;
         }
 
-        void initNodeFieldsLike_0x6B3C78(Player &player, MotionNode &node,
-                                         const tTJSVariant &rawLayer,
-                                         int parentPreview) {
-            // Four independent CopyRef owners in the Android node.
-            node.emoteEditVariant = rawGet(rawLayer, TJS_W("emoteEdit"));
-            node.frameListVariant = rawGet(rawLayer, TJS_W("frameList"));
+        void initializeNodeFromLayer_guess(
+            Player &player, MotionNode &node,
+            const tTJSVariant &rawLayer) {
+            ncbPropAccessor layer{tTJSVariant(rawLayer)};
 
-            node.layerName =
-                motionPropGetString(rawLayer, TJS_W("label"));
-            const tTJSVariant parameterize =
-                rawGet(rawLayer, TJS_W("parameterize"));
+            if(layer.HasValue(
+                   TJS_W("emoteEdit"),
+                   &nodeEmoteEditMemberHint_guess)) {
+                node.emoteEditVariant = layer.GetValue(
+                    TJS_W("emoteEdit"),
+                    ncbTypedefs::Tag<tTJSVariant>(), 0,
+                    &nodeEmoteEditMemberHint_guess);
+            } else {
+                node.emoteEditVariant.Clear();
+            }
+
+            node.layerName = layer.GetValue(
+                TJS_W("label"), ncbTypedefs::Tag<ttstr>(), 0,
+                &nodeLabelMemberHint_guess);
+
+            const tTJSVariant parameterize = layer.GetValue(
+                TJS_W("parameterize"),
+                ncbTypedefs::Tag<tTJSVariant>(), 0,
+                &parameterizeMemberHint_guess);
             if(parameterize.Type() == tvtInteger) {
                 node.parameterizeIndex =
                     static_cast<int>(parameterize.AsInteger());
                 node.parameterEntry =
                     internal::resolveNodeParameterEntry(player, node);
             } else {
-                // Player_initNodeFields @0x6B3EA0 writes node+8=null for every
-                // non-integer `parameterize` variant. The default parameter
-                // entry is used by other binary consumers, not stored here.
                 node.parameterizeIndex = -1;
                 node.parameterEntry = nullptr;
             }
 
-            node.coordinateMode = rawInt(rawLayer, TJS_W("coordinate"));
-            node.joinTarget = rawBool(rawLayer, TJS_W("joinTarget"));
-            node.groundCorrection =
-                rawBool(rawLayer, TJS_W("groundCorrection"));
-            node.inheritFlags =
-                rawInt(rawLayer, TJS_W("inheritMask"), node.inheritFlags);
+            node.coordinateMode = static_cast<int>(layer.GetValue(
+                TJS_W("coordinate"), ncbTypedefs::Tag<tjs_int>(), 0,
+                &coordinateMemberHint_guess));
+            node.joinTarget = layer.GetValue(
+                TJS_W("joinTarget"), ncbTypedefs::Tag<bool>(), 0,
+                &nodeJoinTargetMemberHint_guess);
+            node.groundCorrection = layer.GetValue(
+                TJS_W("groundCorrection"), ncbTypedefs::Tag<bool>(), 0,
+                &nodeGroundCorrectionMemberHint_guess);
+            node.frameListVariant = layer.GetValue(
+                TJS_W("frameList"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+                &nodeFrameListMemberHint_guess);
+            node.inheritFlags = static_cast<int>(layer.GetValue(
+                TJS_W("inheritMask"), ncbTypedefs::Tag<tjs_int>(), 0,
+                &nodeInheritMaskMemberHint_guess));
 
-            const tTJSVariant transformOrder =
-                rawGet(rawLayer, TJS_W("transformOrder"));
+            ncbPropAccessor transform{layer.GetValue(
+                TJS_W("transformOrder"),
+                ncbTypedefs::Tag<tTJSVariant>(), 0,
+                &nodeTransformOrderMemberHint_guess)};
             for(int index = 0; index < 4; ++index) {
-                tTJSVariant value;
-                if(rawTryGetByNum(transformOrder, index, value)) {
-                    node.transformOrder[index] =
-                        static_cast<int>(value.AsInteger());
-                }
+                node.transformOrder[index] = static_cast<int>(
+                    transform.getIntValue(index, 0));
             }
 
-            node.meshType = rawInt(rawLayer, TJS_W("meshTransform"));
+            node.meshType = static_cast<int>(layer.GetValue(
+                TJS_W("meshTransform"), ncbTypedefs::Tag<tjs_int>()));
             if(node.meshType != 0) {
-                node.meshFlags =
-                    rawInt(rawLayer, TJS_W("meshSyncChildMask"));
-                node.meshDivision = rawInt(rawLayer, TJS_W("meshDivision"));
-                tTJSVariant meshCombine;
-                if(rawTryGet(rawLayer, TJS_W("meshCombine"), meshCombine)) {
-                    node.meshCombineEnabled = motionPropGetBool(
-                        rawLayer, TJS_W("meshCombine"));
+                node.meshFlags = static_cast<int>(layer.GetValue(
+                    TJS_W("meshSyncChildMask"),
+                    ncbTypedefs::Tag<tjs_int>()));
+                node.meshDivision = static_cast<int>(layer.GetValue(
+                    TJS_W("meshDivision"),
+                    ncbTypedefs::Tag<tjs_int>()));
+                if(layer.HasValue(TJS_W("meshCombine"))) {
+                    node.meshCombine = layer.GetValue(
+                        TJS_W("meshCombine"),
+                        ncbTypedefs::Tag<bool>());
                 }
             }
 
-            node.nodeType = rawInt(rawLayer, TJS_W("type"));
-            node.stencilTypeBase =
-                rawInt(rawLayer, TJS_W("stencilType"));
-            node.stencilType = node.stencilTypeBase;
+            node.nodeType = static_cast<int>(layer.GetValue(
+                TJS_W("type"), ncbTypedefs::Tag<tjs_int>()));
+            if(layer.HasValue(TJS_W("stencilType"))) {
+                node.stencilType = static_cast<int>(layer.GetValue(
+                    TJS_W("stencilType"),
+                    ncbTypedefs::Tag<tjs_int>()));
+            } else {
+                node.stencilType = 0;
+            }
 
             switch(node.nodeType) {
                 case 0:
-                    node.objTriPriority =
-                        rawInt(rawLayer, TJS_W("objTriPriority"));
+                    node.objTriPriority = static_cast<int>(layer.GetValue(
+                        TJS_W("objTriPriority"),
+                        ncbTypedefs::Tag<tjs_int>()));
                     break;
                 case 1:
-                    node.shapeType = rawInt(rawLayer, TJS_W("shape"));
+                    node.shapeType = static_cast<int>(layer.GetValue(
+                        TJS_W("shape"), ncbTypedefs::Tag<tjs_int>()));
                     break;
                 case 3:
-                    if(parentPreview != 0) {
+                    // The native initializer reads the Player byte here, after
+                    // every preceding property callback. It is not a snapshot
+                    // captured when tree construction began.
+                    if(player.getPreview()) {
                         node.stencilType &= ~4;
                     }
                     node.meshType = 0;
-                    createChildPlayerLike_0x6B3C78(player, node, rawLayer);
+                    createType3ChildPlayer_guess(
+                        player, node, layer);
                     break;
                 case 4:
-                    node.particleType = rawInt(rawLayer, TJS_W("particle"));
-                    node.particleMaxNum =
-                        rawInt(rawLayer, TJS_W("particleMaxNum"));
-                    node.particleAccelRatio =
-                        rawReal(rawLayer, TJS_W("particleAccelRatio"));
-                    node.particleInheritAngle =
-                        rawBool(rawLayer, TJS_W("particleInheritAngle"));
-                    node.particleInheritVelocity =
-                        rawInt(rawLayer, TJS_W("particleInheritVelocity"));
-                    node.particleFlyDirection =
-                        rawInt(rawLayer, TJS_W("particleFlyDirection"));
-                    node.particleApplyZoomToVelocity = rawInt(
-                        rawLayer, TJS_W("particleApplyZoomToVelocity"));
-                    node.particleDeleteOutside = rawBool(
-                        rawLayer, TJS_W("particleDeleteOutsideScreen"));
-                    node.particleTriVolume =
-                        rawBool(rawLayer, TJS_W("particleTriVolume"));
-                    node.particleMotionListVariant =
-                        rawGet(rawLayer, TJS_W("particleMotionList"));
+                    node.prevM11 = 1.0;
+                    node.prevM21 = 0.0;
+                    node.prevM12 = 0.0;
+                    node.prevM22 = 1.0;
+                    node.prevParticleAngle = 0.0;
+                    node.emitterTimerAccum = 0.0;
+                    node.particleEmitterFlagActive = false;
+                    node.particleType = static_cast<int>(layer.GetValue(
+                        TJS_W("particle"),
+                        ncbTypedefs::Tag<tjs_int>()));
+                    node.particleMaxNum = static_cast<int>(layer.GetValue(
+                        TJS_W("particleMaxNum"),
+                        ncbTypedefs::Tag<tjs_int>()));
+                    node.particleAccelRatio = layer.GetValue(
+                        TJS_W("particleAccelRatio"),
+                        ncbTypedefs::Tag<tjs_real>());
+                    node.particleInheritAngle = layer.GetValue(
+                        TJS_W("particleInheritAngle"),
+                        ncbTypedefs::Tag<bool>());
+                    node.particleInheritVelocity = static_cast<int>(
+                        layer.GetValue(
+                            TJS_W("particleInheritVelocity"),
+                            ncbTypedefs::Tag<tjs_int>()));
+                    node.particleFlyDirection = static_cast<int>(
+                        layer.GetValue(
+                            TJS_W("particleFlyDirection"),
+                            ncbTypedefs::Tag<tjs_int>()));
+                    node.particleApplyZoomToVelocity = static_cast<int>(
+                        layer.GetValue(
+                            TJS_W("particleApplyZoomToVelocity"),
+                            ncbTypedefs::Tag<tjs_int>()));
+                    node.particleDeleteOutside = layer.GetValue(
+                        TJS_W("particleDeleteOutsideScreen"),
+                        ncbTypedefs::Tag<bool>());
+                    node.particleTriVolume = layer.GetValue(
+                        TJS_W("particleTriVolume"),
+                        ncbTypedefs::Tag<bool>());
+                    node.particleMotionListVariant = layer.GetValue(
+                        TJS_W("particleMotionList"),
+                        ncbTypedefs::Tag<tTJSVariant>());
                     if(auto *array = TJSCreateArrayObject()) {
-                        node.particleArrayVar = tTJSVariant(array, array);
+                        node.particleArrayVar =
+                            tTJSVariant(array, array);
                         array->Release();
                     }
                     break;
                 case 6:
-                    // node+2380 is already zero from MotionNode construction.
+                    node.emitterActive = false;
                     break;
                 case 9:
-                    node.anchorType = node.cameraConstraintType =
-                        rawInt(rawLayer, TJS_W("anchor"));
+                    node.anchorType_guess = static_cast<int>(layer.GetValue(
+                        TJS_W("anchor"), ncbTypedefs::Tag<tjs_int>()));
                     break;
                 case 12:
-                    node.stencilCompositeMaskLayerListVariant = rawGet(
-                        rawLayer, TJS_W("stencilCompositeMaskLayerList"));
+                    node.stencilCompositeMaskLayerListVariant =
+                        layer.GetValue(
+                            TJS_W("stencilCompositeMaskLayerList"),
+                            ncbTypedefs::Tag<tTJSVariant>());
                     break;
                 default:
                     break;
             }
         }
 
-        void walkRawTree(const tTJSVariant &rawLayers,
-                         int parentIndex, Player &player, int parentPreview) {
-            const int count = rawCount(rawLayers);
-            for(int arrayIndex = 0; arrayIndex < count; ++arrayIndex) {
-                tTJSVariant rawLayer;
-                if(!rawTryGetByNum(rawLayers, arrayIndex, rawLayer) ||
-                   rawLayer.Type() != tvtObject) {
-                    continue;
-                }
+        void buildNodeTreeRecursive_guess(
+            const tTJSVariant &rawLayers, int parentIndex,
+            Player &player,
+            const tTJSVariant &resourceManagerVariant) {
+            ncbPropAccessor layers{tTJSVariant(rawLayers)};
+            const int count = static_cast<int>(layers.GetArrayCount());
+            const RetainedDispatch resourceManager =
+                retainObjectDispatch_guess(resourceManagerVariant);
 
+            for(int arrayIndex = 0; arrayIndex < count; ++arrayIndex) {
                 auto &nodes = player.nodesForBuild();
+                const int thisIndex = static_cast<int>(nodes.size());
+
+                // Append and establish the native partial-node state before
+                // the indexed layer lookup. Any later exception leaves this
+                // element in the deque.
                 nodes.emplace_back();
                 MotionNode &node = nodes.back();
-                node.index = static_cast<int>(nodes.size() - 1);
+                node.index = thisIndex;
                 node.parentIndex = parentIndex;
-                node.layerId1 = player.dispatchRequireLayerId();
-                node.layerId2 = player.dispatchRequireLayerId();
+                node.slots[0].done = true;
+                node.slots[1].done = true;
 
-                initNodeFieldsLike_0x6B3C78(
-                    player, node, rawLayer, parentPreview);
-                player.nodeLabelMapForBuild()[node.layerName] = node.index;
+                const tTJSVariant rawLayer = layers.GetValue(
+                    arrayIndex, ncbTypedefs::Tag<tTJSVariant>());
+                ncbPropAccessor layer{tTJSVariant(rawLayer)};
 
-                const int thisIndex = node.index;
-                const tTJSVariant rawChildren =
-                    rawGet(rawLayer, TJS_W("children"));
-                walkRawTree(rawChildren, thisIndex, player, parentPreview);
+                // The map key and node.layerName are two independent property
+                // reads. A side-effecting getter may therefore make them differ.
+                const ttstr rawMapLabel = layer.GetValue(
+                    TJS_W("label"), ncbTypedefs::Tag<ttstr>());
+                player.nodeLabelMapForBuild()[rawMapLabel] = thisIndex;
+
+                tTJSVariant layerIdResult;
+                node.layerId1 = requireLayerId_guess(
+                    resourceManager.get(), layerIdResult);
+                node.layerId2 = requireLayerId_guess(
+                    resourceManager.get(), layerIdResult);
+
+                initializeNodeFromLayer_guess(player, node, rawLayer);
+
+                const tTJSVariant rawChildren = layer.GetValue(
+                    TJS_W("children"),
+                    ncbTypedefs::Tag<tTJSVariant>());
+                buildNodeTreeRecursive_guess(
+                    rawChildren, thisIndex, player,
+                    resourceManagerVariant);
             }
         }
 
     } // namespace
 
-    void buildNodeTree(Player &player, const tTJSVariant &motionContent,
-                       int parentPreview) {
-        ensureRootNodeLike_0x6CED30(player);
-        player._nodes.front().index = 0;
-        player._nodes.front().parentIndex = -1;
+    void buildNodeTree(Player &player,
+                       ncbPropAccessor &motionContent) {
+        const tTJSVariant rawLayers = motionContent.GetValue(
+            TJS_W("layer"), ncbTypedefs::Tag<tTJSVariant>());
+        buildNodeTreeRecursive_guess(
+            rawLayers, 0, player,
+            player._resourceManager);
 
-        const tTJSVariant rawLayers =
-            rawGet(motionContent, TJS_W("layer"));
-        walkRawTree(rawLayers, 0, player, parentPreview);
-
-        // 0x6B531C..0x6B55A8: raw type-12 mask list -> Player+24 map;
-        // append the referenced type-0/type-3 node pointer and mark the target.
         for(size_t index = 1; index < player._nodes.size(); ++index) {
             auto &node = player._nodes[index];
             if(node.nodeType != 12 || (node.stencilType & 4) == 0) {
                 continue;
             }
+
+            ncbPropAccessor maskList{tTJSVariant(
+                node.stencilCompositeMaskLayerListVariant)};
             const int maskCount =
-                rawCount(node.stencilCompositeMaskLayerListVariant);
+                static_cast<int>(maskList.GetArrayCount());
             for(int maskIndex = 0; maskIndex < maskCount; ++maskIndex) {
-                tTJSVariant rawLabel;
-                if(!rawTryGetByNum(node.stencilCompositeMaskLayerListVariant,
-                                   maskIndex, rawLabel)) {
+                const ttstr label = maskList.GetValue(
+                    maskIndex, ncbTypedefs::Tag<ttstr>());
+                MotionNode *const target =
+                    player.findNodeByRawLabel_guess(label, false);
+                if(target == nullptr) {
                     continue;
                 }
-                const ttstr label(rawLabel);
-                const auto found = player._nodeLabelMap.find(label);
-                if(found == player._nodeLabelMap.end()) {
-                    continue;
-                }
-                auto &target = player._nodes[
-                    static_cast<size_t>(found->second)];
-                if(target.nodeType == 0 || target.nodeType == 3) {
-                    node.stencilCompositeMaskNodes.push_back(&target);
-                    target.stencilCompositeMaskReferenced = true;
+
+                if(target->nodeType == 0 || target->nodeType == 3) {
+                    node.stencilCompositeMaskNodes.push_back(target);
+                    target->stencilCompositeMaskReferenced = true;
                 }
             }
-        }
-
-        if(auto logger = spdlog::get("plugin")) {
-            logger->debug(
-                "buildNodeTree(raw): rawLayers={}, {} nodes built",
-                rawCount(rawLayers), player._nodes.size());
         }
     }
 

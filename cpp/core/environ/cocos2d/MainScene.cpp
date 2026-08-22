@@ -158,6 +158,10 @@ void TVPControlAdDialog(int adType, int arg1, int arg2);
 // void TVPHideIME();
 
 int TVPDrawSceneOnce(int interval) {
+    // Keep this as a direct draw. All four mobile references omit the
+    // DisplayLinkDirector main-loop tail that clears the current Cocos
+    // autorelease pool; modal/manual draws can therefore leave newly
+    // autoreleased objects enrolled until some later main-loop clear.
     static tjs_uint64 lastTick = TVPGetRoughTickCount32();
     tjs_uint64 curTick = TVPGetRoughTickCount32();
     int remain = interval - (curTick - lastTick);
@@ -405,6 +409,9 @@ class TVPWindowLayer : public cocos2d::extension::ScrollView,
     tTJSNI_Window *TJSNativeInstance;
     tjs_int ActualZoomDenom; // Zooming factor denominator (actual)
     tjs_int ActualZoomNumer; // Zooming factor numerator (actual)
+    // Reference-binary ownership is through Node::_children, not these raw
+    // observers: addChild retains PrimaryLayerArea, whose addChild in turn
+    // retains DrawSprite.  Node destruction releases both container edges.
     Sprite *DrawSprite = nullptr;
     Node *PrimaryLayerArea = nullptr;
     int LayerWidth = 0, LayerHeight = 0;
@@ -447,6 +454,9 @@ public:
     }
 
     ~TVPWindowLayer() override {
+        // Deliberately do not release DrawSprite/PrimaryLayerArea here.  The
+        // reference implementations leave that to the inherited Node vector
+        // destructor after this window-list unlinking has finished.
         if(_lastWindowLayer == this)
             _lastWindowLayer = _prevWindow;
         if(_nextWindow)
@@ -473,6 +483,9 @@ public:
         DrawSprite = Sprite::create();
         DrawSprite->setAnchorPoint(Vec2(0, 1)); // top-left
         PrimaryLayerArea = Node::create();
+        // Both create() calls have already enrolled an autorelease debt.  Each
+        // parent edge is retained before a pool can clear, leaving one
+        // container-owned reference in the ordinary long-lived state.
         addChild(PrimaryLayerArea);
         PrimaryLayerArea->addChild(DrawSprite);
         setAnchorPoint(cocos2d::Size::ZERO);
@@ -494,6 +507,8 @@ public:
     static TVPWindowLayer *create(tTJSNI_Window *w) {
         TVPWindowLayer *ret = new TVPWindowLayer(w);
         ret->init();
+        // The reference binaries ignore init()'s result and enroll the window
+        // only after init has enrolled its Sprite, Node and listener objects.
         ret->autorelease();
         return ret;
     }
@@ -1145,7 +1160,7 @@ public:
                 PrimaryLayerArea ? PrimaryLayerArea->getParent() : nullptr;
             const auto *windowParent = getParent();
             logger->warn(
-                "WCHAIN stage=window.updateDrawBuffer.pre func=0xAA6268 "
+                "WCHAIN stage=window.updateDrawBuffer.pre "
                 "tex={} currentTex={} newTex={} paintBox={}x{} tex={}x{} "
                 "internal={}x{} texScale={}x{} viewSize={}x{} contentSize={}x{} "
                 "zoom={} offset=({}, {}) spriteVisible={} spritePos=({}, {}) "
@@ -1178,6 +1193,11 @@ public:
                 (const void *)primaryParent, (const void *)windowParent);
             }
         }
+        // This identity gate is also an ownership gate. OGL same-size reuse
+        // returns tex2d itself after replacing only its borrowed GL name, so
+        // the Sprite does not retain/release anything and the adapter keeps
+        // its previous _owner reference. A same-sized render-target rebuild
+        // reaches this path even when tex is a different iTVPTexture2D.
         if(tex2d != newtex) {
             DrawSprite->setTexture(newtex);
             float sw, sh;
@@ -1202,7 +1222,7 @@ public:
                 if(auto logger = spdlog::get("core")) {
                 const auto spriteRect = DrawSprite->getTextureRect();
                 logger->warn(
-                    "WCHAIN stage=window.updateDrawBuffer.apply func=0xAA6268 "
+                    "WCHAIN stage=window.updateDrawBuffer.apply "
                     "sw={} sh={} paintBox={}x{} drawTextureScale={}x{} "
                     "spriteRect=({}, {}, {}, {})",
                     sw, sh, LayerWidth, LayerHeight, _drawTextureScaleX,
@@ -1319,7 +1339,10 @@ public:
         // window.
 
         // TVPRemoveWindowLayer(this);
-        this->removeFromParent(); // and delete this
+        // The parent-owned reference is released here.  Destruction is
+        // synchronous only after this window's autorelease debt (and any
+        // other external retains) has already been discharged.
+        this->removeFromParent();
     }
 
     bool GetWindowActive() override { return _currentWindowLayer == this; }
@@ -2882,6 +2905,8 @@ iWindowLayer *TVPCreateAndAddWindow(tTJSNI_Window *w) {
 }
 
 void TVPRemoveWindowLayer(iWindowLayer *lay) {
+    // removeFromParent releases the scene-graph edge; it is not an unconditional
+    // immediate delete when the window still has autorelease/external debt.
     static_cast<TVPWindowLayer *>(lay)->removeFromParent();
 }
 

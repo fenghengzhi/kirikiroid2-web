@@ -8,48 +8,44 @@
 #include <map>
 #include <vector>
 
+#include "MeshPoint.h"
 #include "tjs.h"
 
 namespace motion {
 
-    struct NativeSLAPayloadLike_0x6DCD0C {
+    struct SeparateLayerPayload_guess {
         tTJSVariant layerVariant;
-        tjs_int type = 0;
-        bool visible = true;
-        ttstr key;
-        tjs_int flags = 0;
-        std::array<float, 8> affine{};
-        std::vector<float> vertices;
-        std::vector<float> uvs;
-        std::array<float, 8> color{};
-        std::array<float, 2> origin{};
+        tjs_int completionType = 0;
+        bool hasOutlineOrMeshline = false;
+        ttstr commandSrc;
+        tjs_int blendMode = 0;
+        std::array<tjs_uint32, 4> packedColors{};
+        std::array<float, 8> paintAndViewport{};
+        std::vector<detail::MeshPoint> compositeMeshPoints;
+        std::vector<detail::MeshPoint> bezierPatchPoints;
+        std::array<float, 8> corners{};
 
-        static NativeSLAPayloadLike_0x6DCD0C fromLayerVariant(
-            const tTJSVariant &layer,
-            tjs_uint32 ordinal);
-        bool compatibleWithLike_0x6DCB2C(
-            const NativeSLAPayloadLike_0x6DCD0C &other) const;
+        bool requiresRefresh_guess(
+            const SeparateLayerPayload_guess &other) const;
     };
 
-    struct NativeSLANodeLike_0x6DCD0C {
-        tjs_uint32 ordinal = 0;
-        NativeSLAPayloadLike_0x6DCD0C payload;
-    };
-
-    class NativeSLAOrderedMapLike_0x6C6B48 {
+    class SeparateLayerOrderedMap_guess {
     public:
-        using Map = std::map<tjs_uint32, NativeSLANodeLike_0x6DCD0C>;
+        // All four native trees store the ordinal only in the pair key.  The
+        // mapped object starts immediately after that key/alignment slot; no
+        // second ordinal precedes the payload.
+        using Map = std::map<tjs_uint32, SeparateLayerPayload_guess>;
         using iterator = Map::iterator;
         using const_iterator = Map::const_iterator;
 
-        NativeSLAOrderedMapLike_0x6C6B48() = default;
-        ~NativeSLAOrderedMapLike_0x6C6B48();
+        SeparateLayerOrderedMap_guess() = default;
+        ~SeparateLayerOrderedMap_guess();
 
-        NativeSLAOrderedMapLike_0x6C6B48(
-            const NativeSLAOrderedMapLike_0x6C6B48 &) =
+        SeparateLayerOrderedMap_guess(
+            const SeparateLayerOrderedMap_guess &) =
             delete;
-        NativeSLAOrderedMapLike_0x6C6B48 &
-        operator=(const NativeSLAOrderedMapLike_0x6C6B48 &) = delete;
+        SeparateLayerOrderedMap_guess &
+        operator=(const SeparateLayerOrderedMap_guess &) = delete;
 
         iterator begin() { return _nodes.begin(); }
         iterator end() { return _nodes.end(); }
@@ -57,14 +53,14 @@ namespace motion {
         const_iterator end() const { return _nodes.end(); }
         bool empty() const { return _nodes.empty(); }
 
-        NativeSLANodeLike_0x6DCD0C &ensure(tjs_uint32 ordinal);
+        SeparateLayerPayload_guess &ensure(tjs_uint32 ordinal);
         iterator find(tjs_uint32 ordinal) { return _nodes.find(ordinal); }
         const_iterator find(tjs_uint32 ordinal) const {
             return _nodes.find(ordinal);
         }
         void erase(iterator it);
         void clear(bool invalidateObjects);
-        void swapWith(NativeSLAOrderedMapLike_0x6C6B48 &other);
+        void swapWith(SeparateLayerOrderedMap_guess &other);
 
     private:
         Map _nodes;
@@ -72,16 +68,21 @@ namespace motion {
 
     class SeparateLayerAdaptor {
     public:
-        explicit SeparateLayerAdaptor(tTJSVariant targetLayer = {});
+        explicit SeparateLayerAdaptor(tTJSVariant targetLayer);
         ~SeparateLayerAdaptor();
 
+        // The four native callbacks copy arg0 when present, otherwise construct
+        // from a Void Variant, and ignore later arguments.  ncbind invokes this
+        // behind a pre-created non-sticky shell adaptor; its generated bridge
+        // owns rollback (native dtor + delete) when class-ID lookup/attach fails.
+        // No reference producer sets this class's adaptor sticky flag true.
         static tjs_error factory(SeparateLayerAdaptor **result, tjs_int numparams,
-                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
+                                 tTJSVariant **param, iTJSDispatch2 *) {
             tTJSVariant targetLayer;
-            if(numparams > 0 && param[0]) {
+            if(numparams >= 1) {
                 targetLayer = *param[0];
             }
-            if(result) *result = new SeparateLayerAdaptor(targetLayer);
+            *result = new SeparateLayerAdaptor(targetLayer);
             return TJS_S_OK;
         }
 
@@ -93,65 +94,51 @@ namespace motion {
             return _owner;
         }
 
-        // Aligned to libkrkr2.so SeparateLayerAdaptor_ncb_registerMembers (0x6ABFAC)
+        // Public property pair shared by all four NCB registrars.
         tjs_int getAbsolute() const { return _absolute; }
         void setAbsolute(tjs_int v) { _absolute = v; }
         tTJSVariant getTargetLayer() const { return _targetLayer; }
         void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
 
-        tTJSVariant getPrivateRenderTarget() const;
         iTJSDispatch2 *getPrivateRenderTargetObject() const;
         void clear();
-        void beginRenderLayerPassLike_0x6C4E28();
-        tTJSVariant resolveRenderLayerNodeLike_0x6C6B48(
+        void beginLayerPass_guess();
+        tTJSVariant resolveLayerNode_guess(
             tjs_uint32 ordinal,
-            const NativeSLAPayloadLike_0x6DCD0C &sourcePayload,
-            iTJSDispatch2 *objthis,
+            const SeparateLayerPayload_guess &sourcePayload,
             bool &createdOrChanged);
-        void endRenderLayerPassLike_0x6C4E28();
-        void beginAccurateRenderPassLike_0x6C9CA8();
-        void endAccurateRenderPassLike_0x6C9CA8();
+        // Accurate rendering uses this payload-free overload only for its
+        // optional intermediate masked Layer; the base item Layer goes through
+        // resolveLayerNode_guess with the complete source payload. The sticky
+        // shared-D3D draw route also uses this overload. It moves only the
+        // retained Layer Variant between the same active/retired trees and
+        // deliberately does not advance the per-pass sequence after publishing
+        // absolute.
+        tTJSVariant resolveLayerOrdinal_guess(tjs_uint32 ordinal);
+        void endLayerPass_guess();
         static tjs_error assignCompat(tTJSVariant *result, tjs_int numparams,
                                       tTJSVariant **param,
                                       iTJSDispatch2 *objthis);
-        static tjs_error getLayerTreeOwnerInterfaceCompat(
-            tTJSVariant *result,
-            tjs_int numparams,
-            tTJSVariant **param,
-            iTJSDispatch2 *objthis);
-
     private:
-        friend iTJSDispatch2 *ensurePrivateMotionGLLLike_0x6D5948(
-            SeparateLayerAdaptor &sla,
-            const tTJSVariant &ownerVariant,
-            const tTJSVariant &targetLayerVariant,
-            iTJSDispatch2 *targetLayerObject,
-            int canvasWidth,
-            int canvasHeight);
+        friend iTJSDispatch2 *ensurePrivateMotionGLL_guess(
+            SeparateLayerAdaptor &sla);
 
-        void trackManagedTargetLike_0x6AC410(const tTJSVariant &target,
-                                             tjs_uint32 ordinal);
         void clearPrivateRenderState();
-        void clearNativeListsForDtor();
-        tjs_error assignFromAdaptorLike_0x6AC410(
-            const SeparateLayerAdaptor &source,
-            iTJSDispatch2 *objthis);
-        tTJSVariant resolveLayerNodeLike_0x6C6B48(
+        tjs_error assignFromAdaptor_guess(const SeparateLayerAdaptor &source);
+        tTJSVariant resolveLayerNodeInternal_guess(
             tjs_uint32 ordinal,
-            const NativeSLAPayloadLike_0x6DCD0C &sourcePayload,
-            iTJSDispatch2 *objthis,
+            const SeparateLayerPayload_guess &sourcePayload,
             bool &createdOrChanged);
 
-        // Native SeparateLayerAdaptor layout from libkrkr2.so:
-        // +0 owner variant, +20 targetLayer variant, +40 private target
-        // variant. The native "state" checked at +56 is the vt field of the
-        // +40 tTJSVariant; tvtObject means the PrivateMotionGLL object exists.
+        // Native declaration order is three owning Variants, the active and
+        // retired ordered maps, then the absolute base and per-pass sequence.
+        // Exact ABI offsets differ between the 64-bit and 32-bit references.
         tTJSVariant _owner;
         tTJSVariant _targetLayer;
         tTJSVariant _privateTarget;
-        NativeSLAOrderedMapLike_0x6C6B48 _managedTargets;
-        NativeSLAOrderedMapLike_0x6C6B48 _assignTargets;
+        SeparateLayerOrderedMap_guess _activeLayers_guess;
+        SeparateLayerOrderedMap_guess _retiredLayers_guess;
         tjs_int _absolute = 0;
-        tjs_int _assignSequence = 0;
+        tjs_int _assignSequence;
     };
 } // namespace motion

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -53,13 +54,13 @@ namespace motion::detail {
         if(value == texture) {
             return;
         }
-        if(value) {
-            value->AddRef();
-        }
         if(texture) {
             texture->Release();
         }
         texture = value;
+        if(value) {
+            value->AddRef();
+        }
     }
 
     PackedSourceAtlasEntry::~PackedSourceAtlasEntry() {
@@ -96,23 +97,16 @@ namespace motion::detail {
         if(value == texture) {
             return;
         }
-        if(value) {
-            value->AddRef();
-        }
         if(texture) {
             texture->Release();
         }
         texture = value;
+        if(value) {
+            value->AddRef();
+        }
     }
 
-    LoadedResourceRecord::LoadedResourceRecord() {
-        // Current mapped-record construction is 6E8DC4->6E8EEC->6E90DC,
-        // 5A7488->5A751C->5A762C, inline in 100101798, and inline in FE940.
-        // Each path initializes the retained PSB owner first, then asks its STL
-        // policy for ten buckets independently for both nested maps.
-        winSourceTextures.rehash(10);
-        krkrSourceEntries.rehash(10);
-    }
+    LoadedResourceRecord::LoadedResourceRecord() = default;
 } // namespace motion::detail
 
 namespace {
@@ -120,23 +114,31 @@ namespace {
         TVPExecuteExpression(TJS_W("new Math.RandomGenerator()"), &generator);
     }
 
-    // Process-wide owner filter; static destruction releases its target.
+    // Process-wide, default-empty owner filter.  All four references register
+    // its std::function destructor during static initialization, so the last
+    // installed seed/function target survives every ResourceManager instance
+    // and is released only by a later replacement or process teardown.  The
+    // native boundary has no lock: replacement concurrent with load is a data
+    // race and must not be hidden behind a portable mutex or snapshot.
     PSB::PSBFile::OwnerFilter emotePSBDecryptFilter;
 
     void replaceEmotePSBDecryptFilter_guess(
         const PSB::PSBFile::OwnerFilter &filter) {
-        // Assignment copy-constructs the replacement target and destroys the
-        // former target after the swap.
+        // Both native standard-library implementations copy-construct a
+        // temporary before swapping it with the process-global object, then
+        // destroy the former target.  A throwing copy therefore leaves the old
+        // filter intact; successful replacement destroys it before return.
         emotePSBDecryptFilter = filter;
     }
 
     PSB::PSBFile::OwnerFilter makeEmotePSBDecryptSeedFilter(
         tjs_int64 seed) {
-        // The current seed callbacks are 683110/564EC0/1001B8D68/1B83AC;
-        // their filter invokers are 6837AC/56522E/1001B92E8/1B8992. All four
-        // decrypt [header.encryptData, header.chunkOffsets) with the same
-        // four-word xorshift stream, seeded by the low word of the captured
-        // 64-bit TJS Integer.
+        // All four current references decrypt
+        // [header.encryptData, header.chunkOffsets) with the same four-word
+        // xorshift stream, seeded by the low word of the captured 64-bit TJS
+        // Integer. A zero remaining word is the native refill sentinel, so a
+        // generated word with a zero high-byte suffix advances early instead
+        // of unconditionally lasting four bytes.
         return [seed](PSB::PSBRawOwner &owner) {
             auto *header = owner.GetHeader();
             auto *cursor = header->encryptData;
@@ -167,9 +169,9 @@ namespace {
         };
     }
 
-    // The current function callbacks 683240/564F58/1001B8E50/1B84D0 retain
-    // exactly the Object and ObjThis dispatch pointers in a 0x10/0x08-byte
-    // closure (64/32-bit). Final control-block release releases both pointers.
+    // The four current function callbacks retain exactly the Object and ObjThis
+    // dispatch pointers in a two-pointer closure. Final control-block release
+    // releases both pointers.
     class EmotePSBDecryptClosure final {
     public:
         explicit EmotePSBDecryptClosure(tTJSVariant &value) :
@@ -193,9 +195,9 @@ namespace {
         TJS::tRefHolder<EmotePSBDecryptClosure> closure(
             new EmotePSBDecryptClosure(callable));
         return [closure](PSB::PSBRawOwner &owner) {
-            // Current invokers 683994/5652C0/1001B94A8/1B8AB0 construct the
-            // same CBinaryAccessor shape, create {object,size} variants, call
-            // the closure with two arguments, and ignore its result.
+            // All four invokers construct the same CBinaryAccessor shape,
+            // create {object,size} variants, call the closure with two
+            // arguments, and ignore its result.
             auto *accessor = new CBinaryAccessor(
                 owner.GetData(), static_cast<unsigned int>(owner.GetSize()));
             tTJSVariant accessorValue(accessor);
@@ -213,16 +215,27 @@ namespace {
 // SourceCache is the base subobject; it owns the Layers and list cache before
 // ResourceManager initializes its module map and random generator.
 motion::ResourceManager::ResourceManager() {
-    // The native map is initialized with ten buckets before the generator.
-    _loadedModules.rehash(10);
+    // The module map is ordinary default-constructed state. The Android
+    // references' older libstdc++ policy eagerly chooses/allocates from a
+    // ten-bucket hint; libc++ on both iOS references leaves it bucketless
+    // until the first insertion. No plugin-source rehash call exists.
     initializeRandomGenerator(_randomGenerator);
+    // All four native constructors evaluate the script expression before the
+    // set allocates its sentinel node. Keep these writes in the constructor
+    // body: moving `{0}` or the two ones into member initializers changes the
+    // allocation/unwind boundary when evaluation or insertion throws.
+    _usedLayerIds.insert(0);
+    _nextLayerId = 1;
+    _layerIdState_guess = 1;
 }
 
 motion::ResourceManager::ResourceManager(tTJSVariant kag,
                                          tjs_int cacheSize) :
     SourceCache(kag, cacheSize) {
-    _loadedModules.rehash(10);
     initializeRandomGenerator(_randomGenerator);
+    _usedLayerIds.insert(0);
+    _nextLayerId = 1;
+    _layerIdState_guess = 1;
     const bool hasKagObject = kag.Type() == tvtObject &&
         kag.AsObjectNoAddRef();
     tTJSVariantClosure kagClosure;
@@ -259,7 +272,9 @@ motion::ResourceManager::ResourceManager(tTJSVariant kag,
 
 motion::ResourceManager::~ResourceManager() {
     // Clear the module map in the derived destructor body before automatic
-    // member and SourceCache-base teardown.
+    // derived-member and SourceCache-base teardown.  The base list destructor
+    // releases entry Layers directly; it does not call public clearCache and
+    // therefore does not send Invalidate during object destruction.
     _loadedModules.clear();
 }
 
@@ -267,8 +282,8 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
                                                           tjs_int count,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *) {
-    // 683110/564EC0/1001B8D68/1B83AC accept extra arguments and apply ordinary
-    // TJS integer conversion only to p[0] before installing the seed filter.
+    // All four callbacks accept extra arguments and apply ordinary TJS integer
+    // conversion only to p[0] before installing the seed filter.
     if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
@@ -282,9 +297,8 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *,
                                                           tjs_int count,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *) {
-    // 683240/564F58/1001B8E50/1B84D0 accept extra arguments and convert only
-    // p[0] to an object closure. The process-wide replacement helpers are
-    // 6A5BB0/57B174/1001010B0/FE1E0.
+    // All four callbacks accept extra arguments and convert only p[0] to an
+    // object closure before replacing the process-wide filter target.
     if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
@@ -294,12 +308,8 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *,
 }
 
 tTJSVariant motion::ResourceManager::load(ttstr path) {
-    // The four current load/cache boundaries are:
-    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6A616C,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_57B338,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_1001012D8, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_FE40C. All four first replace the input
-    // with TVPGetPlacedPath(path), then use that exact ttstr for lookup and
+    // All four current loaders first replace the input with
+    // TVPGetPlacedPath(path), then use that exact ttstr for lookup and
     // insertion in the module map.
     path = TVPGetPlacedPath(path);
     PSB::PSBFile selected;
@@ -315,6 +325,8 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
         }
 
         PSB::PSBFile loaded;
+        // The references pass the process-global lvalue directly.  There is no
+        // per-load std::function copy, atomic snapshot, or synchronization.
         if(!loaded.LoadStorage(path, emotePSBDecryptFilter)) {
             TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"), path);
         }
@@ -374,27 +386,24 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
     return result;
 }
 
-// The four ResourceManager registrars re-list SourceCache::loadSource at
-// 6A4F88/57ACC8/1001009AC/FDB50. It is inherited `(source, descriptor)` cache
-// materialization, not a by-name forward to ResourceManager::load.
+// The four ResourceManager registrars re-list the exact SourceCache::loadSource
+// callback. It is inherited `(source, descriptor)` cache materialization, not
+// a by-name forward to ResourceManager::load.
 
 void motion::ResourceManager::unload(ttstr path) const {
     LOGGER->debug("ResourceManager::unload({})", path.AsStdString());
-    // Current unload callbacks 6A697C/57B6F8/100101A28/FEC04 normalize before
-    // performing the same case-sensitive map lookup used by load.
+    // Every current unload callback normalizes before performing the same
+    // case-sensitive map lookup used by load.
     path = TVPGetPlacedPath(path);
     _loadedModules.erase(path);
 }
 
-// The four ResourceManager registrars also re-list inherited clearCache at
-// 6A5818/57B018/100100F10/FE0D4. It clears only SourceCache's Layer list;
-// load/unload/unloadAll govern the PSB module map.
+// The four ResourceManager registrars also re-list the inherited clearCache
+// callback. It clears only SourceCache's cached-entry Layer list;
+// load/unload/unloadAll govern the PSB module map, while bufLayer persists.
 
 // The four current icon/source lookup boundaries are:
-// Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6A7F1C,
-// Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_57BDE0,
-// Kirikiroid2_1.3.9_iOS_arm64!sub_100102594, and
-// Kirikiroid2_1.3.9_iOS_armv7!sub_FF890. Their shared flow is:
+// All four current reference implementations share this flow:
 //   1. split path by "/" (detail::splitTtstr_guess); an empty first element
 //      produces a void result.
 //      The helper always appends its final remainder, so no vector-size gate
@@ -403,36 +412,37 @@ void motion::ResourceManager::unload(ttstr path) const {
 //      ":" and write width/height/originX/originY as String Variants plus
 //      Integer blank=1 through ncbDictionaryAccessor::SetValue; otherwise void.
 //   3. for "src": look up the module map by moduleKey. The requested source
-//      path is the separate argument. Player_findSource
-//      Player::findSourceForNode_guess supplies Player+1012 as moduleKey and
-//      the resolved src path as
-//      the path argument; Player's play path fills that key from the matched
-//      module-map entry.
+//      path is the separate argument. Public Player::findSource passes its
+//      retained motion-context Variant and the caller's path through the
+//      ResourceManager dispatch. The internal findSourceForNode path builds a
+//      src/icon fallback path and uses the same dispatch boundary; its native
+//      atlas routes remain separate from this script-visible facade.
 //   4. navigate the mapped record's raw root["source"][group]["icon"][icon];
 //      only the dynamic group/icon keys have hasKey gates.
 //   5. on hit: allocate an ObjSource facade holding the icon raw node and a
 //      null lazy texture, then wrap it through the NCB class adaptor. The
-//      object is 0x18 bytes on both 64-bit references and 0x0c bytes on both
-//      32-bit references; those sizes are ABI consequences, not source layout
-//      constants. Port: new ObjSource(iconNode) + CreateAdaptor.
+//      source structure is the raw-node owner plus lazy texture state; native
+//      object sizes remain in analysis/. Port: new ObjSource(iconNode) +
+//      CreateAdaptor.
 tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
                                                 ttstr path) const {
     // 1. split name by "/" with detail::splitTtstr_guess.
     const std::vector<ttstr> pieces =
         detail::splitTtstr_guess(path, TJS_W("/"));
     if(pieces[0].IsEmpty()) {
-        return {}; // LABEL_11: *(a4+16)=0 -> void
+        return {};
     }
 
     // 2. All four compare the first component with "src", then "blank".
     if(pieces[0] != TJS_W("src")) {
         if(pieces[0] != TJS_W("blank")) {
-            return {}; // LABEL_11
+            return {};
         }
 
         // The inlined dictionary-accessor path gives each SetValue a fresh
         // temporary Variant and a distinct hint slot, then destroys that
-        // Variant immediately.
+        // Variant immediately. The blank slot itself is also reused by the
+        // later MotionNode source-descriptor reader.
         const std::vector<ttstr> dims =
             detail::splitTtstr_guess(pieces[1], TJS_W(":"));
         ncbDictionaryAccessor dictionary;
@@ -460,7 +470,7 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
     // PSB owner a second time.
     const auto recordIt = _loadedModules.find(moduleKey);
     if(recordIt == _loadedModules.end()) {
-        return {}; // !v27 || !*v27 -> LABEL_71 result void
+        return {};
     }
     detail::LoadedResourceRecord *record = &recordIt->second;
 
@@ -469,7 +479,7 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
     const PSB::PSBRawNode root(record->file);
     const PSB::PSBRawNode source = root.GetDictionaryValueStrict("source");
     if(!source.ContainsDictionaryKey(groupKey.c_str())) {
-        return {}; // LABEL_64 -> result void
+        return {};
     }
     // The group node is a full-expression temporary destroyed immediately
     // after constructing iconHolder, before the icon gate, in all four builds.
@@ -483,7 +493,13 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
         iconHolder.GetDictionaryValueStrict(iconKey.c_str());
 
     // 5. Copy the raw pair into ObjSource (owner AddRef), zero its texture,
-    // then attach it to the NCB native instance.
+    // then attach it to the NCB native instance. CreateAdaptor uses
+    // sticky=false, so a compatible adaptor deletes ObjSource on invalidation.
+    // Before that attachment there is deliberately no native-object guard:
+    // a missing class/CreateNew failure returns Void and leaks src plus its
+    // retained PSB owner; an incompatible adaptor still returns its script
+    // object but also leaves the same native state unattached and leaked. The
+    // four references preserve both boundaries.
     using ObjSourceAdaptor = ncbInstanceAdaptor<motion::ObjSource>;
     motion::ObjSource *src = new motion::ObjSource(iconEntry);
     if(iTJSDispatch2 *dispatch = ObjSourceAdaptor::CreateAdaptor(src)) {
@@ -491,38 +507,40 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
         dispatch->Release();
         return result;
     }
-    // The null-adaptor branch returns void without reclaiming the newly
-    // allocated ObjSource in all four references.
+    // A null adaptor does not reclaim the newly allocated ObjSource.
     return {};
 }
 
 tjs_int motion::ResourceManager::requireLayerId() {
-    // Current callbacks: 6A8A74/57C258/100102D40/100240. The counter is
-    // monotone, skips occupied ids, inserts the selected id, and never rewinds
-    // when an id is released. Sentinel 0 is never returned.
+    // The unsigned counter advances until it reaches an unoccupied key, then
+    // inserts that key before incrementing again. Arithmetic deliberately
+    // wraps at 2^32; sentinel zero is skipped only while it remains in the set.
     while(_usedLayerIds.find(_nextLayerId) != _usedLayerIds.end()) {
         ++_nextLayerId;
     }
     const auto id = _nextLayerId;
     _usedLayerIds.insert(id);
     ++_nextLayerId;
-    return id;
+    return static_cast<tjs_int>(id);
 }
 
-// Current callbacks: 6A8B30/57C2C8/100102DB8/10028A. Only the id-set entry is
-// erased; id 0 remains reserved.
-void motion::ResourceManager::releaseLayerId(tjs_int id) {
-    if(id == 0) {
-        return;
-    }
-    _usedLayerIds.erase(id);
+tjs_int motion::ResourceManager::releaseLayerId(tjs_int id) {
+    // The four callbacks find the exact unsigned key and, on a hit, erase the
+    // complete suffix rather than merely that node. A miss erases the empty
+    // [end,end) range. release(0) clears the sentinel and all allocations; the
+    // counter is never rewound. The NCB invoker publishes the signed 32-bit
+    // number of erased nodes as a TJS Integer.
+    const auto first = _usedLayerIds.find(static_cast<tjs_uint32>(id));
+    const auto erased = std::distance(first, _usedLayerIds.end());
+    _usedLayerIds.erase(first, _usedLayerIds.end());
+    return static_cast<tjs_int>(erased);
 }
 
-// bufLayer is likewise inherited: the current callbacks are
-// 6A58DC/57B060/100100F84/FE11A in both SourceCache and ResourceManager tables.
+// bufLayer is likewise inherited: both class tables use the exact same getter
+// callback and a null setter, so there is one persistent SourceCache field.
 
 void motion::ResourceManager::unloadAll() const {
-    // Current callbacks 6A60D8/57B32C/1001012CC/FE3FE clear only the module map.
+    // Every current callback clears only the module map.
     LOGGER->debug("ResourceManager::unloadAll()");
     _loadedModules.clear();
 }
@@ -533,9 +551,9 @@ bool motion::ResourceManager::isExistMotion(tTJSVariant projectKey,
         detail::splitTtstr_guess(path, TJS_W("/"));
     const std::string chara = detail::narrow(pieces[1]);
     const std::string motionName = detail::narrow(pieces[2]);
-    // Current callbacks 6A6AD8/57B780/100101AC8/FECF4 keep the direct module
-    // hit and fallback map walk as separate raw-node paths. Void skips the
-    // direct lookup; every other project key must already be String.
+    // The four reference implementations keep the direct module hit and the
+    // fallback map walk as separate raw-node paths. Void skips the direct
+    // lookup; every other project key must already be String.
     if(projectKey.Type() != tvtVoid) {
         const tTJSVariantString *projectString =
             projectKey.AsStringNoAddRef();
@@ -580,8 +598,8 @@ tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
         detail::splitTtstr_guess(path, TJS_W("/"));
     const std::string chara = detail::narrow(pieces[1]);
     const std::string motionName = detail::narrow(pieces[2]);
-    // Current callbacks 6A72B4/57B9F8/100101E84/FF11C mirror isExistMotion's
-    // direct/fallback split. Only the final motion node is wrapped in a dispatch.
+    // findMotion mirrors isExistMotion's direct/fallback split. Only the final
+    // motion node is wrapped in a dispatch.
     if(projectKey.Type() != tvtVoid) {
         const tTJSVariantString *projectString =
             projectKey.AsStringNoAddRef();
@@ -600,6 +618,12 @@ tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
                 if(motions.ContainsDictionaryKey(motionName.c_str())) {
                     const PSB::PSBRawNode motion =
                         motions.GetDictionaryValueStrict(motionName.c_str());
+                    // Preserve the shipped raw handoff: the initial dispatch
+                    // reference is unguarded until the first Array element has
+                    // retained both Object and ObjThis. Array creation or that
+                    // first emplacement throwing after construction therefore
+                    // leaks the dispatch; Release happens only after ownership
+                    // has transferred successfully.
                     auto *dispatch = new PSB::PSBValueDispatch(
                         motion.GetFile_guess(), motion.GetNode());
                     auto result = detail::createTJSArrayWithItems_guess();
@@ -626,6 +650,8 @@ tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
         }
         const PSB::PSBRawNode motion =
             motions.GetDictionaryValueStrict(motionName.c_str());
+        // The fallback hit uses the same intentionally unguarded handoff and
+        // exception boundary as the direct hit above.
         auto *dispatch = new PSB::PSBValueDispatch(
             motion.GetFile_guess(), motion.GetNode());
         auto result = detail::createTJSArrayWithItems_guess();
@@ -637,29 +663,14 @@ tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
     return {};
 }
 
-tjs_error motion::ResourceManager::random(tTJSVariant *r, tjs_int,
-                                          tTJSVariant **,
-                                          iTJSDispatch2 *objthis) {
-    // Current callbacks 6A894C/57C1CC/100102C90/1000F0 call the retained
-    // generator with no arguments and numerically convert a non-void result.
-    auto *self =
-        ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(objthis, true);
-    if(!self) {
-        return TJS_E_INVALIDOBJECT;
-    }
-
-    double value = 0.0;
-    auto *generator = self->_randomGenerator.AsObjectNoAddRef();
+double motion::ResourceManager::random() {
+    // All four registrars bind an ordinary no-argument native member returning
+    // double. The member ignores FuncCall's status and always applies the TJS
+    // Real conversion to the result slot; Void therefore converts to 0.0.
+    auto *generator = _randomGenerator.AsObjectNoAddRef();
     tTJSVariant result;
-    static tjs_uint32 hint = 0;
-    if(TJS_SUCCEEDED(generator->FuncCall(0, TJS_W("random"), &hint, &result,
-                                         0, nullptr, generator))) {
-        if(result.Type() != tvtVoid) {
-            value = static_cast<double>(result);
-        }
-    }
-    if(r) {
-        *r = value;
-    }
-    return TJS_S_OK;
+    (void)generator->FuncCall(
+        0, TJS_W("random"), &motion::detail::randomMemberHint_guess,
+        &result, 0, nullptr, generator);
+    return result.AsReal();
 }

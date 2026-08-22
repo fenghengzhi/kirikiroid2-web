@@ -2,13 +2,37 @@
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "PlayerRenderInternal.h"
 #include "MotionTraceWeb.h"
 
 #include <spdlog/spdlog.h>
 
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <optional>
+
 using namespace motion::internal;
 
 namespace {
+
+    // The native implementation keeps one unordered input pair and its result
+    // in process-global storage. Identity fast paths do not update this cache.
+    // It is deliberately unsynchronized, matching the reference boundary.
+    std::uint32_t packedColorCacheFirst_guess = 0;
+    std::uint32_t packedColorCacheSecond_guess = 0;
+    std::uint32_t packedColorCacheResult_guess = 0;
+
+    struct DispatchRelease_guess {
+        void operator()(iTJSDispatch2 *dispatch) const {
+            if(dispatch) {
+                dispatch->Release();
+            }
+        }
+    };
+
+    using RetainedDispatch_guess =
+        std::unique_ptr<iTJSDispatch2, DispatchRelease_guess>;
 
     inline std::array<std::uint32_t, 4> copyPackedColorsFromBytes(
         const uint8_t (&colorBytes)[16]) {
@@ -27,15 +51,57 @@ namespace {
         };
     }
 
-    // sub_6C2334 @0x6C2384..0x6C245C and 0x6C34A4..0x6C3588:
-    // 0xFF808080 is the identity weight. RGB channels use the native /128
-    // weight domain and saturate to 255, while alpha uses ordinary /255
-    // multiplication (the compiler emits the 0x80808081 high-word sequence).
-    inline std::uint32_t multiplyPackedColorWeightsLike_0x6C2334(
+    // The scalar helper uses signed truncation after multiplying by 256.
+    // Express the observed NaN/saturation boundary without relying on an
+    // undefined out-of-range C++ floating-to-integer conversion. Android
+    // arm64 vectorizes the first horizontal pair through signed 64-bit lanes,
+    // so malformed out-of-range clipLeft/clipRight values remain a documented
+    // compiler-specific boundary rather than a second source-level algorithm.
+    inline std::uint32_t packedColorInterpolationWeightS32_guess(
+        double ratio) {
+        if(std::isnan(ratio)) return 0;
+        if(ratio >= 8388608.0) return 0x7FFFFFFFu;
+        if(ratio <= -8388608.0) return 0x80000000u;
+        return static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(std::trunc(ratio * 256.0)));
+    }
+
+}
+
+namespace motion::internal {
+
+    std::int32_t prepareBezierPatchDivision_guess(
+        double ratio, std::uint32_t meshDivision) {
+        const double scaledDivision =
+            ratio * static_cast<double>(meshDivision);
+        std::int32_t converted;
+        constexpr double signedUpper = 0x1p31;
+        constexpr double signedLower = -0x1p31;
+
+        if(std::isnan(scaledDivision)) {
+            converted = 0;
+        } else if(scaledDivision >= signedUpper) {
+            converted = std::numeric_limits<std::int32_t>::max();
+        } else if(scaledDivision <= signedLower) {
+            converted = std::numeric_limits<std::int32_t>::min();
+        } else {
+            converted = static_cast<std::int32_t>(scaledDivision);
+        }
+        return converted >= 50 ? 50 : converted;
+    }
+
+    std::uint32_t multiplyPackedColorWeights_guess(
         std::uint32_t lhs, std::uint32_t rhs) {
         constexpr std::uint32_t identity = 0xFF808080u;
-        if(lhs == identity) return rhs;
         if(rhs == identity) return lhs;
+        if(lhs == identity) return rhs;
+
+        if((packedColorCacheFirst_guess == lhs &&
+            packedColorCacheSecond_guess == rhs) ||
+           (packedColorCacheFirst_guess == rhs &&
+            packedColorCacheSecond_guess == lhs)) {
+            return packedColorCacheResult_guess;
+        }
 
         std::uint32_t result = 0;
         for(unsigned shift = 0; shift != 24; shift += 8) {
@@ -48,24 +114,27 @@ namespace {
         const auto alpha =
             (((lhs >> 24) & 0xFFu) * ((rhs >> 24) & 0xFFu)) / 255u;
         result |= alpha << 24;
+
+        packedColorCacheFirst_guess = lhs;
+        packedColorCacheSecond_guess = rhs;
+        packedColorCacheResult_guess = result;
         return result;
     }
 
-    // FCVTZS Wn, Dn, #8 as emitted by sub_698188.  Spell out the AArch64
-    // NaN/saturation boundary so malformed clip values do not fall through a
-    // C++ floating-to-integer conversion with undefined behavior.
-    inline std::uint32_t clipWeightW32Like_0x698188(double clip) {
-        if(std::isnan(clip)) return 0;
-        if(clip >= 8388608.0) return 0x7FFFFFFFu;
-        if(clip <= -8388608.0) return 0x80000000u;
-        return static_cast<std::uint32_t>(
-            static_cast<std::int32_t>(std::trunc(clip * 256.0)));
-    }
+    std::uint32_t interpolatePackedColor_guess(
+        const tTJSVariant &curve, std::uint32_t from,
+        std::uint32_t to, double ratio) {
+        if(from == to) {
+            return from;
+        }
+        if(curve.Type() != tvtVoid) {
+            ratio = evaluateVariableTrackEasing_guess(curve, ratio);
+        }
 
-    inline std::uint32_t interpolatePackedColorLike_0x698188(
-        std::uint32_t from, std::uint32_t to, std::uint32_t weight) {
-        constexpr std::uint32_t pairMask = 0x00FF00FFu;
+        const std::uint32_t weight =
+            packedColorInterpolationWeightS32_guess(ratio);
         const std::uint32_t inverseWeight = 256u - weight;
+        constexpr std::uint32_t pairMask = 0x00FF00FFu;
         const std::uint32_t highPairs =
             (((from >> 8) & pairMask) * inverseWeight)
             + (((to >> 8) & pairMask) * weight);
@@ -76,10 +145,14 @@ namespace {
             ^ ((highPairs ^ (lowPairs >> 8)) & pairMask);
     }
 
-    // sub_698188 @0x698188: remap the four accumulated corner colors through
-    // the source descriptor's normalized clip rectangle.  The two early
-    // returns precede the otherwise-unused Variant's lifetime in the binary.
-    inline void remapPackedColorsForSourceClipLike_0x698188(
+}
+
+namespace {
+
+    // Remap the four accumulated corner colors through the source
+    // descriptor's normalized clip rectangle. The two early returns precede
+    // the default curve Variant's lifetime in all four reference binaries.
+    inline void remapPackedColorsForSourceClip_guess(
         const motion::detail::MotionNode::SourceState &source,
         std::array<std::uint32_t, 4> &colors) {
         if(source.clipLeft == 0.0 && source.clipTop == 0.0
@@ -91,135 +164,235 @@ namespace {
             return;
         }
 
-        tTJSVariant unusedVariant;
-        (void)unusedVariant;
+        const tTJSVariant colorCurve;
+        const std::uint32_t topLeft = interpolatePackedColor_guess(
+            colorCurve, colors[0], colors[1], source.clipLeft);
+        const std::uint32_t topRight = interpolatePackedColor_guess(
+            colorCurve, colors[0], colors[1], source.clipRight);
+        const std::uint32_t bottomLeft = interpolatePackedColor_guess(
+            colorCurve, colors[2], colors[3], source.clipLeft);
+        const std::uint32_t bottomRight = interpolatePackedColor_guess(
+            colorCurve, colors[2], colors[3], source.clipRight);
 
-        std::uint32_t topLeft;
-        std::uint32_t topRight;
-        if(colors[0] == colors[1]) {
-            topLeft = colors[1];
-            topRight = colors[1];
-        } else {
-            topLeft = interpolatePackedColorLike_0x698188(
-                colors[0], colors[1],
-                clipWeightW32Like_0x698188(source.clipLeft));
-            topRight = interpolatePackedColorLike_0x698188(
-                colors[0], colors[1],
-                clipWeightW32Like_0x698188(source.clipRight));
-        }
-
-        std::uint32_t bottomLeft;
-        std::uint32_t bottomRight;
-        if(colors[2] == colors[3]) {
-            bottomLeft = colors[2];
-            bottomRight = colors[2];
-        } else {
-            bottomLeft = interpolatePackedColorLike_0x698188(
-                colors[2], colors[3],
-                clipWeightW32Like_0x698188(source.clipLeft));
-            bottomRight = interpolatePackedColorLike_0x698188(
-                colors[2], colors[3],
-                clipWeightW32Like_0x698188(source.clipRight));
-        }
-
-        std::uint32_t outputColor = topLeft;
-        if(topLeft != bottomLeft) {
-            outputColor = interpolatePackedColorLike_0x698188(
-                topLeft, bottomLeft,
-                clipWeightW32Like_0x698188(source.clipTop));
-        }
-        colors[0] = outputColor;
-
-        outputColor = topRight;
-        if(topRight != bottomRight) {
-            outputColor = interpolatePackedColorLike_0x698188(
-                topRight, bottomRight,
-                clipWeightW32Like_0x698188(source.clipTop));
-        }
-        colors[1] = outputColor;
-
-        outputColor = topLeft;
-        if(topLeft != bottomLeft) {
-            outputColor = interpolatePackedColorLike_0x698188(
-                topLeft, bottomLeft,
-                clipWeightW32Like_0x698188(source.clipBottom));
-        }
-        colors[2] = outputColor;
-
-        outputColor = topRight;
-        if(topRight != bottomRight) {
-            outputColor = interpolatePackedColorLike_0x698188(
-                topRight, bottomRight,
-                clipWeightW32Like_0x698188(source.clipBottom));
-        }
-        colors[3] = outputColor;
+        colors[0] = interpolatePackedColor_guess(
+            colorCurve, topLeft, bottomLeft, source.clipTop);
+        colors[1] = interpolatePackedColor_guess(
+            colorCurve, topRight, bottomRight, source.clipTop);
+        colors[2] = interpolatePackedColor_guess(
+            colorCurve, topLeft, bottomLeft, source.clipBottom);
+        colors[3] = interpolatePackedColor_guess(
+            colorCurve, topRight, bottomRight, source.clipBottom);
     }
 
 } // anonymous namespace
 
+namespace motion::internal::render_detail {
+
+    namespace {
+
+        inline void translatePreparedPoint_guess(
+            float &x, float &y, float cameraOffsetX, float cameraOffsetY) {
+            // Both operands are floats in the reference pass. Keep the
+            // narrowing point here rather than promoting the addition.
+            x += cameraOffsetX;
+            y += cameraOffsetY;
+        }
+
+        inline void projectPreparedPoint_guess(
+            float &x, float &y, double itemZ,
+            double projectionOriginX, double projectionOriginY,
+            double projectionZ) {
+            const double sourceX = static_cast<double>(x);
+            const double sourceY = static_cast<double>(y);
+            const double denominator = itemZ - projectionZ;
+            x = static_cast<float>(
+                sourceX - itemZ * (sourceX - projectionOriginX) /
+                              denominator);
+            y = static_cast<float>(
+                sourceY - itemZ * (sourceY - projectionOriginY) /
+                              denominator);
+        }
+
+        inline void growProjectedPaintBox_guess(
+            std::array<float, 4> &paintBox, float x, float y) {
+            const float left = std::floor(x);
+            // Plain ordered comparisons are intentional: an unordered NaN
+            // coordinate leaves the corresponding extreme sentinel intact.
+            if(left < paintBox[0]) paintBox[0] = left;
+            const float top = std::floor(y);
+            if(top < paintBox[1]) paintBox[1] = top;
+            const float right = std::ceil(x);
+            if(right > paintBox[2]) paintBox[2] = right;
+            const float bottom = std::ceil(y);
+            if(bottom > paintBox[3]) paintBox[3] = bottom;
+        }
+
+        inline void projectAndGrowPreparedPoint_guess(
+            float &x, float &y, double itemZ,
+            double projectionOriginX, double projectionOriginY,
+            double projectionZ, std::array<float, 4> &paintBox) {
+            projectPreparedPoint_guess(
+                x, y, itemZ, projectionOriginX, projectionOriginY,
+                projectionZ);
+            growProjectedPaintBox_guess(paintBox, x, y);
+        }
+
+    } // anonymous namespace
+
+    void applyPreparedRenderItemProjectionCore_guess(
+        detail::PreparedRenderItemList &mainList,
+        float cameraOffsetX,
+        float cameraOffsetY,
+        bool stereovisionActive,
+        double stereovisionCameraX,
+        double stereovisionCameraY,
+        double stereovisionCameraZ) {
+        double projectionOriginX = 0.0;
+        double projectionOriginY = 0.0;
+        if(stereovisionActive) {
+            projectionOriginX = stereovisionCameraX +
+                                static_cast<double>(cameraOffsetX);
+            projectionOriginY = stereovisionCameraY +
+                                static_cast<double>(cameraOffsetY);
+        }
+
+        // The post-prepare pass receives only the sorted main pointer-vector.
+        // Auxiliary composite items are not part of this call boundary. Every
+        // stored main pointer is trusted and is dereferenced on loop entry.
+        for(auto *entryPtr : mainList) {
+            auto &entry = *entryPtr;
+
+            for(size_t i = 0; i < entry.corners.size(); i += 2) {
+                translatePreparedPoint_guess(
+                    entry.corners[i], entry.corners[i + 1],
+                    cameraOffsetX, cameraOffsetY);
+            }
+            for(auto &point : entry.commandCompositeMeshPoints) {
+                translatePreparedPoint_guess(
+                    point.x, point.y, cameraOffsetX, cameraOffsetY);
+            }
+            if(entry.meshType == 1) {
+                for(auto &point : entry.meshPoints) {
+                    translatePreparedPoint_guess(
+                        point.x, point.y, cameraOffsetX, cameraOffsetY);
+                }
+            }
+            entry.paintBox[0] += cameraOffsetX;
+            entry.paintBox[1] += cameraOffsetY;
+            entry.paintBox[2] += cameraOffsetX;
+            entry.paintBox[3] += cameraOffsetY;
+            // The native loop does not consult the Web-side validity flag;
+            // even the {1,1,-1,-1} null rectangle receives the offset.
+            entry.viewport[0] += cameraOffsetX;
+            entry.viewport[1] += cameraOffsetY;
+            entry.viewport[2] += cameraOffsetX;
+            entry.viewport[3] += cameraOffsetY;
+
+            // C++ equality has the ordered IEEE behavior seen in all four
+            // targets: signed zeros compare equal, while NaN enters the pass.
+            if(!stereovisionActive ||
+               entry.sortKey == stereovisionCameraZ) {
+                continue;
+            }
+
+            constexpr float maximum =
+                std::numeric_limits<float>::max();
+            entry.paintBox = { maximum, maximum, -maximum, -maximum };
+
+            for(size_t i = 0; i < entry.corners.size(); i += 2) {
+                projectAndGrowPreparedPoint_guess(
+                    entry.corners[i], entry.corners[i + 1], entry.sortKey,
+                    projectionOriginX, projectionOriginY,
+                    stereovisionCameraZ, entry.paintBox);
+            }
+            for(auto &point : entry.commandCompositeMeshPoints) {
+                projectAndGrowPreparedPoint_guess(
+                    point.x, point.y, entry.sortKey,
+                    projectionOriginX, projectionOriginY,
+                    stereovisionCameraZ, entry.paintBox);
+            }
+            if(entry.meshType == 1) {
+                for(auto &point : entry.meshPoints) {
+                    projectAndGrowPreparedPoint_guess(
+                        point.x, point.y, entry.sortKey,
+                        projectionOriginX, projectionOriginY,
+                        stereovisionCameraZ, entry.paintBox);
+                }
+            }
+            // commandBezierPatchPoints is the raw command payload and remains
+            // untouched; viewport is translated above but never projected.
+        }
+    }
+
+} // namespace motion::internal::render_detail
+
 namespace motion {
 
     void Player::calcBounds() {
-        // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
-        // without a loaded motion there is no render list to measure.
-        if(!hasMotionContent()) {
-            _boundsMinX = 0.0;
-            _boundsMinY = 0.0;
-            _boundsMaxX = 0.0;
-            _boundsMaxY = 0.0;
-            return;
+        // Keep an independent ResourceManager dispatch reference alive across
+        // recursive child calls, even though the body never invokes it.
+        tTJSVariant resourceManagerCopy(_resourceManager);
+        RetainedDispatch_guess resourceManager(
+            resourceManagerCopy.AsObject());
+        resourceManagerCopy.Clear();
+
+        // Path materialization belongs only to the opt-in Web diagnostic
+        // sidecar. The native AABB pass does not read motion context here.
+        // Keep the ordinary path free of unrelated Variant-to-string
+        // conversion and allocation.
+        std::string motionPath;
+        const bool traceCalcBounds = detail::logoChainTraceEnabled();
+        if(traceCalcBounds) {
+            motionPath = matchedMotionPath();
         }
-        const auto motionPath = matchedMotionPath();
 
-        _boundsMinX = 1e308;
-        _boundsMinY = 1e308;
-        _boundsMaxX = -1e308;
-        _boundsMaxY = -1e308;
+        _boundsMinX = std::numeric_limits<double>::max();
+        _boundsMinY = std::numeric_limits<double>::max();
+        _boundsMaxX = -std::numeric_limits<double>::max();
+        _boundsMaxY = -std::numeric_limits<double>::max();
 
-        bool haveBounds = false;
         auto mergeBounds = [&](double minX, double minY, double maxX,
                                double maxY) {
-            if(minX > maxX || minY > maxY) {
-                return;
-            }
-            if(!haveBounds) {
-                _boundsMinX = minX;
-                _boundsMinY = minY;
-                _boundsMaxX = maxX;
-                _boundsMaxY = maxY;
-                haveBounds = true;
-                return;
-            }
-            if(minX < _boundsMinX) _boundsMinX = minX;
-            if(minY < _boundsMinY) _boundsMinY = minY;
-            if(maxX > _boundsMaxX) _boundsMaxX = maxX;
-            if(maxY > _boundsMaxY) _boundsMaxY = maxY;
+            if(minX <= _boundsMinX) _boundsMinX = minX;
+            if(minY <= _boundsMinY) _boundsMinY = minY;
+            if(maxX >= _boundsMaxX) _boundsMaxX = maxX;
+            if(maxY >= _boundsMaxY) _boundsMaxY = maxY;
         };
 
         for(size_t nodeIndex = 1; nodeIndex < _nodes.size(); ++nodeIndex) {
             auto &node = _nodes[nodeIndex];
 
-            // 0x6C3F08..0x6C4018: particle children contribute before the
-            // active-slot gate and the ordinary source path.
+            // Particle children contribute before the active-slot gate and
+            // the ordinary source path.
             if(!_preview && node.nodeType == 4) {
-                const int particleCount = node.getParticleCount();
+                // Retain this node's Array dispatch once across the count
+                // read, all indexed lookups, and every recursive child pass.
+                // A child callback may replace or clear the node Variant,
+                // but that must not switch the receiver mid-traversal.
+                detail::ScopedParticleArrayDispatch_guess particleArray(
+                    node.particleArrayVar);
+                auto *const array = particleArray.get();
+                const int particleCount = static_cast<int>(
+                    detail::particleArrayCount_guess(array));
                 for(int particleIndex = 0; particleIndex < particleCount;
                     ++particleIndex) {
-                    auto *child = node.getParticleChild(particleIndex);
+                    auto *child =
+                        detail::particleArrayGetNativePlayerAt_guess(
+                            array, static_cast<tjs_int>(particleIndex));
                     child->calcBounds();
                     mergeBounds(child->_boundsMinX, child->_boundsMinY,
                                 child->_boundsMaxX, child->_boundsMaxY);
                 }
             }
 
-            // 0x6C4028: the type-3 and ordinary paths run only while the
-            // active clip slot's +344 byte is zero.
+            // Type-3 and ordinary paths run only while the active clip slot is
+            // not marked done.
             if(node.activeSlot().done) {
                 continue;
             }
 
-            // 0x6C4040..0x6C4278: a non-preview motion node copies its child
-            // Player bounds into node+1888 and merges them directly.
+            // A non-preview nested-motion node copies its child's Player AABB
+            // into its node AABB and merges that result directly.
             if(!_preview && node.nodeType == 3) {
                 auto *child = node.getChildPlayer();
                 child->calcBounds();
@@ -232,38 +405,24 @@ namespace motion {
                 continue;
             }
 
-            // Aligned to Player_calcBounds @ 0x6C40B0 (libkrkr2.so):
-            //   v30 = 1 << nodeType
-            //   v31 = preview ? 0x1449 : 0x1441
-            //   if ((v31 & v30) == 0 || !*(BYTE*)(node+200)) skip
-            // The actual native gate is the Path A nodeType mask PLUS
-            // node.source.valid (node+0xC8) — NOT drawFlag (Path B) and
-            // NOT drawnThisFrame (node+1944, set by sub_6C2334 but not
-            // read here). Port's previous drawFlag/drawnThisFrame reads
-            // were both proxies; this is the authoritative gate.
+            // The ordinary path gates on the preview-specific node-type mask
+            // plus source.valid. drawFlag and drawnThisFrame are not inputs.
             const int visBitmaskCalc =
-                _preview ? 0x1449 : 0x1441;  // binary calcBounds gates on +1092 (preview)
+                _preview ? 0x1449 : 0x1441;
             if(((1 << node.nodeType) & visBitmaskCalc) == 0 ||
                !node.source.valid) {
                 continue;
             }
 
-            bool haveNodeBounds = false;
-            double minX = 0.0;
-            double minY = 0.0;
-            double maxX = 0.0;
-            double maxY = 0.0;
-            auto extendPoint = [&](double x, double y) {
-                if(!haveNodeBounds) {
-                    minX = maxX = x;
-                    minY = maxY = y;
-                    haveNodeBounds = true;
-                    return;
-                }
-                if(x < minX) minX = x;
-                if(y < minY) minY = y;
-                if(x > maxX) maxX = x;
-                if(y > maxY) maxY = y;
+            float minX = std::numeric_limits<float>::max();
+            float minY = std::numeric_limits<float>::max();
+            float maxX = -std::numeric_limits<float>::max();
+            float maxY = -std::numeric_limits<float>::max();
+            auto extendPoint = [&](float x, float y) {
+                if(x <= minX) minX = x;
+                if(y <= minY) minY = y;
+                if(x >= maxX) maxX = x;
+                if(y >= maxY) maxY = y;
             };
 
             node.bounds[0] = std::numeric_limits<float>::max();
@@ -271,9 +430,9 @@ namespace motion {
             node.bounds[2] = -std::numeric_limits<float>::max();
             node.bounds[3] = -std::numeric_limits<float>::max();
 
-            // 0x6C40BC..0x6C43A4: +2048 has priority; otherwise scan the
-            // exactly-16-point +2072 patch; only two empty derived vectors
-            // fall back to the four node+1856 corners.
+            // Composite points have priority; otherwise scan exactly sixteen
+            // transformed mesh-control points. Two empty derived vectors fall
+            // back to the four ordinary corners.
             if(!node.compositeMeshPoints.empty()) {
                 for(const auto &point : node.compositeMeshPoints) {
                     extendPoint(point.x, point.y);
@@ -291,15 +450,11 @@ namespace motion {
                 }
             }
 
-            if(!haveNodeBounds) {
-                continue;
-            }
-
             const std::array<float, 4> expectedBounds = {
-                static_cast<float>(std::floor(minX)),
-                static_cast<float>(std::floor(minY)),
-                static_cast<float>(std::ceil(maxX)),
-                static_cast<float>(std::ceil(maxY))
+                std::floor(minX),
+                std::floor(minY),
+                std::ceil(maxX),
+                std::ceil(maxY)
             };
             node.bounds[0] = expectedBounds[0];
             node.bounds[1] = expectedBounds[1];
@@ -307,7 +462,8 @@ namespace motion {
             node.bounds[3] = expectedBounds[3];
             mergeBounds(node.bounds[0], node.bounds[1], node.bounds[2],
                         node.bounds[3]);
-            if(detail::logoChainTraceEnabledForPath(motionPath)) {
+            if(traceCalcBounds &&
+               detail::logoChainTraceEnabledForPath(motionPath)) {
                 const std::array<float, 4> actualBounds = {
                     node.bounds[0], node.bounds[1], node.bounds[2],
                     node.bounds[3]
@@ -321,7 +477,7 @@ namespace motion {
                     }
                 }
                 detail::logoChainTraceCheck(
-                    motionPath, "calcBounds.node", "0x6C3D04",
+                    motionPath, "calcBounds.node", "Player.calcBounds",
                     _clampedEvalTime,
                     fmt::format(
                         "from=minmax({:.3f},{:.3f},{:.3f},{:.3f}) exp=[{:.3f},{:.3f},{:.3f},{:.3f}]",
@@ -340,11 +496,15 @@ namespace motion {
             }
         }
 
-        detail::logoChainTraceLogf(
-            motionPath, "calcBounds.player", "0x6C3D04", _clampedEvalTime,
-            "playerBounds=({:.3f},{:.3f},{:.3f},{:.3f}) haveBounds={}",
-            _boundsMinX, _boundsMinY, _boundsMaxX, _boundsMaxY,
-            haveBounds ? 1 : 0);
+        if(traceCalcBounds) {
+            detail::logoChainTraceLogf(
+                motionPath, "calcBounds.player", "Player.calcBounds",
+                _clampedEvalTime,
+                "playerBounds=({:.3f},{:.3f},{:.3f},{:.3f}) ordered={}",
+                _boundsMinX, _boundsMinY, _boundsMaxX, _boundsMaxY,
+                (_boundsMaxX >= _boundsMinX &&
+                 _boundsMaxY >= _boundsMinY) ? 1 : 0);
+        }
     }
 
     void Player::appendPreparedRenderItems(
@@ -354,9 +514,9 @@ namespace motion {
         bool inheritedDrawFlag19,
         bool inheritedFlag18) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        // Android's Frida probe hooks sub_6C2334 itself, so every recursive
-        // call has its own enter/leave pair.  Keep the probe on this exact
-        // source-level boundary rather than on the 0x6D5164 build+sort wrapper.
+        // The Android probe hooks this recursive builder, so every child call
+        // has its own enter/leave pair. Keep the probe on this source boundary
+        // rather than on the outer content-gate/build/sort wrapper.
         detail::motionTraceRenderBuildItemsEnter(
             this, inheritedColor, inheritedDrawFlag19, inheritedFlag18);
         struct MotionTraceBuildItemsScope {
@@ -372,48 +532,86 @@ namespace motion {
 
         auto &entries = mainList;
         const auto &nodes = _nodes;
-        const auto motionPath = matchedMotionPath();
-        // sub_6C2334@0x6C31C8/0x6C337C/0x6C38A0 reads Player+1092,
-        // the script-visible preview property, for these node-type masks.
+        // Motion-path conversion and the trace/snapshot projections below are
+        // Web diagnostics, not part of the native recursive builder. Keep the
+        // ordinary recursive path free of TJS string conversion and logging
+        // temporaries.
+        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
+        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
+        std::string motionPath;
+        if(logoTraceEnabled || logoSnapshotEnabled) {
+            motionPath = matchedMotionPath();
+        }
+        const bool traceForPath =
+            logoTraceEnabled &&
+            detail::logoChainTraceEnabledForPath(motionPath);
+        const bool snapshotForPath =
+            logoSnapshotEnabled &&
+            detail::logoSnapshotMarkEnabledForPath(motionPath);
+        const bool snapshotWindow =
+            snapshotForPath &&
+            motionPath.find("m2logo.mtn") != std::string::npos &&
+            _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0;
+        const std::uint32_t effectiveColor =
+            internal::multiplyPackedColorWeights_guess(
+                inheritedColor, _colorWeightPacked);
+
+        // All four builders take this gate after color multiplication but
+        // before copying/converting the priority-content owner.
+        if(nodes.size() < 2) {
+            return;
+        }
+
+        // CopyRef the persistent Variant, convert the copy to an independently
+        // retained dispatch, then clear the copy. Numeric getters can replace
+        // Player's persistent Variant re-entrantly without changing the
+        // dispatch used by later iterations of this build.
+        tTJSVariant priorityContentCopy(_rootContentVariant);
+        RetainedDispatch_guess priorityContent(
+            priorityContentCopy.AsObject());
+        priorityContentCopy.Clear();
+        const auto priorityNodeAt =
+            [&](tjs_int position) -> tjs_int {
+                tTJSVariant value;
+                (void)priorityContent->PropGetByNum(
+                    0, position, &value, priorityContent.get());
+                return static_cast<tjs_int>(value.AsInteger());
+            };
+
+        // The recursive builder reads the script-visible preview property for
+        // these node-type masks.
         const int bitmask = _preview ? 5193 : 5185;
-        // sub_6C2334@0x6C2804/0x6C2B8C dereferences Player+0 before every
-        // Player+808..844 draw-affine read.  Recursive child Players therefore
+        // The builder dereferences the canonical root owner before every
+        // draw-affine read. Recursive child Players therefore
         // consume the top-level render owner's matrix, not their own ctor
         // identity matrix.
         const auto &drawAffineOwner = *_rootPlayer;
         const bool drawAffineMatrixNonIdentity =
             drawAffineOwner._drawAffineMatrixNonIdentity;
-        const std::uint32_t effectiveColor =
-            multiplyPackedColorWeightsLike_0x6C2334(
-                inheritedColor, _colorWeightPacked);
 
         auto appendChildEntriesAtCurrentNode =
             [&](const detail::MotionNode &ownerNode, Player *child,
                 std::vector<detail::PreparedRenderItem *> &childMainList,
                 bool childDrawFlag19) {
-            if(!child) {
-                return;
-            }
             const size_t mainCountBefore = childMainList.size();
             const size_t auxCountBefore = auxList.size();
-            // aligned with sub_6C2334 @0x6C2334 (recursion @0x6c2b5c/0x6c3124/
-            // 0x6c36ac): child a6 = (a6 & 1) || (node+48 != 0), i.e. the
-            // parent's inherited flag OR'd with THIS node's priorDraw bool
-            // (node+48 = sub_6636D4("priorDraw") != 0, written at 0x6bc6c4).
-            // Must use the node-level priorDraw, not Player::_priorDraw.
-            // The recursive call receives the caller's SAME main/aux vectors;
-            // there is no child-local prepare/sort stage in sub_6C2334.
+            // The recursive child flag is the caller's inherited flag OR'd
+            // with this owner node's one-byte priorDraw value. It never reads
+            // the independent Player::_priorDraw property.
+            // The recursive call receives the caller's same main/aux vectors;
+            // there is no child-local prepare/sort stage.
             child->appendPreparedRenderItems(
                 childMainList, auxList,
                 (ownerNode.inheritFlags & 0x200) != 0
                     ? effectiveColor
                     : 0xFF808080u,
                 childDrawFlag19,
-                inheritedFlag18 || ownerNode.priorDraw != 0);
-            const auto childMotionPath = child->matchedMotionPath();
-            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-               motionPath.find("m2logo.mtn") != std::string::npos &&
-               _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
+                inheritedFlag18 || ownerNode.priorDraw);
+            std::string childMotionPath;
+            if(traceForPath || snapshotWindow) {
+                childMotionPath = child->matchedMotionPath();
+            }
+            if(snapshotWindow) {
                 std::fprintf(
                     stderr,
                     "SNAPCHILD phase=prepare frame=%.3f childActiveMotion=%s childMotionKey=%s childNodesBuilt=%d childNodeCount=%zu childPreparedItemCount=%zu firstSource=%s\n",
@@ -430,14 +628,17 @@ namespace motion {
                         ? "<none>"
                         : childMainList[mainCountBefore]->sourceKey.c_str());
             }
-            detail::logoChainTraceLogf(
-                motionPath, "prepare.childMerge", "0x6C2334/0x6D4F00",
-                _clampedEvalTime,
-                "childMotionPath={} mainAdded={} auxAdded={} parentMainTotal={}",
-                childMotionPath.empty()
-                    ? std::string("<none>") : childMotionPath,
-                childMainList.size() - mainCountBefore,
-                auxList.size() - auxCountBefore, childMainList.size());
+            if(traceForPath) {
+                detail::logoChainTraceLogf(
+                    motionPath, "prepare.childMerge",
+                    "Player.appendPreparedRenderItems",
+                    _clampedEvalTime,
+                    "childMotionPath={} mainAdded={} auxAdded={} parentMainTotal={}",
+                    childMotionPath.empty()
+                        ? std::string("<none>") : childMotionPath,
+                    childMainList.size() - mainCountBefore,
+                    auxList.size() - auxCountBefore, childMainList.size());
+            }
         };
 
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
@@ -451,24 +652,42 @@ namespace motion {
             };
         };
 
-        auto transformRectLike_0x6C2334 =
+        auto transformAndRoundPreparedRect_guess =
             [&](const std::array<float, 4> &rect) {
-                if(!drawAffineMatrixNonIdentity) {
-                    return rect;
-                }
                 const auto p0 = transformPoint(rect[0], rect[1]);
                 const auto p1 = transformPoint(rect[2], rect[1]);
                 const auto p2 = transformPoint(rect[2], rect[3]);
                 const auto p3 = transformPoint(rect[0], rect[3]);
+
+                // Every double point result is narrowed before the native
+                // float comparisons and floorf/ceilf operations. The compare
+                // selects the right operand when unordered (and for equal
+                // signed zeros), unlike std::min/std::max.
+                const auto minFloat = [](float lhs, float rhs) {
+                    return lhs < rhs ? lhs : rhs;
+                };
+                const auto maxFloat = [](float lhs, float rhs) {
+                    return lhs > rhs ? lhs : rhs;
+                };
+                const float p0x = static_cast<float>(p0.x);
+                const float p0y = static_cast<float>(p0.y);
+                const float p1x = static_cast<float>(p1.x);
+                const float p1y = static_cast<float>(p1.y);
+                const float p2x = static_cast<float>(p2.x);
+                const float p2y = static_cast<float>(p2.y);
+                const float p3x = static_cast<float>(p3.x);
+                const float p3y = static_cast<float>(p3.y);
+                const float minX = minFloat(
+                    minFloat(minFloat(p0x, p1x), p2x), p3x);
+                const float minY = minFloat(
+                    minFloat(minFloat(p0y, p1y), p2y), p3y);
+                const float maxX = maxFloat(
+                    maxFloat(maxFloat(p0x, p1x), p2x), p3x);
+                const float maxY = maxFloat(
+                    maxFloat(maxFloat(p0y, p1y), p2y), p3y);
                 return std::array<float, 4>{
-                    static_cast<float>(std::floor(std::min(
-                        std::min(p0.x, p1.x), std::min(p2.x, p3.x)))),
-                    static_cast<float>(std::floor(std::min(
-                        std::min(p0.y, p1.y), std::min(p2.y, p3.y)))),
-                    static_cast<float>(std::ceil(std::max(
-                        std::max(p0.x, p1.x), std::max(p2.x, p3.x)))),
-                    static_cast<float>(std::ceil(std::max(
-                        std::max(p0.y, p1.y), std::max(p2.y, p3.y))))
+                    std::floor(minX), std::floor(minY),
+                    std::ceil(maxX), std::ceil(maxY)
                 };
             };
 
@@ -476,28 +695,38 @@ namespace motion {
             1.0f, 1.0f, -1.0f, -1.0f
         };
 
-        // sub_6C2334 @0x6C313C..0x6C31C4 does not walk deque order. For each
-        // logical non-root slot it reads Player+616 content in REVERSE order,
-        // adds one to the stored zero-based layer index, and selects that node.
+        // The recursive builder does not walk deque order. For each logical
+        // non-root slot it reads the retained priority content in reverse,
+        // applies the native 32-bit +1 wrap, and selects that node.
         // drawnThisFrame is cleared only after selection, preserving the
-        // binary's duplicate/omitted-index boundary behavior.
+        // duplicate/omitted-index boundary behavior.
         for(size_t logicalIndex = 1;
             logicalIndex < nodes.size(); ++logicalIndex) {
             const auto priorityPosition = static_cast<tjs_int>(
                 nodes.size() - logicalIndex - 1);
-            const auto i = static_cast<size_t>(
-                detail::motionPropGetIntByNum(
-                    _rootContentVariant, priorityPosition) + 1);
-            auto &node = _nodes[i];
+            const auto rawIndex = priorityNodeAt(priorityPosition);
+            const auto i = static_cast<tjs_int>(
+                static_cast<tjs_uint32>(rawIndex) + 1u);
+            // Like native deque iterator arithmetic, this is unchecked.
+            auto &node = _nodes[static_cast<size_t>(i)];
             node.drawnThisFrame = false;
             if(!_preview) {
-                // 0x6C31DC: particle recursion precedes the node+1505 active
-                // gate and writes directly into the caller's lists.
+                // Particle recursion precedes the selected node's active gate
+                // and writes directly into the caller's shared lists.
                 if(node.nodeType == 4) {
-                    const int particleCount = node.getParticleCount();
+                    // One independently retained Array dispatch spans the
+                    // count read and every indexed child lookup. Re-entrant
+                    // mutation of the node Variant does not switch receiver.
+                    detail::ScopedParticleArrayDispatch_guess particleArray(
+                        node.particleArrayVar);
+                    auto *const array = particleArray.get();
+                    const int particleCount = static_cast<int>(
+                        detail::particleArrayCount_guess(array));
                     for(int pi = 0; pi < particleCount; ++pi) {
                         appendChildEntriesAtCurrentNode(
-                            node, node.getParticleChild(pi),
+                            node,
+                            detail::particleArrayGetNativePlayerAt_guess(
+                                array, static_cast<tjs_int>(pi)),
                             mainList,
                             inheritedDrawFlag19);
                     }
@@ -509,7 +738,7 @@ namespace motion {
                 auto *const child = node.getChildPlayer();
                 if(!node.drawFlag &&
                    !node.stencilCompositeMaskReferenced) {
-                    // sub_6C2334 @0x6C272C..0x6C3124: a plain type-3 node
+                    // A plain type-3 node
                     // contributes its child's items directly to the caller's
                     // main/aux lists and never creates a wrapper item.
                     appendChildEntriesAtCurrentNode(
@@ -517,7 +746,7 @@ namespace motion {
                     continue;
                 }
 
-                // sub_6C2334 @0x6C273C..0x6C2B74: drawFlag/maskRef selects
+                // drawFlag/maskRef selects
                 // the persistent node-owned type-3 wrapper path. The wrapper
                 // itself is never inserted into mainList; its child vector is
                 // populated first and then range-inserted into caller main.
@@ -527,48 +756,62 @@ namespace motion {
                         new detail::PreparedRenderItem();
                 }
                 auto &wrapper = *node.preparedRenderItem;
-                // sub_6C2334@0x6C27B4 copies the node label on every wrapper
+                // The builder copies the node label on every wrapper
                 // population, not only when the persistent item is allocated.
                 wrapper.ownerLabel = node.layerName;
                 wrapper.nodeIndex = static_cast<int>(i);
-                wrapper.nativeNode = &node;
-                wrapper.sourceState = &node.source;
+                // The type-3 wrapper has no ordinary source publication. Its
+                // native borrowed source pointer remains dormant on a fresh
+                // item, or retains the value left by an earlier item path.
                 wrapper.hasOwnSource = false;
                 wrapper.drawFlag = false;
                 wrapper.stencilComposite = node.stencilType;
-                wrapper.paintBox = transformRectLike_0x6C2334({
+                wrapper.paintBox = {
                     node.bounds[0], node.bounds[1],
                     node.bounds[2], node.bounds[3]
-                });
-                wrapper.viewport = kInvalidPreparedPaintBox;
-                wrapper.hasViewport = false;
-                if(node.clipAABB &&
-                   node.clipAABB[2] >= node.clipAABB[0] &&
-                   node.clipAABB[3] >= node.clipAABB[1]) {
-                    wrapper.viewport = transformRectLike_0x6C2334({
+                };
+                if(node.clipAABB) {
+                    wrapper.viewport = {
                         node.clipAABB[0], node.clipAABB[1],
                         node.clipAABB[2], node.clipAABB[3]
-                    });
-                    wrapper.hasViewport = true;
+                    };
+                    wrapper.hasViewport =
+                        node.clipAABB[2] >= node.clipAABB[0] &&
+                        node.clipAABB[3] >= node.clipAABB[1];
+                } else {
+                    wrapper.viewport = kInvalidPreparedPaintBox;
+                    wrapper.hasViewport = false;
+                }
+                if(drawAffineMatrixNonIdentity) {
+                    if(wrapper.hasViewport) {
+                        wrapper.viewport =
+                            transformAndRoundPreparedRect_guess(
+                                wrapper.viewport);
+                    }
+                    wrapper.paintBox =
+                        transformAndRoundPreparedRect_guess(wrapper.paintBox);
                 }
 
-                wrapper.parentItem = nullptr;
+                detail::PreparedRenderItem *wrapperParentItem = nullptr;
                 if(node.drawFlag) {
                     auxList.push_back(&wrapper);
-                    if(node.visibleAncestorIndex >= 0 &&
-                       node.visibleAncestorIndex <
-                           static_cast<int>(_nodes.size()) &&
-                       node.visibleAncestorIndex != node.index) {
+                    // The native field is a nullable raw MotionNode pointer.
+                    // This portable index uses only -1 as null; every other
+                    // value is selected without a range or self guard.
+                    if(node.visibleAncestorIndex != -1) {
                         auto &ancestor = _nodes[static_cast<size_t>(
                             node.visibleAncestorIndex)];
                         if(!ancestor.preparedRenderItem) {
                             ancestor.preparedRenderItem =
                                 new detail::PreparedRenderItem();
                         }
-                        wrapper.parentItem =
-                            ancestor.preparedRenderItem;
+                        wrapperParentItem = ancestor.preparedRenderItem;
                     }
                 }
+                // This store occurs after aux growth and ancestor-item ensure.
+                // If either throws, the persistent wrapper keeps its previous
+                // parent pointer just as the native partially updated item.
+                wrapper.parentItem = wrapperParentItem;
 
                 wrapper.childItems.clear();
                 appendChildEntriesAtCurrentNode(
@@ -585,27 +828,94 @@ namespace motion {
             }
             if(!hasOwnSource) continue;
 
-            // sub_6C2334 @0x6C32D0: node+1904 owns one persistent raw item;
+            // Admission publishes this persistent node byte before lazy item
+            // allocation or any item-field/string/vector operation. An
+            // exception below therefore leaves the node marked drawn even
+            // when it never reaches the caller's main vector.
+            node.drawnThisFrame = true;
+
+            // Each node owns one persistent raw item;
             // allocate only once, then overwrite the fields reached by this
             // population path without reconstructing the object.
             if(!node.preparedRenderItem) {
                 node.preparedRenderItem = new detail::PreparedRenderItem();
             }
             auto &entry = *node.preparedRenderItem;
-            // sub_6C2334@0x6C3348 refreshes the independent owner string on
+            // The builder refreshes the independent owner string on
             // every ordinary-item population.
             entry.ownerLabel = node.layerName;
             entry.nodeIndex = static_cast<int>(i);
-            entry.nativeNode = &node;
-            // sub_6C2334 @0x6C360C stores a direct pointer to node.source;
-            // sourceObject/texture/rect below are Web-only snapshots.
+            // The native flag prefix is published before command-key
+            // conversion and before any numeric/source/paint suffix.
+            entry.skipFlag0 =
+                (((_preview ? 1097 : 1089) & (1 << node.nodeType)) == 0);
+            entry.rawFlag16 = node.source.blank;
+            entry.skipFlag1 = inheritedFlag18 || node.priorDraw;
+            // Coerce the persistent context Variant to a temporary ttstr, then
+            // copy that independently owning string into the render item.
+            entry.commandKey = ttstr(_findMotionContextVariant);
+            entry.layerId1 = node.layerId1;
+            entry.layerId2 = node.layerId2;
+            // The render-item sort-key field stores accumulated posZ, while
+            // coordinateMode and
+            // objTriPriority occupy independent integer fields.
+            entry.sortKey = node.accumulated.posZ;
+            entry.coordinateMode = node.coordinateMode;
+            entry.objTriPriority = node.objTriPriority;
+            entry.commandCoord = {
+                node.accumulated.posX,
+                _zFactor * node.accumulated.posZ + node.accumulated.posY,
+            };
+            entry.originX = node.source.originX + node.activeSlot().ox;
+            entry.originY = node.source.originY + node.activeSlot().oy;
+            entry.commandMatrix = {
+                node.accumulated.m11,
+                node.accumulated.m12,
+                node.accumulated.m21,
+                node.accumulated.m22,
+            };
+            entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
+            for(auto &packedColor : entry.packedColors) {
+                packedColor = internal::multiplyPackedColorWeights_guess(
+                    packedColor, effectiveColor);
+            }
+            // The builder next passes the persistent source descriptor and
+            // accumulated four-color array to the source-clip remapper.
+            remapPackedColorsForSourceClip_guess(
+                node.source, entry.packedColors);
+
+            // Raw node corners are copied after color remap and before the
+            // active-slot source owner. This order is observable when a later
+            // owner/vector operation fails on a reused persistent item.
+            for(int ci = 0; ci < 4; ++ci) {
+                entry.corners[ci * 2] = node.vertices[ci * 2];
+                entry.corners[ci * 2 + 1] = node.vertices[ci * 2 + 1];
+            }
+
+            // The active clip-slot string is copied independently of the Web
+            // source object and owns its prepared-item storage.
+            entry.commandSrc = node.activeSlot().srcValue;
+            // Render construction reads the active clip slot directly; the
+            // timeline evaluator has no accumulated blend-mode output field.
+            entry.blendMode = node.activeSlot().blendMode;
+            entry.opacity = node.accumulated.opacity;
+            // Native publication of the borrowed descriptor is late: it
+            // follows corners/source/blend/opacity rather than the owner-label
+            // prefix. Web diagnostic sidecars are refreshed separately below.
             entry.sourceState = &node.source;
-            // 0x6C25DC..0x6C2654: item+264 points directly at the visible
-            // ancestor's node-owned item. The ancestor item is allocated on
-            // demand but is not thereby inserted into either output list.
-            if(node.visibleAncestorIndex >= 0 &&
-               node.visibleAncestorIndex < static_cast<int>(_nodes.size()) &&
-               node.visibleAncestorIndex != node.index) {
+            entry.stencilComposite = node.stencilType;
+            // The recursive builder combines the node-local draw causes with
+            // the flag inherited from the outer/root traversal.
+            entry.drawFlag =
+                node.drawFlag || node.stencilCompositeMaskReferenced ||
+                inheritedDrawFlag19;
+            entry.hasOwnSource = hasOwnSource;
+
+            // The native nullable ancestor pointer is consumed after the
+            // source/color/opacity/stencil writes and before copying the raw
+            // paint/clip geometry. The portable index has exactly one null
+            // sentinel (-1); all other values, including self, are unchecked.
+            if(node.visibleAncestorIndex != -1) {
                 auto &ancestor = _nodes[
                     static_cast<size_t>(node.visibleAncestorIndex)];
                 if(!ancestor.preparedRenderItem) {
@@ -616,179 +926,97 @@ namespace motion {
             } else {
                 entry.parentItem = nullptr;
             }
-            entry.hasOwnSource = hasOwnSource;
-            if(hasOwnSource) {
-                entry.sourceKey = node.source.path;
-                entry.sourceObject = node.source.object;
-                entry.sourceTexture = node.source.texture;
-                entry.sourceRect = node.source.textureRect;
-                // 0x6C35A8..0x6C35F8 copies the active clip-slot ttstr into
-                // item+8 independently of the Web source object.
-                entry.commandSrc = node.activeSlot().srcValue;
-            }
-            // Aligned to sub_6D5164 -> sub_6C2334:
-            // item+19 = node+1960 ? 1 : (arg5 | node+1961).
-            entry.drawFlag =
-                node.drawFlag || node.stencilCompositeMaskReferenced ||
-                inheritedDrawFlag19;
-            entry.rawFlag16 = node.source.blank;
-            entry.skipFlag0 =
-                (((_preview ? 1097 : 1089) & (1 << node.nodeType)) == 0);
-            entry.skipFlag1 = inheritedFlag18 || (node.priorDraw != 0);
-            // 0x6C33CC first coerces player+1012 Variant to ttstr, then copies
-            // that independently owning string into item+248.
-            entry.commandKey = ttstr(_findMotionContextVariant);
-            entry.layerId1 = node.layerId1;
-            entry.layerId2 = node.layerId2;
-            entry.viewport = kInvalidPreparedPaintBox;
-            entry.hasViewport = false;
-
-            // Aligned to libkrkr2.so sub_6C2334 (0x6C2334): render item +0x40
-            // stores node accumulated posZ, while coordinateMode and
-            // objTriPriority occupy independent integer fields.
-            entry.sortKey = node.accumulated.posZ;
-            entry.commandCoord = {
-                node.accumulated.posX,
-                _zFactor * node.accumulated.posZ + node.accumulated.posY,
-                node.accumulated.posZ,
-            };
-            entry.commandMatrix = {
-                node.accumulated.m11,
-                node.accumulated.m12,
-                node.accumulated.m21,
-                node.accumulated.m22,
-            };
-            entry.blendMode = node.accumulated.blendMode;
-            entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
-            for(auto &packedColor : entry.packedColors) {
-                packedColor = multiplyPackedColorWeightsLike_0x6C2334(
-                    packedColor, effectiveColor);
-            }
-            // sub_6C2334 @0x6C3594 immediately passes the persistent source
-            // descriptor and the accumulated four-color array to sub_698188.
-            remapPackedColorsForSourceClipLike_0x698188(
-                node.source, entry.packedColors);
-            entry.opacity = node.accumulated.opacity;
-            entry.stencilComposite = node.stencilType;
-            entry.coordinateMode = node.coordinateMode;
-            entry.objTriPriority = node.objTriPriority;
-            entry.originX = node.source.originX + node.activeSlot().ox;
-            entry.originY = node.source.originY + node.activeSlot().oy;
             entry.visibleAncestorIndex = node.visibleAncestorIndex;
+
+            // The paint box is an independent raw node AABB, not a reduction
+            // of the item corner or mesh arrays. It is copied before the
+            // pointer-backed viewport and later transformed in place.
+            entry.paintBox = {
+                node.bounds[0], node.bounds[1],
+                node.bounds[2], node.bounds[3]
+            };
+
+            // A non-null clip pointer is copied before its ordering check.
+            // Invalid pointer-backed coordinates therefore remain observable;
+            // only a null pointer installs the native invalid sentinel.
+            if(node.clipAABB) {
+                entry.viewport = {
+                    node.clipAABB[0], node.clipAABB[1],
+                    node.clipAABB[2], node.clipAABB[3]
+                };
+                entry.hasViewport =
+                    node.clipAABB[2] >= node.clipAABB[0] &&
+                    node.clipAABB[3] >= node.clipAABB[1];
+            } else {
+                entry.viewport = kInvalidPreparedPaintBox;
+                entry.hasViewport = false;
+            }
             entry.meshType = node.meshType;
             entry.meshDivX = node.meshDivX;
             entry.meshDivY = node.meshDivY;
-            // sub_6C2334 @0x6C35AC..0x6C35C4 copies all four node+1856
-            // corners unconditionally.  The caller-supplied affine, when
-            // active, is applied afterwards at 0x6C2BB0..0x6C2CD0.
-            for(int ci = 0; ci < 4; ++ci) {
-                const auto pt = drawAffineMatrixNonIdentity
-                    ? transformPoint(node.vertices[ci * 2],
-                                     node.vertices[ci * 2 + 1])
-                    : tTVPPointD{node.vertices[ci * 2],
-                                 node.vertices[ci * 2 + 1]};
-                entry.corners[ci * 2] = static_cast<float>(pt.x);
-                entry.corners[ci * 2 + 1] = static_cast<float>(pt.y);
-            }
 
-            // item+184..196 is copied from node+1888, not recomputed from the
-            // item vectors.  With an outer affine, 0x6C2960..0x6C2A84 turns
-            // the four transformed rect corners into a floor/ceil AABB.
-            entry.paintBox = transformRectLike_0x6C2334({
-                node.bounds[0], node.bounds[1],
-                node.bounds[2], node.bounds[3]
-            });
-
-            // Three independent vector owners, exactly as selected at
-            // 0x6C2684..0x6C2714:
-            //   item+344 <- node+2048 (always assigned, hence also cleared)
-            //   item+400 <- node+2072 (type-1/raw-present branch only)
-            //   item+376 <- node+2024 (same branch, deliberately NOT affine)
+            // Three independent vector owners: composite points are always
+            // assigned (and therefore also cleared), while processed and raw
+            // Bezier points are populated only for the type-1 mesh branch.
             entry.commandCompositeMeshPoints = node.compositeMeshPoints;
-            if(drawAffineMatrixNonIdentity) {
-                for(auto &point : entry.commandCompositeMeshPoints) {
-                    const auto transformed = transformPoint(point.x, point.y);
-                    point.x = static_cast<float>(transformed.x);
-                    point.y = static_cast<float>(transformed.y);
-                }
-            }
             if(!entry.commandCompositeMeshPoints.empty()) {
                 entry.meshType = 2;
             } else if(node.meshType == 1) {
                 if(node.meshControlPoints.empty()) {
                     entry.meshType = 0;
                 } else {
-                    entry.commandPatchDivision = static_cast<int>(
-                        getMeshDivisionRatio() *
-                        static_cast<double>(node.meshDivision));
-                    if(entry.commandPatchDivision >= 50) {
-                        entry.commandPatchDivision = 50;
-                    }
+                    entry.commandPatchDivision =
+                        prepareBezierPatchDivision_guess(
+                            getMeshDivisionRatio(),
+                            static_cast<std::uint32_t>(node.meshDivision));
                     entry.meshPoints =
                         node.transformedMeshControlPoints;
-                    if(drawAffineMatrixNonIdentity) {
-                        for(auto &point : entry.meshPoints) {
-                            const auto transformed =
-                                transformPoint(point.x, point.y);
-                            point.x = static_cast<float>(transformed.x);
-                            point.y = static_cast<float>(transformed.y);
-                        }
-                    }
                     entry.commandBezierPatchPoints =
                         node.meshControlPoints;
                 }
             }
 
-            if(node.clipAABB) {
-                const float *clipAABB = node.clipAABB;
-                if(clipAABB[2] >= clipAABB[0] &&
-                   clipAABB[3] >= clipAABB[1]) {
-                    if(!drawAffineMatrixNonIdentity) {
-                        // sub_6C2334 @ 0x6C27E8 copies node+1936 to item+200
-                        // verbatim when Player+611 is zero. In particular, it
-                        // does not round a unit-matrix viewport.
-                        entry.viewport = {clipAABB[0], clipAABB[1],
-                                          clipAABB[2], clipAABB[3]};
-                        entry.hasViewport = true;
-                    } else {
-                        const auto p0 =
-                            transformPoint(clipAABB[0], clipAABB[1]);
-                        const auto p1 =
-                            transformPoint(clipAABB[2], clipAABB[1]);
-                        const auto p2 =
-                            transformPoint(clipAABB[2], clipAABB[3]);
-                        const auto p3 =
-                            transformPoint(clipAABB[0], clipAABB[3]);
-                    // aligned with sub_6C2334 @0x6c2800-0x6c2954: the
-                    // transformed clip bbox is rounded floor(left)/floor(top)/
-                    // ceil(right)/ceil(bottom) before being stored into the
-                    // render item viewport (item+200..212). The oracle gates
-                    // this on item+208>=item+200 && item+212>=item+204 (the
-                    // shapeAABB validity check above) and writes:
-                    //   *(float*)(item+200) = floorf(minX);
-                    //   *(float*)(item+204) = floorf(minY);
-                    //   *(float*)(item+208) = ceilf(maxX);
-                    //   *(float*)(item+212) = ceilf(maxY);
-                    // The previous port stored the raw min/max bbox without the
-                    // floor/ceil, leaving fractional viewport values that
-                    // diverged from the oracle (e.g. m2logo items[9]:
-                    // [612.568,557.332,1293.251,632.964] vs [612,557,1294,633]).
-                        entry.viewport = {
-                            static_cast<float>(std::floor(std::min(
-                                std::min(p0.x, p1.x), std::min(p2.x, p3.x)))),
-                            static_cast<float>(std::floor(std::min(
-                                std::min(p0.y, p1.y), std::min(p2.y, p3.y)))),
-                            static_cast<float>(std::ceil(std::max(
-                                std::max(p0.x, p1.x), std::max(p2.x, p3.x)))),
-                            static_cast<float>(std::ceil(std::max(
-                                std::max(p0.y, p1.y), std::max(p2.y, p3.y))))
-                        };
-                        entry.hasViewport = true;
-                    }
+            // This is one late native stage: corners, the composite-mesh
+            // vector and the processed mesh vector are mutated in place. The
+            // raw Bezier control-point vector is deliberately excluded.
+            if(drawAffineMatrixNonIdentity) {
+                for(int ci = 0; ci < 4; ++ci) {
+                    const auto transformed = transformPoint(
+                        entry.corners[ci * 2], entry.corners[ci * 2 + 1]);
+                    entry.corners[ci * 2] =
+                        static_cast<float>(transformed.x);
+                    entry.corners[ci * 2 + 1] =
+                        static_cast<float>(transformed.y);
+                }
+                for(auto &point : entry.commandCompositeMeshPoints) {
+                    const auto transformed = transformPoint(point.x, point.y);
+                    point.x = static_cast<float>(transformed.x);
+                    point.y = static_cast<float>(transformed.y);
+                }
+                for(auto &point : entry.meshPoints) {
+                    const auto transformed = transformPoint(point.x, point.y);
+                    point.x = static_cast<float>(transformed.x);
+                    point.y = static_cast<float>(transformed.y);
                 }
             }
 
-            if(detail::logoChainTraceEnabledForPath(motionPath)) {
+            if(drawAffineMatrixNonIdentity && entry.hasViewport) {
+                entry.viewport =
+                    transformAndRoundPreparedRect_guess(entry.viewport);
+            }
+
+            if(drawAffineMatrixNonIdentity) {
+                entry.paintBox =
+                    transformAndRoundPreparedRect_guess(entry.paintBox);
+            }
+
+            // Port-only narrow diagnostic snapshot. Keep its potentially
+            // allocating conversion after the complete native item overwrite
+            // so it cannot change which native prefix is committed by an
+            // earlier command-key, ancestor, or mesh failure.
+            entry.sourceKey = detail::narrow(node.source.path);
+
+            if(traceForPath) {
                 const std::array<float, 8> expectedCorners = {
                     static_cast<float>(drawAffineOwner._drawAffineM11 *
                                            static_cast<double>(node.vertices[0]) +
@@ -833,8 +1061,9 @@ namespace motion {
                 };
                 const auto effectiveColor = unpackPackedRgba(entry.packedColors[0]);
                 detail::logoChainTraceLogf(
-                    motionPath, "prepare.item", "0x6C2334", _clampedEvalTime,
-                    "nodeIndex={} src={} blend={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] meshType={} meshDiv=({},{}) sortKey={:.3f} coordinateMode={} objTriPriority={} layerId=({}, {}) nodeDrawFlag={} maskRef={} itemDrawFlag={} visibleAncestorIndex={} slotDone={} frameType={} stencilBase={} stencilType={}",
+                    motionPath, "prepare.item",
+                    "Player.appendPreparedRenderItems", _clampedEvalTime,
+                    "nodeIndex={} src={} blend={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] meshType={} meshDiv=({},{}) sortKey={:.3f} coordinateMode={} objTriPriority={} layerId=({}, {}) nodeDrawFlag={} maskRef={} itemDrawFlag={} visibleAncestorIndex={} slotDone={} frameType={} stencilType={}",
                     entry.nodeIndex,
                     entry.sourceKey.empty() ? std::string("<none>")
                                             : entry.sourceKey,
@@ -847,8 +1076,11 @@ namespace motion {
                     entry.layerId1, entry.layerId2, node.drawFlag ? 1 : 0,
                     node.stencilCompositeMaskReferenced ? 1 : 0,
                     entry.drawFlag ? 1 : 0, entry.visibleAncestorIndex,
-                    node.activeSlot().done ? 1 : 0, node.currentFrameType,
-                    node.stencilTypeBase, node.stencilType);
+                    node.activeSlot().done ? 1 : 0,
+                    node.activeSlot().done
+                        ? 0
+                        : (node.activeSlot().crossfading ? 3 : 2),
+                    node.stencilType);
                 bool cornersOk = node.source.width <= 0.0 &&
                     node.source.height <= 0.0;
                 if(!cornersOk) {
@@ -862,7 +1094,8 @@ namespace motion {
                     }
                 }
                 detail::logoChainTraceCheck(
-                    motionPath, "prepare.corners", "0x6C2334",
+                    motionPath, "prepare.corners",
+                    "Player.appendPreparedRenderItems",
                     _clampedEvalTime,
                     fmt::format(
                         "drawAffine*vertices exp=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
@@ -878,7 +1111,8 @@ namespace motion {
                     cornersOk,
                     "PreparedRenderItem corners diverged from drawAffineMatrix * node.vertices");
                 detail::logoChainTraceCheck(
-                    motionPath, "prepare.paintBox", "0x6C2334",
+                    motionPath, "prepare.paintBox",
+                    "Player.appendPreparedRenderItems",
                     _clampedEvalTime,
                     fmt::format(
                         "paintBox from transformed geometry exp=[{:.3f},{:.3f},{:.3f},{:.3f}]",
@@ -891,7 +1125,8 @@ namespace motion {
                     true,
                     "PreparedRenderItem paintBox diverged from transformed geometry");
                 detail::logoChainTraceCheck(
-                    motionPath, "prepare.viewport", "0x6C2334",
+                    motionPath, "prepare.viewport",
+                    "Player.appendPreparedRenderItems",
                     _clampedEvalTime,
                     entry.hasViewport
                         ? fmt::format(
@@ -912,9 +1147,7 @@ namespace motion {
                     "PreparedRenderItem viewport propagation diverged from parent clip chain");
             }
 
-            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-               motionPath.find("m2logo.mtn") != std::string::npos &&
-               _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
+            if(snapshotWindow && _clampedEvalTime >= 43.0 &&
                (entry.nodeIndex == 14 || entry.nodeIndex == 15 ||
                 entry.nodeIndex == 19 ||
                 (entry.nodeIndex >= 20 && entry.nodeIndex <= 29))) {
@@ -939,19 +1172,13 @@ namespace motion {
                         : "<invalid>");
             }
 
-            // Aligned to sub_6C2334 mainList enqueue: this node is now in
-            // the Path A render list; mark it so downstream consumers
-            // (e.g. calcBounds) can distinguish Path A presence from the
-            // Path B drawFlag.
-            _nodes[i].drawnThisFrame = true;
-
             entries.push_back(&entry);
         }
 
-        // 0x6C36CC..0x6C39B0 is a distinct node-order post-pass. A qualifying
-        // type-12 item has already entered mainList; the SAME borrowed pointer
-        // is additionally appended to auxList. Its child vector is rebuilt
-        // solely from node+2600 stencilCompositeMaskNodes in raw stored order.
+        // This is a distinct node-order post-pass. A qualifying type-12 item
+        // has already entered mainList; the same borrowed pointer is also
+        // appended to auxList. Its child vector is rebuilt solely from the
+        // raw stencilCompositeMaskNodes sequence, retaining duplicates.
         for(size_t i = 1; i < _nodes.size(); ++i) {
             auto &node = _nodes[i];
             if(node.nodeType != 12 || (node.stencilType & 4) == 0 ||
@@ -967,7 +1194,9 @@ namespace motion {
             parentItem->childItems.clear();
             parentItem->childItems.push_back(parentItem);
             for(auto *maskNode : node.stencilCompositeMaskNodes) {
-                if(!maskNode || !maskNode->drawnThisFrame) {
+                // The native pointer vector is trusted and each element is
+                // dereferenced immediately. A null entry is not tolerated.
+                if(!maskNode->drawnThisFrame) {
                     continue;
                 }
                 if(maskNode->nodeType != 0 && maskNode->nodeType != 3) {
@@ -996,8 +1225,8 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareEnter(this);
 #endif
-        // sub_6D5164 @0x6D5178 owns the motion-content type-tag gate.  The
-        // recursive sub_6C2334 body has no equivalent early return.
+        // The outer wrapper owns the motion-content type-tag gate. The
+        // recursive builder has no equivalent early return.
         if(!hasMotionContent()) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             detail::motionTraceRenderPrepareLeave(
@@ -1005,48 +1234,66 @@ namespace motion {
 #endif
             return false;
         }
-        const auto motionPath = matchedMotionPath();
+        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
+        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
+        std::string motionPath;
+        if(logoTraceEnabled || logoSnapshotEnabled) {
+            motionPath = matchedMotionPath();
+        }
+        const bool traceForPath =
+            logoTraceEnabled &&
+            detail::logoChainTraceEnabledForPath(motionPath);
+        const bool snapshotForPath =
+            logoSnapshotEnabled &&
+            detail::logoSnapshotMarkEnabledForPath(motionPath);
 
-        // sub_6D5164 @0x6D5184..0x6D5198 passes neutral color and two false
-        // lineage flags into sub_6C2334. Callers construct both vectors empty.
+        // The outer wrapper passes neutral color and two false lineage flags
+        // into the recursive builder. Callers construct both vectors empty.
         appendPreparedRenderItems(
             mainList,
             auxList,
             0xFF808080u, false, false);
-        std::vector<double> beforeSortKeys;
-        beforeSortKeys.reserve(mainList.size());
-        for(const auto *item : mainList) {
-            beforeSortKeys.push_back(item ? item->sortKey : 0.0);
+        // The four native wrappers allocate only their implementation's
+        // stable-sort pointer buffer. This parallel double-vector exists only
+        // for the opt-in ordering trace and must not be built otherwise.
+        std::optional<std::vector<double>> beforeSortKeys;
+        if(traceForPath) {
+            beforeSortKeys.emplace();
+            beforeSortKeys->reserve(mainList.size());
+            for(const auto *item : mainList) {
+                beforeSortKeys->push_back(item ? item->sortKey : 0.0);
+            }
         }
-        // Aligned to sub_6D4F00 (0x6D4F00): compare render-item sort key.
+        // Stable-sort by the render-item sort key.
         std::stable_sort(
             mainList.begin(),
             mainList.end(),
             [](const detail::PreparedRenderItem *lhs,
                const detail::PreparedRenderItem *rhs) {
-                return lhs && rhs ? lhs->sortKey < rhs->sortKey
-                                  : rhs != nullptr;
+                // The native comparator immediately dereferences both trusted
+                // raw pointers and performs one ordered double less-than.
+                return lhs->sortKey < rhs->sortKey;
             });
-        if(detail::logoChainTraceEnabledForPath(motionPath)) {
+        if(traceForPath) {
             std::ostringstream beforeSort;
             std::ostringstream afterSort;
-            for(size_t i = 0; i < beforeSortKeys.size(); ++i) {
+            for(size_t i = 0; i < beforeSortKeys->size(); ++i) {
                 if(i) beforeSort << ",";
-                beforeSort << beforeSortKeys[i];
+                beforeSort << (*beforeSortKeys)[i];
             }
             for(size_t i = 0; i < mainList.size(); ++i) {
                 if(i) afterSort << ",";
                 afterSort << (mainList[i] ? mainList[i]->sortKey : 0.0);
             }
             detail::logoChainTraceLogf(
-                motionPath, "prepare.sort", "0x6D5164/0x6D4F00",
+                motionPath, "prepare.sort", "Player.prepareRenderItems",
                 _clampedEvalTime,
                 "itemCount={} sortKeysBefore=[{}] sortKeysAfter=[{}]",
                 mainList.size(), beforeSort.str(),
                 afterSort.str());
         }
 
-        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+        if(snapshotForPath &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
             _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
             for(size_t i = 0; i < mainList.size(); ++i) {
@@ -1071,8 +1318,8 @@ namespace motion {
                     item.objTriPriority);
             }
         }
-        // sub_6D5164 returns 1 whenever the motion-content type tag is nonzero,
-        // even when mainList is empty.
+        // The wrapper returns true whenever the motion-content type tag is
+        // nonzero, even when mainList is empty.
         const bool ok = true;
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareLeave(this, ok, mainList, auxList);
@@ -1080,143 +1327,21 @@ namespace motion {
         return ok;
     }
 
-    void Player::applyPreparedRenderItemTranslateOffsets(
+    void Player::applyPreparedRenderItemProjection_guess(
         detail::PreparedRenderItemList &mainList) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderApplyTranslateEnter(this);
+        detail::motionTraceRenderApplyProjectionEnter(this);
 #endif
-        // Aligned to libkrkr2.so Player_applyTranslateOffset (0x6D5264):
-        // normal path adds cameraOffset to prepared render items here.
-        // Root position is already baked into node state during updateLayers.
-        const double ofsX = static_cast<double>(_cameraOffsetX);
-        const double ofsY = static_cast<double>(_cameraOffsetY);
-        const auto motionPath = matchedMotionPath();
-        // Player_applyTranslateOffset @0x6D5264 receives the main pointer
-        // vector only; auxiliary composite items are not walked here.
-        for(auto *entryPtr : mainList) {
-            if(!entryPtr) {
-                continue;
-            }
-            auto &entry = *entryPtr;
-            const auto beforeCorners = entry.corners;
-            const auto beforePaintBox = entry.paintBox;
-            const auto beforeViewport = entry.viewport;
-            const auto beforeCompositeMeshPoints =
-                entry.commandCompositeMeshPoints;
-            const auto beforeMeshPoints = entry.meshPoints;
-            for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
-                entry.corners[ci] = static_cast<float>(
-                    static_cast<double>(entry.corners[ci]) + ofsX);
-                entry.corners[ci + 1] = static_cast<float>(
-                    static_cast<double>(entry.corners[ci + 1]) + ofsY);
-            }
-            entry.paintBox[0] = static_cast<float>(
-                static_cast<double>(entry.paintBox[0]) + ofsX);
-            entry.paintBox[1] = static_cast<float>(
-                static_cast<double>(entry.paintBox[1]) + ofsY);
-            entry.paintBox[2] = static_cast<float>(
-                static_cast<double>(entry.paintBox[2]) + ofsX);
-            entry.paintBox[3] = static_cast<float>(
-                static_cast<double>(entry.paintBox[3]) + ofsY);
-            if(entry.hasViewport) {
-                entry.viewport[0] = static_cast<float>(
-                    static_cast<double>(entry.viewport[0]) + ofsX);
-                entry.viewport[1] = static_cast<float>(
-                    static_cast<double>(entry.viewport[1]) + ofsY);
-                entry.viewport[2] = static_cast<float>(
-                    static_cast<double>(entry.viewport[2]) + ofsX);
-                entry.viewport[3] = static_cast<float>(
-                    static_cast<double>(entry.viewport[3]) + ofsY);
-            }
-            // Player_applyTranslateOffset@0x6D52B8..0x6D533C walks item+344
-            // for every item.  The item+400 vector is walked separately only
-            // for meshType 1 at 0x6D5348..0x6D5388; raw item+376 is untouched.
-            for(auto &point : entry.commandCompositeMeshPoints) {
-                point.x = static_cast<float>(
-                    static_cast<double>(point.x) + ofsX);
-                point.y = static_cast<float>(
-                    static_cast<double>(point.y) + ofsY);
-            }
-            if(entry.meshType == 1) {
-                for(auto &point : entry.meshPoints) {
-                    point.x = static_cast<float>(
-                        static_cast<double>(point.x) + ofsX);
-                    point.y = static_cast<float>(
-                        static_cast<double>(point.y) + ofsY);
-                }
-            }
-            if(detail::logoChainTraceEnabledForPath(motionPath)) {
-                bool ok = true;
-                for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
-                    if(std::fabs((entry.corners[ci] - beforeCorners[ci]) -
-                                 static_cast<float>(ofsX)) > 0.01f ||
-                       std::fabs((entry.corners[ci + 1] -
-                                  beforeCorners[ci + 1]) -
-                                 static_cast<float>(ofsY)) > 0.01f) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if(ok && entry.hasViewport) {
-                    for(size_t vi = 0; vi < entry.viewport.size(); vi += 2) {
-                        if(std::fabs((entry.viewport[vi] - beforeViewport[vi]) -
-                                     static_cast<float>(ofsX)) > 0.01f ||
-                           std::fabs((entry.viewport[vi + 1] -
-                                      beforeViewport[vi + 1]) -
-                                     static_cast<float>(ofsY)) > 0.01f) {
-                            ok = false;
-                            break;
-                        }
-                    }
-                }
-                if(ok) {
-                    for(size_t pi = 0;
-                        pi < entry.commandCompositeMeshPoints.size(); ++pi) {
-                        if(std::fabs(
-                               (entry.commandCompositeMeshPoints[pi].x -
-                                beforeCompositeMeshPoints[pi].x) -
-                               static_cast<float>(ofsX)) > 0.01f ||
-                           std::fabs(
-                               (entry.commandCompositeMeshPoints[pi].y -
-                                beforeCompositeMeshPoints[pi].y) -
-                               static_cast<float>(ofsY)) > 0.01f) {
-                            ok = false;
-                            break;
-                        }
-                    }
-                }
-                if(ok && entry.meshType == 1) {
-                    for(size_t pi = 0; pi < entry.meshPoints.size(); ++pi) {
-                        if(std::fabs(
-                               (entry.meshPoints[pi].x - beforeMeshPoints[pi].x) -
-                               static_cast<float>(ofsX)) > 0.01f ||
-                           std::fabs((entry.meshPoints[pi].y -
-                                      beforeMeshPoints[pi].y) -
-                                     static_cast<float>(ofsY)) > 0.01f) {
-                            ok = false;
-                            break;
-                        }
-                    }
-                }
-                detail::logoChainTraceCheck(
-                    motionPath, "prepare.translate", "0x6D5264",
-                    _clampedEvalTime,
-                    fmt::format(
-                        "cameraOffset=({:.3f},{:.3f}) applied to corners/paintBox/viewport/+344/type1+400",
-                        ofsX, ofsY),
-                    fmt::format(
-                        "nodeIndex={} beforeCorner0=({:.3f},{:.3f}) afterCorner0=({:.3f},{:.3f}) beforePaintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] afterPaintBox=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        entry.nodeIndex, beforeCorners[0], beforeCorners[1],
-                        entry.corners[0], entry.corners[1], beforePaintBox[0],
-                        beforePaintBox[1], beforePaintBox[2], beforePaintBox[3],
-                        entry.paintBox[0], entry.paintBox[1], entry.paintBox[2],
-                        entry.paintBox[3]),
-                    ok,
-                    "Player_applyTranslateOffset added more than cameraOffset");
-            }
-        }
+        internal::render_detail::applyPreparedRenderItemProjectionCore_guess(
+            mainList,
+            _cameraOffsetX,
+            _cameraOffsetY,
+            _stereovisionActive,
+            _stereovisionCameraX_guess,
+            _stereovisionCameraY_guess,
+            _stereovisionCameraZ_guess);
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderApplyTranslateLeave(this, mainList);
+        detail::motionTraceRenderApplyProjectionLeave(this, mainList);
 #endif
     }
 

@@ -1,36 +1,23 @@
-// EmoteMeshResolver — faithful port of the eye/eyebrow value-track mesh
-//   resolver in libkrkr2.so:
-//     sub_661F7C @0x661F7C  — selector / output wiring (EmoteMeshResolver_resolve)
-//     sub_660028 @0x660028  — the 1925-line edge-table node-row path-search engine
-//                             (EmoteMeshResolver_search)
+// EmoteMeshResolver — eye/eyebrow value-track graph resolver reconstructed from
+// the four current Android/iOS 1.3.9 references.
 //
-// Both EmoteBlinkController (eye, 0x170) and EmoteEyebrowController (eyebrow,
-// slim 0x150) embed the SAME mesh-resolver state at controller+160 (the edge
-// table) and controller+184 (the node-row pool), plus an 88-byte output-row
-// vector at controller+264 and a resolved-span float at controller+288. The
-// binary calls sub_661F7C(controller+160, controller+80, currentValue, endValue)
-// after popping a 12B value-track keyframe; the resolver rebuilds the 8B value
-// track (controller+80) from the best path it finds through the value graph.
+// Both controllers embed the same logical state: an interval vector, a deque of
+// neighbour rows, a vector of candidate path rows, and the selected path span.
+// Native offsets and row sizes differ with pointer width and the platform STL;
+// the portable structure below preserves the common field order, ownership,
+// element types, and lifetime. Exact layouts and function mappings are recorded
+// in analysis/ rather than compiled-source comments.
 //
-// libkrkr2.so layout that this models (controller+160 = the resolver "self"):
-//   a1[0..2]  std::vector<{float lo, float hi}> edgeTable   (controller+160)
-//   a1[5..12] std::deque<std::vector<float>>   nodeRows     (controller+184)
-//   a1[13..15] std::vector<MeshPathRow>        outputRows   (controller+264)
-//   *(a1+128)  float                           trackResolvedSpan (controller+288)
-//
-// The engine performs a bounded depth-first path enumeration through the value
-// graph: each "edge" is a float interval [lo,hi]; each "node" is a vector<float>
-// of neighbour values. Starting from `startValue` (a2) it explores paths to
-// `endValue` (a3), and for every path it reaches it emits one MeshPathRow
-// (the flattened (from,to) segment list as a deque<float>, plus the total
-// |to-from| distance). sub_661F7C then picks the row with the minimum distance,
-// writes that distance to trackResolvedSpan, and loads the row's segment values
-// into the 8B value-track deque.
-//
-// Per CLAUDE.md byte-layout methodology this is a clean-container port: the
-// binary's libstdc++ std::deque<float>/std::vector<float> byte arithmetic maps
-// directly to std::deque<float>/std::vector<float> here; only element data
-// formats (float values) are a cross-platform contract, never ABI offsets.
+// The search is a bounded depth-first enumeration. Each edge is a closed float
+// interval [lo, hi], each node row contains adjacent values, and each candidate
+// owns a deque of {from,to} segments plus the accumulated |to-from| distance.
+// The wrapper clears its previous candidates and destination track, runs the
+// search, selects the first strict minimum whose distance is not -1, and moves
+// that candidate into the controller's secondary value track from back to
+// front. The selected output row remains present but its path is consumed;
+// non-selected rows retain their owned paths. If no distance is below the
+// native 99999 ceiling, it instead produces {endValue,endValue} with a zero
+// resolved span.
 //
 #pragma once
 
@@ -40,34 +27,29 @@
 
 namespace motion {
 
-    // 88-byte output row in the binary: { std::deque<{float,float}> path; float
-    //   dist; }. sub_686FEC appends one; sub_687234 copy-constructs the deque
-    //   (8-byte = float-pair elements, 512-byte blocks); *(row+80) = dist. The
-    //   selector (sub_661F7C else-branch @0x6620b4) copies this pair-deque
-    //   element-for-element into the 8B value track. Here the same two fields,
-    //   named by semantics.
+    // Logical output row. Native row sizes are 88/44 bytes with libstdc++ and
+    // 56/28 bytes with libc++; all four store pair elements, not a flattened
+    // deque<float>.
     struct MeshPathRow {
-        std::deque<std::pair<float, float>> path; // {from,to} segments (row+0..79)
-        float dist = 0.0f;                        // sum |to-from| (row+80)
+        std::deque<std::pair<float, float>> path; // ordered {from,to} segments
+        float dist = 0.0f;                        // accumulated sum |to-from|
     };
 
-    // Resolver "self" state embedded in the controller at +160/+184/+264/+288.
-    // Modelled as a struct so the eye and eyebrow controllers can both embed it
-    // (the binary embeds the same field cluster in both).
+    // Embedded identically by logical field order in both controller classes.
     struct EmoteMeshResolverState {
-        std::vector<std::pair<float, float>> edgeTable; // a1[0..2]  (+160)
-        std::deque<std::vector<float>>       nodeRows;  // a1[5..12] (+184)
-        std::vector<MeshPathRow>             outputRows; // a1[13..15] (+264)
-        float trackResolvedSpan = 0.0f;                  // *(a1+128) (+288)
+        std::vector<std::pair<float, float>> edgeTable;
+        std::deque<std::vector<float>> nodeRows;
+        std::vector<MeshPathRow> outputRows;
+        // Deliberately constructor-uninitialized. Every resolver return path
+        // writes this before either controller copies it into its active track.
+        float trackResolvedSpan;
     };
 
-    // Aligned with libkrkr2.so sub_661F7C @0x661F7C.
-    //   Clears outputRows, runs the path-search engine (sub_660028), then selects
-    //   the min-distance row: writes its dist to trackResolvedSpan and copies its
-    //   path segment values into `valueTrack8B`. If no row qualifies it pushes a
-    //   single {endValue,endValue} pair and sets trackResolvedSpan = 0.
-    void EmoteMeshResolver_resolve(EmoteMeshResolverState* self,
-                                   std::deque<std::pair<float, float>>* valueTrack8B,
-                                   float startValue, float endValue);
+    // Clears both output containers, runs the graph search, then performs the
+    // strict-minimum selection and fallback described above. The source name
+    // is unavailable in the stripped references, hence the suffix.
+    void EmoteMeshResolver_resolve_guess(
+        EmoteMeshResolverState* self, float startValue, float endValue,
+        std::deque<std::pair<float, float>>* valueTrack8B);
 
 } // namespace motion

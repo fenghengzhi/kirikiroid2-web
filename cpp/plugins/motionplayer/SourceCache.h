@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <list>
-#include <string>
 #include <utility>
 
 #include "psbfile/PSBRawFile.h"
@@ -20,19 +19,23 @@ class tTVPBaseBitmap;
 
 namespace motion {
 
+    class D3DAdaptor;
     class Player;
     class ResourceManager;
 
     namespace detail {
         struct MotionNode;
         struct PreparedRenderItem;
-        struct PlayerRuntime;
     }
 
-    // Current SourceCache registrars are sub_6A5988, sub_57B0DC,
-    // sub_100100F90, and sub_FE12A. Their loadSource/clearCache/bufLayer
-    // callbacks are 6A4F88/6A5818/6A58DC, 57ACC8/57B018/57B060,
-    // 1001009AC/100100F10/100100F84, and FDB50/FE0D4/FE11A.
+    // All four current SourceCache member tables expose loadSource,
+    // clearCache, and a getter-only bufLayer property.  ResourceManager
+    // re-registers those exact callbacks rather than forwarding to a second
+    // cache object or keeping duplicate state.
+    // A successful zero-argument script construction attaches this object to
+    // a non-sticky adaptor which owns it. Invalidate/destruction tears down the
+    // list and persistent Variants directly; it does not call public
+    // clearCache, so cached Layers receive no script-visible Invalidate there.
     class SourceCache {
     public:
         struct Entry {
@@ -41,42 +44,54 @@ namespace motion {
             // offsets intentionally stay out of the compiled type.
             tTJSVariant key;
             tTJSVariant layer;
+            // Lookup identity is the exact (key, src, blendMode) triple.
+            // Packed colors are mutable hit payload and byteWeight is the
+            // most recent bake result.
             ttstr src;
+            // Normal loadSource overwrites blendMode before reading it.  The
+            // missing-color branch, however, deliberately initializes only
+            // colors[0]; colors[1..3] retain the native source's indeterminate
+            // stack contents and are still compared/copied/baked.  Do not add
+            // aggregate/default initialization here: that would erase an
+            // observable original boundary.
             tjs_int blendMode;
             tjs_int colors[4];
             tjs_int byteWeight = 0;
         };
 
-        SourceCache();
+        // First-declaration `= default` is intentional.  ncbind constructs
+        // the published zero-argument form with `new SourceCache()`, matching
+        // the four-reference value-initialized all-Void/zero/empty state.
+        SourceCache() = default;
         SourceCache(tTJSVariant owner, tjs_int cacheSize);
         ~SourceCache();
 
         tTJSVariant loadSource(iTJSDispatch2 *source,
                                iTJSDispatch2 *descriptor);
-        tTJSVariant loadSourceByName(const Player *player,
-                                     const ttstr &name,
-                                     const tTJSVariant &currentSource);
-        tTJSVariant loadRenderSourceLayerFromItemLike_0x6C1B70(
+        tTJSVariant loadRenderSourceLayerFromItem_guess(
             Player &player,
             const detail::PreparedRenderItem &item);
-        iTVPTexture2D *loadRenderSourceTextureFromItemLike_0x6C1B70(
+        iTVPTexture2D *loadRenderSourceTextureFromItem_guess(
             Player &player,
             detail::PreparedRenderItem &item);
+        // Combined D3D source callback: existing/new KRKR atlas borrows return
+        // directly, while only a generic Layer fallback is passed through the
+        // adaptor's software-copy cache.
         iTVPTexture2D *loadRenderSourceTextureForItem_guess(
             Player &player,
+            D3DAdaptor &adaptor,
             detail::PreparedRenderItem &item);
         void clearCache();
-        void eraseSource(ttstr name);
         tTJSVariant getBufLayer() const;
         std::size_t size() const;
 
     private:
         void bakeSource_guess(iTJSDispatch2 *source, Entry &entry);
         void trimCacheBeforeInsert_guess();
-        tTJSVariant loadRawSourceVariant(const Player *player,
-                                         const ttstr &name,
-                                         std::string &resolvedKey) const;
 
+        // These are three independently retained Variant closures.  bufLayer
+        // is constructed once from (owner, primaryLayer); clearing cache
+        // entries never invalidates or replaces it.
         tTJSVariant _owner;
         tTJSVariant _primaryLayer;
         tTJSVariant _bufLayer;
@@ -94,19 +109,19 @@ namespace motion {
     // fields are precisely the retained raw owner/node pair plus lazy texture;
     // MASTER's older "ObjSource missing 6 members" verdict was also inverted.
     //
-    // ResourceManager::findSource constructs it at
-    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6A7F1C,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_57BDE0,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_100102594, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_FF890. The "src" branch navigates
-    // module["source"][group]["icon"][icon] and wraps the resulting sub-dict
-    // through ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
+    // ResourceManager::findSource's four-reference "src" branch navigates
+    // module["source"][group]["icon"][icon], constructs this facade, then
+    // wraps it through ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
     // Player::findSourceForNode_guess and the production load-source route
     // consume this same facade.
-    // The inherited NCB loadSource has the exact `(source,descriptor)` boundary;
-    // the separate Player by-name helper is Web compatibility code and does not
-    // create a second cache topology. There is no decoded MotionSnapshot image
-    // side path in SourceCache.
+    // A compatible non-sticky adaptor owns and destroys the facade. A failed
+    // or incompatible publication does not reclaim the preconstructed facade;
+    // because its PSBRawNode has already retained the owner, both allocations
+    // remain live. The direct zero-argument script constructor is different:
+    // metadata-attachment failure runs the ObjSource destructor and frees it.
+    // The inherited NCB loadSource has the exact `(source,descriptor)` boundary.
+    // The former port-only Player by-name cache helper was removed; there is no
+    // second cache topology or decoded MotionSnapshot image side path.
     class ObjSource {
     public:
         ObjSource() = default;
@@ -147,66 +162,82 @@ namespace motion {
     private:
         void ensureTexture_guess();
 
-        PSB::PSBRawNode _source; // qword[0..1]: retained owner + raw node
-        iTVPTexture2D *_texture = nullptr; // qword[2]: retained lazy texture
+        // Destruction releases the retained texture first and the raw-node
+        // owner second. Neither native member slot is cleared by that body.
+        PSB::PSBRawNode _source; // retained owner plus borrowed node address
+        iTVPTexture2D *_texture = nullptr; // one retained lazy texture reference
     };
 
-    // Motion.Point compatibility facade.
-    struct Point {
-        int type = 0;
-        double x = 0, y = 0;
+    // The four public geometry classes are type-specific NCB facades over one
+    // full shared record.  Their script constructors write only type; all 15
+    // doubles deliberately retain default-initialized storage contents.  A
+    // non-sticky NCB adaptor owns a heap facade only after attachment succeeds;
+    // the per-type ClassInfo tuple is a separate, static, non-owning lookup.
+    struct GeometryShapeBase_guess : detail::HitData {
+        explicit GeometryShapeBase_guess(std::int32_t shapeType) noexcept {
+            type = shapeType;
+        }
+        explicit GeometryShapeBase_guess(
+            const detail::HitData &source) noexcept
+            : detail::HitData(source) {}
 
         int getType() const { return type; }
-        double getX() const { return x; }
-        double getY() const { return y; }
-        bool contains(double, double) { return false; }
-    };
-
-    // Motion.Circle compatibility facade.
-    struct Circle {
-        int type = 1;
-        double x = 0, y = 0, r = 0;
-
-        int getType() const { return type; }
-        double getX() const { return x; }
-        double getY() const { return y; }
-        double getR() const { return r; }
-        bool contains(double px, double py) {
-            double dx = px - x, dy = py - y;
-            return dx * dx + dy * dy <= r * r;
+        bool contains(double x, double y) {
+            return detail::hitTestHitData(*this, x, y);
         }
     };
 
-    // Motion.Rect compatibility facade.
-    struct Rect {
-        int type = 2;
-        double l = 0, t = 0, w = 0, h = 0;
+    struct Point : GeometryShapeBase_guess {
+        Point() noexcept : GeometryShapeBase_guess(0) {}
+        explicit Point(const detail::HitData &source) noexcept
+            : GeometryShapeBase_guess(source) {}
 
-        int getType() const { return type; }
-        double getL() const { return l; }
-        double getT() const { return t; }
-        double getW() const { return w; }
-        double getH() const { return h; }
-        bool contains(double px, double py) {
-            return px >= l && px < l + w && py >= t && py < t + h;
-        }
+        double getX() const { return values[0]; }
+        double getY() const { return values[1]; }
     };
 
-    // Motion.Quad compatibility facade.
-    struct Quad {
-        int type = 3;
-        // 4 corners × 2 floats = 8 values
-        double verts[8] = {};
+    struct Circle : GeometryShapeBase_guess {
+        Circle() noexcept : GeometryShapeBase_guess(1) {}
+        explicit Circle(const detail::HitData &source) noexcept
+            : GeometryShapeBase_guess(source) {}
 
-        int getType() const { return type; }
+        double getX() const { return values[0]; }
+        double getY() const { return values[1]; }
+        double getR() const { return values[2]; }
+    };
+
+    struct Rect : GeometryShapeBase_guess {
+        Rect() noexcept : GeometryShapeBase_guess(2) {}
+        explicit Rect(const detail::HitData &source) noexcept
+            : GeometryShapeBase_guess(source) {}
+
+        double getL() const { return values[3]; }
+        double getT() const { return values[4]; }
+        double getW() const { return values[5] - values[3]; }
+        double getH() const { return values[6] - values[4]; }
+    };
+
+    struct Quad : GeometryShapeBase_guess {
+        Quad() noexcept : GeometryShapeBase_guess(3) {}
+        explicit Quad(const detail::HitData &source) noexcept
+            : GeometryShapeBase_guess(source) {}
+
         tTJSVariant getP() const;
-        bool contains(double, double) { return false; } // stub
     };
+
+    static_assert(sizeof(Point) == sizeof(detail::HitData));
+    static_assert(sizeof(Circle) == sizeof(detail::HitData));
+    static_assert(sizeof(Rect) == sizeof(detail::HitData));
+    static_assert(sizeof(Quad) == sizeof(detail::HitData));
 
     // Motion.LayerGetter is a non-owning one-pointer facade over a live
-    // MotionNode. Every one of
-    // its 29 read-only properties dereferences that node when the property is
-    // read; it does not snapshot or retain any node field.
+    // MotionNode. Its delayed NCB class has a separate process-static,
+    // non-owning ClassInfo tuple. After a successful non-sticky attachment the
+    // script adaptor owns only this small facade, never the MotionNode. Every
+    // one of its 29 read-only properties dereferences the current node when the
+    // property is read; it does not snapshot or retain any node field. Player
+    // destruction or node-tree replacement can therefore leave a surviving
+    // script facade dangling.
     class LayerGetter {
     public:
         LayerGetter() = default;
@@ -243,9 +274,11 @@ namespace motion {
         tTJSVariant getParticle() const;
 
     private:
-        // LayerGetter default construction @0x6E2CA0 writes only a null node
-        // pointer.  The getters deliberately have no null guard, preserving
-        // the binary's directly-constructed-object boundary behavior.
+        // Four-reference default construction writes only a null node pointer.
+        // Metadata-attach failure deletes this facade, while successful direct
+        // script construction leaves the pointer null. The getters deliberately
+        // have no null or lifetime guard, preserving both direct-construction
+        // null dereference and later dangling-node boundaries.
         detail::MotionNode *_node = nullptr;
     };
 

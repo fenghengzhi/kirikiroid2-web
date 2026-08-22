@@ -180,11 +180,6 @@ public:
     ~tTJSNI_BaseLayer() override;
     tjs_error Construct(tjs_int numparams, tTJSVariant **param,
                         iTJSDispatch2 *tjs_obj) override;
-    tjs_error ConstructResolvedTreeOwnerLike_0x800438(
-        class iTVPLayerTreeOwner *layerTreeOwner,
-        tTJSNI_BaseLayer *parentLayer,
-        iTJSDispatch2 *tjs_obj,
-        const tTJSVariantClosure &actionOwner);
     void Invalidate() override;
 
     iTJSDispatch2 *GetOwnerNoAddRef() const { return Owner; }

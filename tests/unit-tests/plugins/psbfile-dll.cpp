@@ -19,11 +19,7 @@
 extern tTJS *TVPScriptEngine;
 extern void TVPGetListAt(const ttstr &name, iTVPStorageLister *lister);
 
-// Transfer special-member mapping:
-// Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_598E44,
-// Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD350,
-// Kirikiroid2_1.3.9_iOS_arm64!sub_1000ED8E4, and
-// Kirikiroid2_1.3.9_iOS_armv7!sub_E9BE2 all retain an unwind-capable source
+// All four current Transfer implementations retain an unwind-capable source
 // boundary rather than a noexcept move.
 static_assert(!noexcept(
     std::declval<PSB::PSBFile &>().Transfer_guess()));
@@ -244,21 +240,14 @@ TEST_CASE("raw psb storage load applies the Android motion decrypt filter") {
                              motionDecryptFilter(742877301u)));
     const auto root = file.GetRoot();
     REQUIRE(root.GetTypeCategory() == 7);
-    // ContainsDictionaryKey is
-    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_5999B8,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD918,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EDEF0, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_EA120. All four construct the temporary
-    // before the category gate, delegate only category 7, and return false
-    // for known non-dictionary categories.
+    // All four current ContainsDictionaryKey bodies construct the temporary
+    // before the category gate, delegate only category 7, and return false for
+    // known non-dictionary categories.
     REQUIRE(root.ContainsDictionaryKey("id"));
     REQUIRE_FALSE(
         root.GetDictionaryValueStrict("id").ContainsDictionaryKey("id"));
-    // GetString is Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_598F38,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD3A0,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000ED94C, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_E9C90. All four return null for every
-    // known non-category-4 tag before touching the owner's strings table.
+    // All four current GetString bodies return null for every known
+    // non-category-4 tag before touching the owner's strings table.
     REQUIRE(root.GetString() == nullptr);
     REQUIRE(std::string(root.GetDictionaryValueStrict("id").GetString()) ==
             "motion");
@@ -271,12 +260,8 @@ TEST_CASE("raw psb owner and node views retain ezsave.pimg") {
     {
         PSB::PSBFile file;
         REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
-        // Root-node construction is
-        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_598E1C,
-        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD33A,
-        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000ED8C8, and
-        // Kirikiroid2_1.3.9_iOS_armv7!sub_E9BD0. Each copies the one-pointer
-        // owner holder before storing the independent root-node pointer.
+        // Every current root-node constructor copies the one-pointer owner
+        // holder before storing the independent root-node pointer.
         retainedRoot = PSB::PSBRawNode(file);
         REQUIRE(retainedRoot.GetType() == 0x21);
         REQUIRE(retainedRoot.GetDictionaryValueStrict("width").GetInt() == 1280);
@@ -301,12 +286,10 @@ TEST_CASE("raw psb dictionary lookup accepts an aliased output node") {
     PSB::PSBRawOwner *const owner = node.GetOwner();
     const std::uint8_t *const rootNode = node.GetNode();
 
-    // Non-throwing dictionary lookup is
-    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_599138,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DD544,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EDB08, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_E9E1C. All four capture the child before
+    // All four current non-throwing dictionary lookups capture the child before
     // releasing out, then reload/retain this->owner without an alias guard.
+    // `file` deliberately keeps a second owner reference alive across that
+    // release-first self-assignment; a sole-owner alias would be unsafe.
     // "name" exists in the shared trie for layer dictionaries but not in the
     // root dictionary, so this reaches the second lookup's alias-miss path.
     REQUIRE_FALSE(node.GetDictionaryValue("name", node));
@@ -391,13 +374,10 @@ TEST_CASE("psb media replacement keeps old stream metadata destructible") {
     const tjs_uint64 borrowedSize = borrowed->GetSize();
     REQUIRE(borrowedSize > 0);
 
-    // Open first reaches EnsureContainer:
-    // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_59A1E4,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DDF18,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EE754, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_EA7F8. The encrypted motion's
-    // raw header is loadable without a filter, while its unfiltered root is a
-    // resource node rather than the ezsave dictionary.  Looking up ezsave's
+    // In all four current references Open first reaches EnsureContainer. The
+    // encrypted motion's raw header is loadable without a filter, while its
+    // unfiltered root is a resource node rather than the ezsave dictionary.
+    // Looking up ezsave's
     // known resource path must therefore reach the post-replacement
     // cannot-open branch.  A stale cache would incorrectly return a stream;
     // a failed second load would return nullptr without throwing.
@@ -616,12 +596,9 @@ TEST_CASE("PSB Resource Variant owns copied bytes after owner release") {
         REQUIRE(std::equal(expected.begin(), expected.end(), octet->GetData()));
     }
 
-    // CreateVariant is Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_596B1C,
-    // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_4DBD78,
-    // Kirikiroid2_1.3.9_iOS_arm64!sub_1000EB9D0, and
-    // Kirikiroid2_1.3.9_iOS_armv7!sub_E8308. Their Octet branches allocate a
-    // copy and transfer its ownership into the output variant; the source
-    // PSBFile/raw-node holders above are all gone at this point.
+    // All four current CreateVariant Octet branches allocate a copy and
+    // transfer its ownership into the output variant; the source PSBFile and
+    // raw-node holders above are all gone at this point.
     auto *octet = copiedResource.AsOctetNoAddRef();
     REQUIRE(octet != nullptr);
     REQUIRE(octet->GetLength() == expected.size());

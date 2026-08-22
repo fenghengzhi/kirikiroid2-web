@@ -1,30 +1,57 @@
-// D3DAdaptor.cpp — Motion.D3DAdaptor texture target implementation.
-//
+// Motion.D3DAdaptor texture target and software-source cache.
 #include "D3DAdaptor.h"
 
-#include <algorithm>
 #include <cstring>
-
-#include <spdlog/spdlog.h>
 
 #include "MsgIntf.h"
 #include "RenderManager.h"
 
+namespace {
+    iTVPRenderManager *getMotionOpenGLRenderManager_guess() {
+        // The software-source bridge uploads into the private GPU renderer,
+        // independently of which renderer is selected as the process default.
+        static iTVPRenderManager *manager =
+            TVPGetRenderManager(TJS_W("opengl"));
+        return manager;
+    }
+}
+
 namespace motion {
 
+    D3DAdaptor::D3DAdaptor(iTJSDispatch2 *windowObject,
+                           int width,
+                           int height,
+                           int centerX,
+                           int centerY)
+        : _width(width),
+          _height(height),
+          _centerX(centerX),
+          _centerY(centerY),
+          _window(windowObject) {
+        // `_window` is deliberately a raw retained pointer rather than an RAII
+        // holder.  If AddRef or target creation throws, C++ destroys the map
+        // member but does not release this Window reference.
+        if(_window) {
+            _window->AddRef();
+        }
+        _targetTexture = TVPGetRenderManager()->CreateTexture2D(
+            nullptr, 0, static_cast<unsigned int>(_width),
+            static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
+    }
+
     D3DAdaptor::~D3DAdaptor() {
+        removeAllTextures();
         releaseTargetTexture();
+        if(_window) {
+            // The native destructor does not clear this raw slot after the
+            // final Release; member destruction follows immediately.
+            _window->Release();
+        }
     }
 
     tjs_error D3DAdaptor::factory(D3DAdaptor **result, tjs_int numparams,
                                   tTJSVariant **param, iTJSDispatch2 *) {
-        auto logger = spdlog::get("plugin");
-        if(logger) {
-            logger->warn("D3DAdaptor::factory called, numparams={}", numparams);
-        }
         if(numparams < 5) return TJS_E_BADPARAMCOUNT;
-        if(!result) return TJS_E_INVALIDPARAM;
-        if(!param || !param[0]) return TJS_E_INVALIDPARAM;
 
         iTJSDispatch2 *windowObject = param[0]->AsObjectNoAddRef();
         if(!windowObject ||
@@ -33,181 +60,194 @@ namespace motion {
             TVPThrowExceptionMessage(TJS_W("must set Window object"));
         }
 
-        auto *obj = new D3DAdaptor();
-        obj->initializeLike_0x6ADB10(
-            *param[0],
+        auto *obj = new D3DAdaptor(
+            windowObject,
             static_cast<int>(param[1]->AsInteger()),
             static_cast<int>(param[2]->AsInteger()),
             static_cast<int>(param[3]->AsInteger()),
             static_cast<int>(param[4]->AsInteger()));
-        if(logger) {
-            logger->warn("D3DAdaptor::factory OK, w={} h={} center=({}, {})",
-                         obj->_width, obj->_height, obj->_centerX,
-                         obj->_centerY);
-        }
         *result = obj;
         return TJS_S_OK;
     }
 
     void D3DAdaptor::setSize(int w, int h) {
-        if(_width == w && _height == h) {
-            return;
-        }
         _width = w;
         _height = h;
-        releaseTargetTexture();
-        allocBuffer();
-        ensureTargetTexture();
     }
 
-    tjs_error D3DAdaptor::captureCanvas(tTJSVariant *result, tjs_int numparams,
-                                        tTJSVariant **param,
-                                        iTJSDispatch2 *objthis) {
-        (void)objthis;
-        if(numparams < 1 || !param[0]) return TJS_E_BADPARAMCOUNT;
-
-        iTJSDispatch2 *layerObj = param[0]->AsObjectNoAddRef();
-        if(!layerObj) return TJS_E_INVALIDPARAM;
-
-        tTJSNI_BaseLayer *layer = nullptr;
-        if(TJS_FAILED(layerObj->NativeInstanceSupport(
-               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
-            return TJS_E_INVALIDPARAM;
-        }
-
-        if(_width <= 0 || _height <= 0) {
-            return TJS_S_OK;
-        }
-
-        if(!layer->GetHasImage()) layer->SetHasImage(true);
-        layer->SetImageSize(static_cast<tjs_uint>(_width),
-                            static_cast<tjs_uint>(_height));
-
-        auto *dst = reinterpret_cast<std::uint8_t *>(
-            layer->GetMainImagePixelBufferForWrite());
-        auto dstPitch = layer->GetMainImagePixelBufferPitch();
-        if(!dst || dstPitch <= 0) return TJS_S_OK;
-
-        copyTargetTextureRowsForCaptureLike_0x6AD92C(dst, dstPitch);
-
-        layer->Update(false);
-
-        if(result) *result = *param[0];
-        return TJS_S_OK;
+    void D3DAdaptor::removeAllTextures() {
+        _softwareTextureCopies.clear();
     }
 
-    tjs_error D3DAdaptor::captureCanvasStatic(tTJSVariant *result,
-                                              tjs_int numparams,
-                                              tTJSVariant **param,
-                                              D3DAdaptor *nativeInstance) {
-        if(!nativeInstance) return TJS_E_NATIVECLASSCRASH;
-        return nativeInstance->captureCanvas(result, numparams, param, nullptr);
+    void D3DAdaptor::captureCanvas(tTJSVariant layerVariant) {
+        auto *layer = tTJSNI_Layer::FromVariant(layerVariant);
+
+        if(TVPIsSoftwareRenderManager()) {
+            const tjs_int width =
+                static_cast<tjs_int>(_targetTexture->GetWidth());
+            tjs_int height =
+                static_cast<tjs_int>(_targetTexture->GetHeight());
+            layer->SetImageSize(width, height);
+            const auto *src = static_cast<const std::uint8_t *>(
+                _targetTexture->GetScanLineForRead(0));
+            auto *dst = static_cast<std::uint8_t *>(
+                layer->GetMainImagePixelBufferForWrite());
+            const tjs_int srcPitch = _targetTexture->GetPitch();
+            const auto dstPitch = layer->GetMainImagePixelBufferPitch();
+            if(srcPitch == dstPitch) {
+                // The native expression multiplies in signed 32-bit and only
+                // then converts the result to size_t.
+                std::memcpy(dst, src,
+                            static_cast<std::size_t>(srcPitch * height));
+            } else if(height >= 1) {
+                const auto rowBytes =
+                    static_cast<std::size_t>(width * 4);
+                do {
+                    std::memcpy(dst, src, rowBytes);
+                    dst += dstPitch;
+                    src += srcPitch;
+                    --height;
+                } while(height != 0);
+            }
+            return;
+        }
+
+        layer->IndependMainImage();
+        iTVPTexture2D *replacement = nullptr;
+        auto *candidate = layer->GetMainImage()->GetTexture();
+        if(!candidate->IsStatic() &&
+           candidate->GetWidth() == _targetTexture->GetWidth() &&
+           candidate->GetHeight() == _targetTexture->GetHeight()) {
+            candidate->AddRef();
+            replacement = candidate;
+        }
+
+        layer->AssignTexture(_targetTexture);
+        // This release is intentionally unconditional. The constructor/GPU
+        // replacement path is responsible for maintaining a live target.
+        _targetTexture->Release();
+        _targetTexture = replacement;
+        if(!_targetTexture) {
+            _targetTexture = TVPGetRenderManager()->CreateTexture2D(
+                nullptr, 0, static_cast<unsigned int>(_width),
+                static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
+        }
     }
 
     iTJSDispatch2 *D3DAdaptor::getWindowObject() const {
-        return _window.Type() == tvtObject ? _window.AsObjectNoAddRef()
-                                           : nullptr;
+        return _window;
     }
 
-    bool D3DAdaptor::ensureTargetTexture() {
-        if(_targetTexture) {
-            return true;
-        }
-        if(_width <= 0 || _height <= 0) {
-            return false;
-        }
-        // Mirrors D3DAdaptor_init @ 0x6ADB10: create adaptor+48 as an RGBA
-        // render texture sized from constructor width/height.
-        _targetTexture = TVPGetRenderManager()->CreateTexture2D(
-            nullptr, 0, static_cast<unsigned int>(_width),
-            static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
-        return _targetTexture != nullptr;
-    }
-
-    void D3DAdaptor::clearTargetTexture() {
-        if(!_targetTexture || _width <= 0 || _height <= 0) {
-            clearBuffer();
+    void D3DAdaptor::clearTargetTexture(tjs_int color) {
+        if(!_clearEnabled) {
             return;
         }
 
+        // The references use two separately guarded function-local statics.
+        // The first caches the borrowed/raw FillARGB method pointer; the
+        // second caches its `color` parameter ID.  Both values are trivial, so
+        // process exit runs no destructor and releases no renderer object.  A
+        // disabled clear reaches neither guard.  If an initializer throws, the
+        // ABI landing path aborts only that guard: a failed method lookup is
+        // retried from stage one, whereas a failed parameter lookup preserves
+        // the already-published method and retries only stage two.
+        static auto *method =
+            TVPGetRenderManager()->GetRenderMethod("FillARGB");
+        static const int colorId = method->EnumParameterID("color");
+        method->SetParameterColor4B(colorId, static_cast<unsigned int>(color));
+        const tTVPRect rc(0, 0, _targetTexture->GetWidth(),
+                          _targetTexture->GetHeight());
+        // This lookup is deliberately not cached.  The first successful clear
+        // therefore obtains the manager once for method initialization and
+        // once here; every later enabled clear performs only this lookup.  No
+        // local null check or lock separates SetParameterColor4B from the
+        // in-place target==source OperateRect call.
         auto *mgr = TVPGetRenderManager();
-        auto *method = mgr->GetRenderMethod("FillARGB");
-        if(!method) {
-            clearBuffer();
-            return;
-        }
-        const int colorId = method->EnumParameterID("color");
-        method->SetParameterColor4B(colorId, static_cast<unsigned int>(_clearColor));
-        const tTVPRect rc(0, 0, _width, _height);
-        mgr->OperateRect(method, _targetTexture, nullptr, rc,
+        mgr->OperateRect(method, _targetTexture, _targetTexture, rc,
                          tRenderTexRectArray());
     }
 
-    bool D3DAdaptor::copyTargetTextureRowsForCaptureLike_0x6AD92C(
+    bool D3DAdaptor::copyTargetTextureRows_guess(
         std::uint8_t *dst, tjs_int dstPitch) {
-        if(!dst || dstPitch <= 0 || _width <= 0 || _height <= 0) {
-            return false;
+        const auto *srcBase = static_cast<const std::uint8_t *>(
+            _targetTexture->GetScanLineForRead(0));
+        const tjs_int srcPitch = _targetTexture->GetPitch();
+        tjs_int height = static_cast<tjs_int>(_targetTexture->GetHeight());
+        if(dstPitch == srcPitch) {
+            std::memcpy(dst, srcBase,
+                        static_cast<std::size_t>(srcPitch * height));
+            return true;
         }
 
-        const std::uint8_t *srcBase = nullptr;
-        tjs_int srcPitch = 0;
-        int copyWidth = _width;
-        int copyHeight = _height;
-
-        // Aligned to libkrkr2.so D3DAdaptor_captureCanvas @ 0x6AD92C: the
-        // primary path reads back adaptor+48 texture rows into the target Layer.
-        if(_targetTexture) {
-            srcBase = static_cast<const std::uint8_t *>(
-                _targetTexture->GetScanLineForRead(0));
-            srcPitch = _targetTexture->GetPitch();
-            copyWidth = std::min<int>(_width, _targetTexture->GetWidth());
-            copyHeight = std::min<int>(_height, _targetTexture->GetHeight());
-        }
-
-        if(!srcBase && !_buffer.empty()) {
-            srcBase = _buffer.data();
-            srcPitch = static_cast<tjs_int>(_width * 4);
-        }
-        if(!srcBase || srcPitch <= 0) {
-            return false;
-        }
-
-        const int rowBytes = std::min<int>(copyWidth * 4, dstPitch);
-        for(int y = 0; y < copyHeight; ++y) {
-            std::memcpy(dst + dstPitch * y, srcBase + srcPitch * y,
-                        static_cast<size_t>(rowBytes));
+        if(height >= 1) {
+            const tjs_int width =
+                static_cast<tjs_int>(_targetTexture->GetWidth());
+            const auto rowBytes = static_cast<std::size_t>(width * 4);
+            do {
+                std::memcpy(dst, srcBase, rowBytes);
+                dst += dstPitch;
+                srcBase += srcPitch;
+                --height;
+            } while(height != 0);
         }
         return true;
     }
 
-    void D3DAdaptor::initializeLike_0x6ADB10(const tTJSVariant &window,
-                                             int width,
-                                             int height,
-                                             int centerX,
-                                             int centerY) {
-        _window = window;
+    iTVPTexture2D *D3DAdaptor::getRenderTexture_guess(
+        iTVPTexture2D *source) {
+        if(!TVPIsSoftwareRenderManager()) {
+            return source;
+        }
+        const auto found = _softwareTextureCopies.find(source);
+        if(found != _softwareTextureCopies.end()) {
+            return found->second.GetObjectNoAddRef();
+        }
+
+        // Preserve the native callback order across compilers: acquire the
+        // private renderer first, then query scanline, pitch, size, and format.
+        auto *manager = getMotionOpenGLRenderManager_guess();
+        const auto *pixels = source->GetScanLineForRead(0);
+        const auto pitch = source->GetPitch();
+        const auto width = source->GetWidth();
+        const auto height = source->GetHeight();
+        const auto format = source->GetFormat();
+        auto *copy = manager->CreateTexture2D(
+            pixels, pitch, width, height, format,
+            RENDER_CREATE_TEXTURE_FLAG_STATIC);
+        // The implicit mapped-holder construction is non-null-safe. The
+        // factory's creation reference is not released by this caller.
+        _softwareTextureCopies.emplace(source, copy);
+        return copy;
+    }
+
+    void D3DAdaptor::initialize_guess(const tTJSVariant &window,
+                                      int width,
+                                      int height,
+                                      int centerX,
+                                      int centerY) {
+        initializeFromWindowObject_guess(
+            window.AsObjectNoAddRef(), width, height, centerX, centerY);
+    }
+
+    void D3DAdaptor::initializeFromWindowObject_guess(
+        iTJSDispatch2 *windowObject,
+        int width,
+        int height,
+        int centerX,
+        int centerY) {
+        _window = windowObject;
         _width = width;
         _height = height;
         _centerX = centerX;
         _centerY = centerY;
-        allocBuffer();
-        ensureTargetTexture();
-    }
-
-    void D3DAdaptor::clearBuffer() {
-        if(!_buffer.empty()) {
-            std::memset(_buffer.data(), 0, _buffer.size());
+        // Match the parameter constructor's observable order: all dimensions
+        // are installed before the retained Window receives AddRef.
+        if(_window) {
+            _window->AddRef();
         }
-    }
-
-    void D3DAdaptor::allocBuffer() {
-        if(_width > 0 && _height > 0) {
-            _buffer.resize(static_cast<size_t>(_width) *
-                           static_cast<size_t>(_height) * 4u, 0);
-        } else {
-            _buffer.clear();
-        }
+        _targetTexture = TVPGetRenderManager()->CreateTexture2D(
+            nullptr, 0, static_cast<unsigned int>(_width),
+            static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
     }
 
     void D3DAdaptor::releaseTargetTexture() {

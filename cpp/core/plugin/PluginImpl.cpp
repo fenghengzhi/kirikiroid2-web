@@ -12,11 +12,6 @@
 #include <algorithm>
 #include <functional>
 
-#include <spdlog/spdlog.h>
-#ifdef EMSCRIPTEN
-#include <emscripten.h>
-#endif
-
 #include "tjsCommHead.h"
 
 #include "ScriptMgnIntf.h"
@@ -45,37 +40,19 @@
 #define strcasecmp _stricmp
 #endif
 
-//---------------------------------------------------------------------------
-bool TVPLoadInternalPlugin(const ttstr &_name);
-
 void TVPLoadPlugin(const ttstr &name) {
-    auto pluginName = name;
-
-#ifdef EMSCRIPTEN
-    {
-        auto s = name.AsStdString();
-        if(s.find("emote") != std::string::npos || s.find("motion") != std::string::npos) {
-            EM_ASM({ console.warn('[PLUGIN-LINK] ' + UTF8ToString($0)); }, s.c_str());
-        }
-    }
-#endif
-
-    if(TVPLoadInternalPlugin(pluginName)) {
-        TVPAddLog(ttstr(TJS_W("(info) Loading Plugin: ")) + name + TJS_W(" Success"));
-    } else {
-        TVPAddLog(ttstr(TJS_W("(info) Loading Plugin: ")) + name + TJS_W(" Failed"));
-    }
-
-    // When motionplayer.dll is loaded (called from Initialize.tjs AFTER
-    // Config.tjs has set d3dMotion/d3dMode), force these to true so
-    // initD3D will try to create a DrawDeviceD3D and set isD3D=true.
-    auto nameStr = name.AsStdString();
-    std::transform(nameStr.begin(), nameStr.end(), nameStr.begin(), ::tolower);
+    // Autoload and Plugins.link both pass their complete ttstr key directly to
+    // the public NCB loader and ignore its bool.  The autoload scanner below
+    // has one reference-platform split: iOS rewrites the discovered basename
+    // from .tpm to .dll before it is joined to Path; Android retains .tpm.
+    (void)ncbAutoRegister::LoadModule(name);
 }
 
 //---------------------------------------------------------------------------
 bool TVPUnloadPlugin(const ttstr &name) {
-    // unload plugin
+    // Plugins.unlink is a true no-op in all four references. In particular,
+    // it does not call the dormant ncbAutoRegister::AllUnregist traversal,
+    // erase either NCB container, or inspect this name.
     return true;
 }
 //---------------------------------------------------------------------------
@@ -90,6 +67,12 @@ struct tTVPFoundPlugin {
     bool operator<(const tTVPFoundPlugin &rhs) const { return Name < rhs.Name; }
 };
 
+// Four-reference state boundary: this is a zero-initialized signed 32-bit
+// snapshot of the most recently completed discovery/sort phase.  tvpLoadPlugins
+// does not reset it on entry.  An exception before the assignment below keeps
+// the previous snapshot; an exception from logging/loading after publication
+// leaves the new discovery count visible.  Android retains the exported getter
+// below, while both final iOS images dead-strip that uncalled getter.
 static tjs_int TVPAutoLoadPluginCount = 0;
 
 static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list,
@@ -100,6 +83,13 @@ static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list,
                 tTVPFoundPlugin fp;
                 fp.Path = folder;
                 fp.Name = filename;
+#ifdef __APPLE__
+                // Both iOS references perform this replacement while
+                // materializing the found-plugin record.  Android stores the
+                // original .tpm name.  Neither path later extracts the
+                // basename from the complete Path/Name key.
+                fp.Name = fp.Name.substr(0, fp.Name.length() - 4) + ".dll";
+#endif
                 list.emplace_back(fp);
             }
         }
@@ -107,67 +97,14 @@ static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list,
 }
 
 void TVPLoadInternalPlugins() {
+    // The four current references first index all three NCB registration
+    // lines, then eagerly load only xp3filter.dll.  motionplayer/emoteplayer
+    // remain indexed in the internal map and are registered later by
+    // Plugins.link or another module's PreRegist dependency callback. There
+    // is deliberately no once guard: repeating this entry appends another
+    // borrowed-pointer copy of every registrar to each internal module list.
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
-    ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // emoteplayer.dll must be pre-loaded so CanLoadPlugin("emoteplayer.dll")
-    // returns true. In libkrkr2.so, emoteplayer.dll is registered via static
-    // init (sub_42EB00) and its entry (sub_682528) loads motionplayer.dll.
-    // CanLoadPlugin checks TVPIsExistentStorage which checks HasModule.
-    ncbAutoRegister::LoadModule(TJS_W("emoteplayer.dll"));
-}
-
-bool TVPLoadInternalPlugin(const ttstr &_name) {
-    /* 1. 拿到 ttstr 的原始缓冲区 */
-    const tjs_char *src = _name.c_str();
-    size_t len = _name.length();
-
-    /* 2. 在 src 里找最后一个 '/' 或 '\\'，定位纯文件名起始 */
-    const tjs_char *fileBegin = src;
-    for(const tjs_char *p = src; *p; ++p) {
-        if(*p == TJS_W('/') || *p == TJS_W('\\'))
-            fileBegin = p + 1;
-    }
-
-    /* 3. 在 fileBegin 里找最后一个 '.' */
-    const tjs_char *dot = nullptr;
-    for(const tjs_char *p = fileBegin; *p; ++p) {
-        if(*p == TJS_W('.'))
-            dot = p; // 记录最后一个 '.'
-    }
-
-    /* 4. 检查后缀 .tpm（不区分大小写） */
-    bool needReplace = false;
-    if(dot && dot[1] && dot[2] && dot[3] && !dot[4]) // 长度正好 4：".tpm"
-    {
-        tjs_char low[5]; // 存放小写副本
-        for(int i = 0; i < 4; ++i)
-            low[i] = (tjs_char)towlower(dot[i]);
-        low[4] = 0;
-
-        if(TJS_strncmp(low, TJS_W(".tpm"), 4) == 0)
-            needReplace = true;
-    }
-
-    /* 5. 构造结果字符串 */
-    if(needReplace) {
-        /* 需要替换为 .dll，计算新长度 */
-        size_t newLen = len - 3 + 3; // 去掉 "tpm" 加上 "dll"
-        tjs_char *buf = new tjs_char[newLen + 1];
-
-        /* 拷贝前缀（含 .） */
-        TJS_strncpy(buf, src, dot - src + 1);
-        buf[dot - src + 1] = 0;
-
-        /* 追加 dll */
-        TJS_strcat(buf, TJS_W("dll"));
-
-        ttstr fixed(buf);
-        delete[] buf;
-
-        return ncbAutoRegister::LoadModule(TVPExtractStorageName(fixed));
-    }
-    return ncbAutoRegister::LoadModule(TVPExtractStorageName(_name));
 }
 
 void tvpLoadPlugins() {
@@ -192,7 +129,9 @@ void tvpLoadPlugins() {
     // sort by filename
     std::sort(list.begin(), list.end());
 
-    // load each plugin
+    // Publish before the empty check/load loop.  This exact ordering means an
+    // empty successful discovery writes zero, while any later per-item failure
+    // still exposes the complete discovered count rather than a loaded count.
     TVPAutoLoadPluginCount = (tjs_int)list.size();
     for(auto &i : list) {
         TVPAddImportantLog(ttstr(TJS_W("(info) Loading ")) +
@@ -202,7 +141,11 @@ void tvpLoadPlugins() {
 }
 
 //---------------------------------------------------------------------------
-tjs_int TVPGetAutoLoadPluginCount() { return TVPAutoLoadPluginCount; }
+tjs_int TVPGetAutoLoadPluginCount() {
+    // The Android references implement this as a raw 32-bit load with no
+    // internal callers or side effects.
+    return TVPAutoLoadPluginCount;
+}
 
 //---------------------------------------------------------------------------
 // some service functions for plugin
@@ -250,34 +193,55 @@ void TVP_md5_finish(TVP_md5_state_t *pms, tjs_uint8 *digest) {
 
 //---------------------------------------------------------------------------
 bool TVPRegisterGlobalObject(const tjs_char *name, iTJSDispatch2 *dsp) {
-    // register given object to global object
+    // This compatibility service survives in both Android references, but is
+    // unreferenced and linker-dead-stripped from both final iOS images.  Keep
+    // the recovered ordering: the nullable dispatch is first wrapped in an
+    // object Variant (and AddRef'd when non-null), then the script global is
+    // acquired as an owning reference.  Only the virtual PropSet belongs to
+    // the catch region; Variant construction and global acquisition do not.
     tTJSVariant val(dsp);
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     tjs_error er;
     try {
+        // The Android references deliberately have no global-null or name-null
+        // guard here.  A missing engine therefore dereferences null, while a
+        // null name is merely forwarded to PropSet.  The exact call uses
+        // MEMBERENSURE, a null hint, and the global itself as objthis.
         er = global->PropSet(TJS_MEMBERENSURE, name, nullptr, &val, global);
     } catch(...) {
+        // PropSet exceptions are swallowed only after balancing the owning
+        // global reference.  The local Variant then releases its temporary
+        // dispatch reference during the return cleanup.
         global->Release();
         return false;
     }
     global->Release();
+    // Every nonnegative TJS status is true; failures are false.
     return TJS_SUCCEEDED(er);
 }
 
 //---------------------------------------------------------------------------
 bool TVPRemoveGlobalObject(const tjs_char *name) {
-    // remove registration of global object
+    // Unlike registration, both Android references explicitly accept a
+    // missing script engine and return false before the protected call.
+    // TVPGetScriptDispatch still returns an owning reference when non-null.
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     if(!global)
         return false;
     tjs_error er;
     try {
+        // No name validation or MEMBERENSURE flag is added: DeleteMember sees
+        // flags=0, a null hint, and the global itself as objthis.
         er = global->DeleteMember(0, name, nullptr, global);
     } catch(...) {
+        // Only DeleteMember exceptions are converted to false.  In both the
+        // normal and exceptional paths the owning global reference is released
+        // exactly once.
         global->Release();
         return false;
     }
     global->Release();
+    // TJS_S_* statuses are true; negative deletion failures are false.
     return TJS_SUCCEEDED(er);
 }
 
@@ -285,18 +249,35 @@ bool TVPRemoveGlobalObject(const tjs_char *name) {
 void TVPDoTryBlock(tTVPTryBlockFunction tryblock,
                    tTVPCatchBlockFunction catchblock,
                    tTVPFinallyBlockFunction finallyblock, void *data) {
+    // This dormant public compatibility service survives in both Android
+    // references with no internal caller, but is linker-dead-stripped from
+    // both final iOS images.  tryblock is intentionally mandatory.  The source
+    // try region covers only this callback: the normal-path finally call below
+    // is outside it, so an exception from finally propagates rather than being
+    // routed through catchblock.
     try {
         tryblock(data);
     } catch(const eTJS &e) {
+        // The exceptional finally callback runs first and exactly once.  It is
+        // therefore also outside any protection by this handler: if it throws,
+        // its replacement exception propagates and catchblock is never called.
         if(finallyblock)
             finallyblock(data);
         tTVPExceptionDesc desc;
         desc.type = TJS_W("eTJS");
+        // Copy the virtual message into the stack description.  The callback
+        // receives a const reference valid only for its invocation; both ttstr
+        // members are destroyed when this handler leaves.
         desc.message = e.GetMessage();
+        // catchblock is deliberately not nullable on an exceptional path.
+        // false swallows the active exception; true rethrows that same original
+        // exception after stack-description cleanup, without a second finally.
         if(catchblock(data, desc))
             throw;
         return;
     } catch(...) {
+        // catch(...) has the same callback order.  It exposes no original
+        // exception details: type is "unknown" and message stays default-empty.
         if(finallyblock)
             finallyblock(data);
         tTVPExceptionDesc desc;
@@ -305,6 +286,8 @@ void TVPDoTryBlock(tTVPTryBlockFunction tryblock,
             throw;
         return;
     }
+    // Nullable finally is the only callback with an explicit guard.  It runs
+    // once after a normal tryblock return; there is no description/catch call.
     if(finallyblock)
         finallyblock(data);
 }
@@ -329,7 +312,10 @@ tTJSNativeClass *TVPCreateNativeClass_Plugins() {
 
         ttstr name = *param[0];
 
-        TVPLoadPlugin(name);
+        // The public link surface accepts the module map key itself.  It does
+        // not extract a path or rewrite .tpm to .dll, and false from an
+        // already-loaded or missing module is not exposed to script.
+        (void)ncbAutoRegister::LoadModule(name);
 
         return TJS_S_OK;
     }

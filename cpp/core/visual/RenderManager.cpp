@@ -467,6 +467,11 @@ bool tTVPBitmap::Is8bit() const {
 static std::vector<iTVPTexture2D *> _toDeleteTextures;
 
 void iTVPTexture2D::RecycleProcess() {
+    // Keep the range-for snapshot followed by clear(): deletion may re-enter
+    // Release(), but the native implementation neither swaps the queue nor
+    // protects its iterators. A reentrant append is therefore discarded at
+    // the final clear, and an append that grows the vector invalidates this
+    // traversal. Duplicate entries likewise remain possible.
     for(iTVPTexture2D *tex : _toDeleteTextures) {
         delete tex;
     }
@@ -476,6 +481,9 @@ static tTVPAtExit TVPReleaseTexture2D(TVP_ATEXIT_PRI_RELEASE + 500,
                                       iTVPTexture2D::RecycleProcess);
 
 void iTVPTexture2D::Release() {
+    // Final release deliberately leaves RefCount at one and only enqueues the
+    // raw pointer. There is no zero/duplicate guard; actual destruction is a
+    // later RecycleProcess operation.
     if(RefCount == 1)
         _toDeleteTextures.push_back(this);
     else
@@ -497,6 +505,8 @@ public:
                                  unsigned int h, TVPTextureFormat::e format) :
         iTVPSoftwareTexture2D(w, h), Format(format),
         BmpData((tjs_uint8 *)pixel), Pitch(pitch) {}
+    // BmpData is borrowed storage in this class; the native destructor is
+    // intentionally empty and does not free or clear it.
     ~tTVPSoftwareTexture2D_static() override {}
     void Update(const void *pixel, TVPTextureFormat::e format, int pitch,
                 const tTVPRect &rc) override {
@@ -541,7 +551,7 @@ public:
                 samplePixelCenter = center[Width / 2];
             }
             logger->warn(
-                "WCHAIN stage=texture.getAdapterTexture func=0xAA6268 "
+                "WCHAIN stage=texture.getAdapterTexture "
                 "kind=static ptr={} origTex={} size={}x{} pitch={} "
                 "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
                 (void *)this, (void *)origTex, Width, Height, Pitch,
@@ -563,7 +573,7 @@ public:
         if(lowLevelLogoTraceEnabled()) {
             if(auto logger = spdlog::get("core")) {
             logger->warn(
-                "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
+                "WCHAIN stage=texture.getAdapterTexture.result "
                 "kind=static ptr={} recreated={} updated={} origTexId={} newTexId={}",
                 (void *)this, recreated ? 1 : 0, updated ? 1 : 0, origTexId,
                 origTex ? origTex->getName() : 0u);
@@ -593,6 +603,11 @@ protected:
         tTVPSoftwareTexture2D_static(nullptr, pitch, w, h, format) {}
 
     ~tTVPSoftwareTexture2D_compress() override {
+        // The hook is removed only while a decompressed buffer is present.
+        // Use the secondary continuous-callback base pointer selected by C++
+        // multiple-inheritance adjustment; the hook vector only nulls entries.
+        // A null buffer means either that no hook was ever registered or that
+        // the expiry callback already freed the buffer and tombstoned its hook.
         if(BmpData) {
             TVPFreeBitmapBits(BmpData);
             BmpData = nullptr;
@@ -626,6 +641,12 @@ public:
                 line += decodedLines;
             }
         }
+        // Conversion from this complete object to the callback interface stores
+        // the adjusted secondary base (+40 on 64-bit, +28 on 32-bit).  Because
+        // delivery re-reads the live vector size, registration from an earlier
+        // callback can make this new entry run later in the current pass; in
+        // that case the freshly assigned life of three is immediately reduced
+        // to two.
         if(PixelFrameLife == 0)
             TVPAddContinuousEventHook(this);
         PixelFrameLife = 3; // free pixel if not used in next 3 frames
@@ -633,6 +654,12 @@ public:
     }
 
     void OnContinuousCallback(tjs_uint64 tick) override {
+        // Preserve the raw pre-decrement boundary: an unexpected callback at
+        // life zero produces -1 and returns; the references have no underflow
+        // guard.  On the normal zero transition, removal only tombstones this
+        // adjusted secondary-base slot.  Since this slot was non-null when the
+        // current iteration loaded it, the tombstone may survive this pass when
+        // no later null slot causes compaction.
         if(--PixelFrameLife)
             return;
         if(BmpData) {
@@ -684,7 +711,7 @@ public:
                 samplePixelCenter = center[Width / 2];
             }
             logger->warn(
-                "WCHAIN stage=texture.getAdapterTexture func=0xAA6268 "
+                "WCHAIN stage=texture.getAdapterTexture "
                 "kind=compress ptr={} origTex={} size={}x{} pitch={} "
                 "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
                 (void *)this, (void *)origTex, Width, Height, Pitch,
@@ -706,7 +733,7 @@ public:
         if(lowLevelLogoTraceEnabled()) {
             if(auto logger = spdlog::get("core")) {
             logger->warn(
-                "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
+                "WCHAIN stage=texture.getAdapterTexture.result "
                 "kind=compress ptr={} recreated={} updated={} origTexId={} newTexId={}",
                 (void *)this, recreated ? 1 : 0, updated ? 1 : 0, origTexId,
                 origTex ? origTex->getName() : 0u);
@@ -807,7 +834,7 @@ public:
                 samplePixelCenter = center[Width / 2];
             }
             logger->warn(
-                "WCHAIN stage=texture.getAdapterTexture func=0xAA6268 "
+                "WCHAIN stage=texture.getAdapterTexture "
                 "kind=half ptr={} origTex={} size={}x{} internalH={} "
                 "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
                 (void *)this, (void *)origTex, Width, Height,
@@ -833,7 +860,7 @@ public:
         if(lowLevelLogoTraceEnabled()) {
             if(auto logger = spdlog::get("core")) {
             logger->warn(
-                "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
+                "WCHAIN stage=texture.getAdapterTexture.result "
                 "kind=half ptr={} recreated={} updatedLines={} totalLines={} "
                 "origTexId={} newTexId={}",
                 (void *)this, recreated ? 1 : 0, updatedLines, y, origTexId,
@@ -1176,6 +1203,8 @@ public:
         _totalVMemSize += Pitch * Height;
     }
     ~tTVPSoftwareTexture2D() override {
+        // Account bytes before releasing the synchronously ref-counted bitmap;
+        // neither Bitmap nor the borrowed BmpData alias is cleared here.
         _totalVMemSize -= Pitch * Height;
         if(Bitmap)
             Bitmap->Release();

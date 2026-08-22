@@ -1,208 +1,209 @@
-// EmoteEyebrowController — ctor (0x66480C) + step (sub_665600) faithful port.
+// Four-reference EmoteEyebrowController constructor, step, and reset path.
 //
 // The "slim" sibling of EmoteBlinkController. See EmoteEyebrowController.h for
 // the full structural-difference analysis (no blink machine, no RNG, no remap;
-// value-track offsets swapped relative to the eye controller but semantically
-// identical).
+// scalar field positions differ from the eye controller, and its value-track
+// state machine advances at most one stage per call).
 
 #include "EmoteEyebrowController.h"
 #include "MotionDispatch.h"
+#include "ncbind.hpp"
 
 #include <cmath>
 #include <cstring> // std::memcpy for the raw-bits trackPow reinterpret
 
 namespace motion {
 
-    // Aligned with libkrkr2.so EmoteBlinkController_ctor_slim_guess @ 0x66480C.
-    // Decompiled pseudocode (this conversation):
-    //   memset(self,0,0x50); EmoteAngleController_ctor_12Bdeque(self,0);  // +0
-    //   memset(self+80,0,0x50); sub_6827A8(self+80,0);                    // +80
-    //   memset(self+160,0,0x68); sub_6828FC(self+184,0);                  // edge/node
-    //   self+264=0; self+272=0; self+280=0; self+296=0; self+304=0;       // cursors/state
-    //   beginFrame = sub_6635DC("beginFrame");        // +328  (idx 82)
-    //   for each "edge" elem: edgeTable.push({(float)elem[0], (float)elem[1]});
-    //   for each "node" elem: nodeRows.push(vector<float>{ (float)elem[i] ... });
-    //   trackValue = (float)beginFrame;               // +300 (idx 75)
-    // NOTE: NO endFrame / blinkInterval* / blinkFrameCount / blinkEnabled reads,
-    //   and NO RNG call. The slim controller has no blink state at all.
-    void EmoteEyebrowController_ctor(EmoteEyebrowController* self,
-                                     const tTJSVariant& dict) {
-        // Embedded value-track deques default-construct empty (the binary's
-        //   memset + EmoteAngleController_ctor_12Bdeque / sub_6827A8 / sub_6828FC
-        //   leave them empty; std::deque/std::vector default ctors replicate this
-        //   under the PLATFORM_BOUNDARY ABI note).
-        EmoteAngleController_ctor(&self->valueTrack12B, 0); // 0x664858
+    namespace {
+        bool eyebrowTrackOvershoots_guess(float direction, float target,
+                                          float nextValue) {
+            // Native routes unordered direction through the positive-side
+            // block. Both target tests include unordered via condition-code
+            // complements, unlike ordinary portable <=/>= expressions.
+            if(!(direction <= 0.0f)) {
+                return !(target > nextValue);
+            }
+            if(direction >= 0.0f) {
+                return false;
+            }
+            return !(target < nextValue);
+        }
+    }
 
-        // beginFrame (the ONLY scalar field read; +328, idx 82).        /*0x664938*/
-        self->beginFrame = detail::motionPropGetInt(
-            dict, TJS_W("beginFrame"));                            // 0x664938
+    // All four references construct the same source-level member sequence:
+    // two ABI-specific deque implementations, the embedded edge/node/output
+    // resolver, scalar track state, and beginFrame. Android's libstdc++ deques
+    // eagerly allocate their map/block while iOS libc++ leaves its deques lazy;
+    // that library difference does not add a portable source member.
+    //
+    // The metadata data flow is also uniform: read only beginFrame, convert the
+    // two-int entries in "edge" to float pairs, convert each row in "node" to a
+    // vector<float>, then seed trackValue from beginFrame. There are no Blink
+    // fields, inheritance/vptr setup, or RNG calls in this constructor.
+    EmoteEyebrowController::EmoteEyebrowController(
+        const tTJSVariant& dict)
+        : trackState(0), trackTarget(0.0f), trackDir(0.0f) {
+        // The first member is the naked 12-byte keyframe deque. It is already
+        // default-constructed empty with the owning object.
+
+        ncbPropAccessor object{tTJSVariant(dict)};
+
+        // beginFrame is the only scalar field read by the slim controller.
+        beginFrame = static_cast<int32_t>(object.GetValue(
+            TJS_W("beginFrame"), ncbTypedefs::Tag<tjs_int>(), 0,
+            &detail::emoteControllerBeginFrameHint_guess));
 
         // "edge" array -> edgeTable of {x,y} pairs (each elem a 2-int sub-array).
-        //   sub_56C694(edge) = count; loop sub_6637BC(elem,0)/(elem,1).  /*0x6649d4*/
-        const tTJSVariant edge = detail::motionPropGet(
-            dict, TJS_W("edge"));                                 // 0x664968
-        const int edgeCount = detail::motionPropGetCount(edge);   // 0x6649d4
-        self->mesh.edgeTable.reserve(static_cast<size_t>(edgeCount));
+        ncbPropAccessor edge{object.GetValue(
+            TJS_W("edge"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::emoteControllerEdgeHint_guess)};
+        const int edgeCount = static_cast<int>(edge.GetArrayCount());
+        mesh.edgeTable.reserve(static_cast<size_t>(edgeCount));
         for (int i = 0; i < edgeCount; ++i) {
-            const tTJSVariant pair = detail::motionPropGetByNum(edge, i);
-            const int x = detail::motionPropGetIntByNum(pair, 0); // 0x664a90
-            const int y = detail::motionPropGetIntByNum(pair, 1); // 0x664aa4
-            self->mesh.edgeTable.emplace_back(static_cast<float>(x),
-                                              static_cast<float>(y));
+            ncbPropAccessor pair{edge.GetValue(
+                i, ncbTypedefs::Tag<tTJSVariant>())};
+            const int x = static_cast<int>(pair.GetValue(
+                0, ncbTypedefs::Tag<tjs_int>()));
+            const int y = static_cast<int>(pair.GetValue(
+                1, ncbTypedefs::Tag<tjs_int>()));
+            mesh.edgeTable.emplace_back(static_cast<float>(x),
+                                        static_cast<float>(y));
         }
 
         // "node" array -> nodeRows: each elem is a sub-array; push a row of its
-        //   int->float values (the binary builds a vector<float> per node into
-        //   the 504-block deque @+184).                                  /*0x664c5c*/
-        const tTJSVariant node = detail::motionPropGet(
-            dict, TJS_W("node"));                                 // 0x664bf0
-        const int nodeCount = detail::motionPropGetCount(node);   // 0x664c5c
+        //   int->float values.
+        ncbPropAccessor node{object.GetValue(
+            TJS_W("node"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::emoteControllerNodeHint_guess)};
+        const int nodeCount = static_cast<int>(node.GetArrayCount());
         for (int i = 0; i < nodeCount; ++i) {
-            const tTJSVariant sourceRow =
-                detail::motionPropGetByNum(node, i);               // 0x664c9c
+            ncbPropAccessor sourceRow{node.GetValue(
+                i, ncbTypedefs::Tag<tTJSVariant>())};
             std::vector<float> row;
-            const int rowCount = detail::motionPropGetCount(sourceRow);
+            const int rowCount = static_cast<int>(
+                sourceRow.GetArrayCount());
             row.reserve(static_cast<size_t>(rowCount));
             for (int j = 0; j < rowCount; ++j) {
                 row.push_back(static_cast<float>(
-                    detail::motionPropGetIntByNum(sourceRow, j)));  // 0x664e48
+                    sourceRow.GetValue(
+                        j, ncbTypedefs::Tag<tjs_int>())));
             }
-            self->mesh.nodeRows.push_back(std::move(row));
+            mesh.nodeRows.push_back(std::move(row));
         }
 
-        // trackValue = (float)beginFrame.   *((float*)v3+75) = (float)*((int*)v3+82)
-        self->trackValue = static_cast<float>(self->beginFrame); // +300 /*0x664f68*/
+        // The initial output is the metadata's begin frame.
+        trackValue = static_cast<float>(beginFrame);
     }
 
-    // Aligned with libkrkr2.so sub_665600 EmoteVarController5_step @ 0x665600.
-    // Decompiled pseudocode (this conversation):
-    //   v5 = trackState(+296);
-    //   if (v5) {
-    //     if (v5 == 2) {                                  // animating
-    //       v14 = pow(accum(+312)/span(+316), 1/pow(+320)) + invDur(+324)*dt;
-    //       v15 = pow(v14, pow);  v18 = v15*span - accum;
-    //       trackValue(+300) += dir(+308) * v18;
-    //       if (overshoot) { v18 = (target-trackValue)*dir;
-    //                        trackValue = target; trackState = 1; }
-    //       accum(+312) = span(+316)... wait: *(a1+312) = span(+316) + v18;
-    //     } else if (v5 == 1) {                           // pop-pending (single)
-    //       if (8B-track @+96 empty) trackState = 0;
-    //       else { v9=track[0]; v8=track[1];
-    //              if (v9==v8) trackValue=v8;
-    //              else { target=v8; trackValue=v9;
-    //                     dir = (v8-v9<0)?-1:1; trackState=2; }
-    //              pop_front 8B-track; }
-    //     }
-    //   } else {                                          // state 0: setup
-    //     if (12B-track @+16 non-empty) {
-    //       endVal = *(elem); dur = elem[1]; pow = elem[2];
-    //       sub_661F7C(self+160,self+80,trackValue,endVal);   // mesh resolver (SCOPE BOUNDARY)
-    //       accum(+312)=0; span(+316)=resolvedSpan(+288); invDur(+324)=1/dur;
-    //       pow(+320)=powCount; pop_front 12B-track; ++trackState;
-    //     }
-    //   }
-    //   *out = trackValue(+300);   // NO blink machine, NO remap
+    void EmoteEyebrowController_enqueueValue_guess(
+        EmoteEyebrowController* self, float value, float duration, float power,
+        bool append) {
+        // Native branches to this path unless duration is ordered-positive;
+        // unordered NaN therefore commits immediately too.
+        if(!(duration > 0.0f)) {
+            self->valueTrack12B.clear();
+            self->valueTrack8B.clear();
+            self->trackValue = value;
+            self->trackState = 0;
+            return;
+        }
+
+        if(!append) {
+            self->valueTrack12B.clear();
+            self->valueTrack8B.clear();
+            self->trackState = 0;
+        }
+
+        EmoteAngleKeyValue12B keyframe;
+        keyframe.endRad = value;
+        keyframe.duration = duration;
+        std::memcpy(&keyframe.powCount, &power, sizeof(float));
+        self->valueTrack12B.push_back(keyframe);
+    }
+
     void EmoteEyebrowController_step(EmoteEyebrowController* self, float* out,
                                      float dt) {
-        const float a3 = dt;
-        const int v5 = self->trackState; // *(a1+296)  /*0x665618*/
+        const int state = self->trackState;
 
-        if (v5) {                                          // /*0x665624*/
-            if (v5 == 2) {                                 // /*0x66562c*/ animating
-                // v14 = pow(accum(+312)/span(+316), 1/pow(+320)) + invDur(+324)*dt
-                //   (the binary's 1.0/*(a1+320) is 1/pow, *(a1+324)*a3 is invDur*dt).
-                //                                                      /*0x6656fc*/
-                const float v14 =
+        if (state != 0) {
+            if (state == 2) {
+                const float easedPhase =
                     std::pow(self->trackAccum / self->trackSpan,
                              1.0f / self->trackPow) +
-                    (self->trackInvDur * a3);
-                const double v15 = std::pow(v14,
-                    self->trackPow); // double /*0x665708*/
-                const float v16 = self->trackAccum;      // *(a1+312)  /*0x665710*/
-                const float v17 = self->trackDir;        // *(a1+308)  /*0x665714*/
-                // v18 = v15*span(+316) - accum(+312).               /*0x66572c*/
-                float v18 = static_cast<float>(
-                    (v15 * self->trackSpan) - v16);
-                const float v19 = self->trackValue + (v17 * v18); // /*0x665734*/
-                self->trackValue = v19;                  // *(a1+300)=v19 /*0x66573c*/
+                    self->trackInvDur * dt;
+                const double powered =
+                    std::pow(easedPhase, self->trackPow);
+                const float previousAccum = self->trackAccum;
+                const float direction = self->trackDir;
+                float delta = static_cast<float>(
+                    powered * self->trackSpan - previousAccum);
+                const float nextValue =
+                    self->trackValue + direction * delta;
+                self->trackValue = nextValue;
 
-                bool overshoot = false;
-                float v20 = 0.0f;
-                if (v17 > 0.0f) {                          // /*0x665760*/
-                    v20 = self->trackTarget;               // *(a1+304)
-                    overshoot = (v20 <= v19);
-                } else if (v17 < 0.0f) {
-                    v20 = self->trackTarget;               // *(a1+304)
-                    overshoot = (v20 >= v19);
+                const float target = self->trackTarget;
+                const bool overshoot = eyebrowTrackOvershoots_guess(
+                    direction, target, nextValue);
+                if (overshoot) {
+                    // Eyebrow commits only the correction term here; it does
+                    // not re-enter state 1 until the next step call.
+                    delta = (target - nextValue) * direction;
+                    self->trackValue = target;
+                    self->trackState = 1;
                 }
-                if (overshoot) {                           // /*0x665760*/
-                    v18 = (v20 - v19) * v17;               // /*0x66576c*/
-                    self->trackValue = v20;                // *(a1+300)=v20 /*0x665770*/
-                    self->trackState = 1;                  // *(a1+296)=1 /*0x665774*/
-                }
-                // *(a1+312) = accum(+312) + v18 (v16 + v18; write back into the
-                //   accum field +312).                                /*0x66577c*/
-                self->trackAccum = v16 + v18;
-            } else if (v5 == 1) {                          // /*0x665634*/ pop-pending
-                // v7 = *(a1+96) (8B-track cursor).                    /*0x66563c*/
-                if (self->valueTrack8B.empty()) {          // *(a1+128)==*(a1+96) /*0x665644*/
-                    self->trackState = 0;                  // *(a1+296)=0 /*0x665784*/
+                self->trackAccum = previousAccum + delta;
+            } else if (state == 1) {
+                if (self->valueTrack8B.empty()) {
+                    self->trackState = 0;
                 } else {
-                    const std::pair<float, float> elem =
-                        self->valueTrack8B.front();         // v9=*v7; v8=v7[1] /*0x665648*/
-                    const float v9 = elem.first;            // first
-                    const float v8 = elem.second;           // second
-                    if (v9 == v8) {                         // *v7 == v8 /*0x665650*/
-                        self->trackValue = v8;              // *(a1+300)=v8 /*0x665654*/
+                    const std::pair<float, float> segment =
+                        self->valueTrack8B.front();
+                    const float startValue = segment.first;
+                    const float endValue = segment.second;
+                    if (startValue == endValue) {
+                        self->trackValue = endValue;
                     } else {
-                        self->trackTarget = v8;             // *(a1+304)=v8 /*0x66578c*/
-                        self->trackValue  = v9;             // *(a1+300)=v9 /*0x665794*/
+                        self->trackTarget = endValue;
+                        self->trackValue = startValue;
                         self->trackDir =
-                            ((v8 - v9) < 0.0f) ? -1.0f : 1.0f; // *(a1+308) /*0x6657a8*/
-                        self->trackState = 2;               // *(a1+296)=2 /*0x6657b0*/
+                            ((endValue - startValue) < 0.0f) ? -1.0f : 1.0f;
+                        self->trackState = 2;
                     }
-                    self->valueTrack8B.pop_front();         // advance +96 / free block /*0x6657c0*/
+                    self->valueTrack8B.pop_front();
                 }
             }
-        } else {                                            // /*0x665660*/ state 0: setup
-            if (!self->valueTrack12B.queue.empty()) {       // *(a1+48)!=*(a1+16) /*0x665668*/
-                const EmoteAngleKeyValue12B kf =
-                    self->valueTrack12B.queue.front();      // {endRad,dur,pow} /*0x665670*/
+        } else {
+            if (!self->valueTrack12B.empty()) {
+                const EmoteAngleKeyValue12B keyframe =
+                    self->valueTrack12B.front();
 
-                // Mesh resolver (sub_661F7C @0x661F7C -> sub_660028) — identical
-                //   to the eye slice. The binary calls sub_661F7C(self+160,
-                //   self+80, trackValue, kf.endRad) to rebuild the 8B value track
-                //   (valueTrack8B) from the resolved eyebrow mesh rows
-                //   (mesh.edgeTable + mesh.nodeRows) and writes the resolved span
-                //   to mesh.trackResolvedSpan(+288). Faithful port.   /*0x66567c*/
-                EmoteMeshResolver_resolve(&self->mesh, &self->valueTrack8B,
-                                          self->trackValue, kf.endRad);
+                // Unlike Eye/Blink, the primary command remains in its deque if
+                // resolver allocation/search throws; pop_front happens after
+                // all nonthrowing active-curve stores.
+                EmoteMeshResolver_resolve_guess(
+                    &self->mesh, self->trackValue, keyframe.endRad,
+                    &self->valueTrack8B);
 
-                // accum(+312)=0; span(+316)=resolvedSpan(+288);
-                //   invDur(+324)=1/dur; pow(+320)=powCount.       /*0x665680..*/
-                self->trackAccum  = 0.0f;                    // *(a1+312)=0  /*0x665684*/
-                self->trackSpan   = self->mesh.trackResolvedSpan; // *(a1+316)=*(a1+288) /*0x665690*/
-                self->trackInvDur = 1.0f / kf.duration;      // *(a1+324)=1/*(v10+4) /*0x6656a4*/
-                // trackPow(+320) = keyframe[+8] RAW BITS (read *(float*), no SCVTF),
-                //   same raw-float-bit semantics as eye/mouth — not int->float.
-                std::memcpy(&self->trackPow, &kf.powCount, sizeof(float)); // *(a1+320)=*(v10+8) /*0x6656b0*/
+                self->trackAccum = 0.0f;
+                self->trackSpan = self->mesh.trackResolvedSpan;
+                self->trackInvDur = 1.0f / keyframe.duration;
+                std::memcpy(
+                    &self->trackPow, &keyframe.powCount, sizeof(float));
 
-                self->valueTrack12B.queue.pop_front();       // advance +16 / free block /*0x6656b4*/
-                self->trackState = self->trackState + 1;     // ++*(a1+296) /*0x6657fc*/
+                self->valueTrack12B.pop_front();
+                self->trackState = self->trackState + 1;
             }
         }
 
-        // *out = trackValue. No blink machine, no remap (unlike the eye step).
-        *out = self->trackValue;                            // *(a1+300) /*0x66582c*/
+        // No blink machine or frame-window remap exists for eyebrow output.
+        *out = self->trackValue;
     }
 
-    // sub_6654C4 @0x6654C4.
-    void EmoteEyebrowController_resetLike_0x6654C4(
-        EmoteEyebrowController* self) {
-        if(!self->valueTrack12B.queue.empty()) {
+    void EmoteEyebrowController_reset_guess(EmoteEyebrowController* self) {
+        if(!self->valueTrack12B.empty()) {
             self->trackState = 0;
-            self->trackValue = self->valueTrack12B.queue.back().endRad;
-            self->valueTrack12B.queue.clear();
+            self->trackValue = self->valueTrack12B.back().endRad;
+            self->valueTrack12B.clear();
             self->valueTrack8B.clear();
             return;
         }

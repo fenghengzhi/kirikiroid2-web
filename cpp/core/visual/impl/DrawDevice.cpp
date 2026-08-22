@@ -67,8 +67,17 @@ tTVPDrawDevice::~tTVPDrawDevice() {
     // そのため、ここではいったん配列をコピーしてからそれぞれの
     // Release() を呼ぶ。
     std::vector<iTVPLayerManager *> backup = Managers;
+    // The four motionplayer references iterate this fixed raw-pointer
+    // snapshot while Release callbacks may mutate the live Managers vector.
+    // Newly appended managers are not visited; removing/releasing another
+    // snapshotted manager can instead leave a later backup entry dangling.
+    // Copying the pointers does not acquire another manager reference.
     for(auto &i : backup)
         i->Release();
+    // Normal C++ destruction frees backup storage first and the then-current
+    // live Managers storage second. Native A64/iOS-armv7 also emit that
+    // two-storage cleanup before terminate on Release escape; native
+    // A32/iOS-arm64 have no local destructor cleanup landing.
 }
 //---------------------------------------------------------------------------
 
@@ -77,8 +86,11 @@ bool tTVPDrawDevice::TransformToPrimaryLayerManager(tjs_int &x, tjs_int &y) {
     iTVPLayerManager *manager = GetLayerManagerAt(PrimaryLayerManagerIndex);
     if(!manager)
         return false;
+    // The four motionplayer reference builds use this integer overload only
+    // as a selected-manager availability check.  Coordinates are unchanged.
     return true;
 
+    // Unreachable legacy scaling path retained from the upstream source.
     // プライマリレイヤマネージャのプライマリレイヤのサイズを得る
     tjs_int pl_w = LockedWidth, pl_h = LockedHeight;
     if(pl_w <= 0 && pl_h <= 0 && !manager->GetPrimaryLayerSize(pl_w, pl_h))
@@ -101,16 +113,18 @@ bool tTVPDrawDevice::TransformFromPrimaryLayerManager(tjs_int &x, tjs_int &y) {
     iTVPLayerManager *manager = GetLayerManagerAt(PrimaryLayerManagerIndex);
     if(!manager)
         return false;
+    // As above, the reference integer path is an identity transform.
     return true;
 
+    // Unreachable legacy scaling path retained from the upstream source.
     // プライマリレイヤマネージャのプライマリレイヤのサイズを得る
     tjs_int pl_w = LockedWidth, pl_h = LockedHeight;
     if(pl_w <= 0 && pl_h <= 0 && !manager->GetPrimaryLayerSize(pl_w, pl_h))
         return false;
     // pl_w = WinWidth; pl_h = WinHeight;
 
-    // x , y は DestRect の 0, 0
-    // を原点とした座標として渡されてきている
+    // The reference real-valued path scales by the destination dimensions;
+    // it deliberately does not subtract DestRect.left/top.
     x = pl_w ? (x * DestRect.get_width() / pl_w) : 0;
     y = pl_h ? (y * DestRect.get_height() / pl_h) : 0;
     x += DestRect.left;
@@ -164,6 +178,11 @@ void tTVPDrawDevice::RemoveLayerManager(iTVPLayerManager *manager) {
         std::find(Managers.begin(), Managers.end(), manager);
     if(i == Managers.end())
         TVPThrowInternalError;
+    // All four motionplayer references keep the matching element and vector
+    // end published during Release, then pass this same saved iterator to
+    // erase.  A re-entrant append without reallocation is included in the
+    // later tail shift; reallocation or erase can instead leave i dangling.
+    // There is no iterator revalidation or exception rollback here.
     (*i)->Release();
     Managers.erase(i);
 }

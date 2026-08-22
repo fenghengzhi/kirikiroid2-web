@@ -28,7 +28,6 @@
 #include "SysInitIntf.h"
 #include "XP3Archive.h"
 #include "TickCount.h"
-#include "ncbind.hpp"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 64
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
@@ -1170,20 +1169,6 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     }
 #endif
 
-    // Check for internal plugins (registered via NCB but no actual file on disk).
-    // CanLoadPlugin() uses getPlacedPath() which previously didn't check internal
-    // plugins, causing motion.tjs to fail loading AffineSourceMotion.tjs.
-    {
-        ttstr storage = TVPExtractStorageName(name).AsLowerCase();
-        if(!storage.IsEmpty() &&
-           (TVPRegisteredPlugins.find(storage) != TVPRegisteredPlugins.end() ||
-            ncbAutoRegister::HasModule(storage))) {
-            TVPStorageTrace("storage.getPlaced.internalPlugin", name,
-                            TVPNormalizeStorageName(name), true, true);
-            return TVPNormalizeStorageName(name);
-        }
-    }
-
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
         TVPStorageTrace("storage.getPlaced.cache", name, *incache, true, true);
@@ -1238,25 +1223,10 @@ ttstr TVPSearchPlacedPath(const ttstr &name) {
 //---------------------------------------------------------------------------
 // TVPIsExistentStorage
 //---------------------------------------------------------------------------
-static bool TVPIsInternalPlugin(const ttstr &name) {
-    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
-    if(storage.IsEmpty()) return false;
-    if(TVPRegisteredPlugins.find(storage) != TVPRegisteredPlugins.end())
-        return true;
-    if(ncbAutoRegister::HasModule(storage))
-        return true;
-    // Log failed internal plugin checks for .dll files
-    auto s = storage.AsStdString();
-    if(s.find(".dll") != std::string::npos) {
-        TVPAddLog(ttstr(TJS_W("(info) TVPIsInternalPlugin: NOT found '")) +
-            storage + TJS_W("'"));
-    }
-    return false;
-}
-
 bool TVPIsExistentStorage(const ttstr &name) {
-    // Storages.isExistentStorage native @0x8EE294 returns whether
-    // TVPGetPlacedPath(name) resolves; it does not synthesize motion_*.tjs.
+    // The four references expose only real storage resolution here.  NCB's
+    // indexed-module map and registered-module set are separate namespaces;
+    // neither makes a non-existent .dll path resolve through Storages.
     ttstr placed = TVPGetPlacedPath(name);
     if(!placed.IsEmpty()) {
         TVPStorageTrace("storage.exists.placed", name, placed, true, true);

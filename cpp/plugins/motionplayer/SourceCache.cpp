@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "BitmapIntf.h"
+#include "D3DAdaptor.h"
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
 #include "MotionDispatch.h"
@@ -16,7 +17,6 @@
 #include "RenderManager.h"
 #include "ResourceManager.h"
 #include "ScriptMgnIntf.h"
-#include "StorageIntf.h"
 #include "ncbind.hpp"
 #include "tjsUtils.h"
 
@@ -24,7 +24,7 @@ namespace {
 
     static_assert(sizeof(tjs_uint) == 4 && sizeof(tjs_int) == 4);
 
-    struct TintRectLike_0x6A7518 {
+    struct TintRect_guess {
         tjs_int x;
         tjs_int y;
         tjs_int width;
@@ -63,16 +63,16 @@ namespace {
         return dividend / divisor;
     }
 
-    tjs_int lerpChannelLike_0x6A7518(tjs_int from,
-                                     tjs_int to,
-                                     tjs_int position,
-                                     tjs_int span) noexcept {
+    tjs_int lerpTintChannel_guess(tjs_int from,
+                                  tjs_int to,
+                                  tjs_int position,
+                                  tjs_int span) noexcept {
         const tjs_int scaled = multiplyW32(
             position, subtractW32(to, from));
         return addW32(from, divideSignedW32LikeArm(scaled, span));
     }
 
-    std::uint8_t multiplyTintChannelLike_0x6A7518(
+    std::uint8_t multiplyTintChannel_guess(
         tjs_int tint,
         std::uint8_t pixel,
         tjs_uint divisor) noexcept {
@@ -81,8 +81,6 @@ namespace {
         const tjs_uint value = product / divisor;
         return static_cast<std::uint8_t>(value >= 255u ? 255u : value);
     }
-
-    tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
 
     bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
                                 std::uint32_t c2, std::uint32_t c3) {
@@ -119,33 +117,21 @@ namespace {
         };
     }
 
-    tjs_int propGetIntOnceLike_0x6635DC(iTJSDispatch2 *object,
-                                        const tjs_char *member,
-                                        tjs_uint32 flags,
-                                        tjs_uint32 *hint) {
-        tTJSVariant value;
-        (void)object->PropGet(flags, member, hint, &value, object);
-        return static_cast<tjs_int>(value.AsInteger());
-    }
-
-    tjs_int propGetIntAfterProbeLike_0x6C1B70(
-        iTJSDispatch2 *object,
+    tjs_int getRenderSourceDimension_guess(
+        ncbPropAccessor &object,
         const tjs_char *member,
         tjs_uint32 *hint) {
-        {
-            tTJSVariant probe;
-            if(TJS_FAILED(object->PropGet(
-                   TJS_MEMBERMUSTEXIST, member, hint, &probe, object))) {
-                return 0;
-            }
+        if(!object.HasValue(member, hint)) {
+            return 0;
         }
-        return propGetIntOnceLike_0x6635DC(object, member, 0, hint);
+        return object.GetValue(
+            member, ncbTypedefs::Tag<tjs_int>(), 0, hint);
     }
 
-    void applyPackedCornerTintLike_0x6A7518(
+    void applyPackedCornerTint_guess(
         const tTJSVariant &layer,
         const tjs_int (&colors)[4],
-        const TintRectLike_0x6A7518 &rect,
+        const TintRect_guess &rect,
         bool halfAlphaBlend) {
         const auto c0 = static_cast<std::uint32_t>(colors[0]);
         const auto c1 = static_cast<std::uint32_t>(colors[1]);
@@ -156,15 +142,17 @@ namespace {
             return;
         }
 
-        if(!TVPGetRenderManager()->IsSoftware()) {
+        if(!TVPIsSoftwareRenderManager()) {
             // GPU branch performs this native-instance query and discards its
             // result; it does not run the software pixel loop.
-            (void)motion::resolvePrivateMotionGLLNativeLike_0x6DE24C(
-                layer.AsObjectNoAddRef());
+            (void)motion::queryPrivateMotionGLLNativeFromVariant_guess(layer);
             return;
         }
 
-        auto *nativeLayer = resolveNativeLayer(layer.AsObjectNoAddRef());
+        // The software path uses the engine's strict Variant-to-Layer helper;
+        // a failed native-instance query throws TVPSpecifyLayer before clip
+        // and pixel-buffer access.
+        auto *nativeLayer = tTJSNI_Layer::FromVariant(layer);
         const tTVPRect clip = nativeLayer->GetClip();
         auto *pixelBuffer = static_cast<std::uint8_t *>(
             nativeLayer->GetMainImagePixelBufferForWrite());
@@ -196,46 +184,46 @@ namespace {
 
         tjs_int y = top;
         for(;;) {
-            // 0x6A76FC skips only the per-pixel body when left >= right; the
-            // outer row loop still advances until bottom.
+            // An empty horizontal intersection skips only the per-pixel body;
+            // the outer row loop still advances until bottom.
             if(left < right) {
                 const tjs_int rowPosition = subtractW32(y, rect.y);
-                const tjs_int rowLeftR = lerpChannelLike_0x6A7518(
+                const tjs_int rowLeftR = lerpTintChannel_guess(
                     topLeft[0], bottomLeft[0], rowPosition, spanY);
-                const tjs_int rowLeftG = lerpChannelLike_0x6A7518(
+                const tjs_int rowLeftG = lerpTintChannel_guess(
                     topLeft[1], bottomLeft[1], rowPosition, spanY);
-                const tjs_int rowLeftB = lerpChannelLike_0x6A7518(
+                const tjs_int rowLeftB = lerpTintChannel_guess(
                     topLeft[2], bottomLeft[2], rowPosition, spanY);
-                const tjs_int rowLeftA = lerpChannelLike_0x6A7518(
+                const tjs_int rowLeftA = lerpTintChannel_guess(
                     topLeft[3], bottomLeft[3], rowPosition, spanY);
-                const tjs_int rowRightR = lerpChannelLike_0x6A7518(
+                const tjs_int rowRightR = lerpTintChannel_guess(
                     topRight[0], bottomRight[0], rowPosition, spanY);
-                const tjs_int rowRightG = lerpChannelLike_0x6A7518(
+                const tjs_int rowRightG = lerpTintChannel_guess(
                     topRight[1], bottomRight[1], rowPosition, spanY);
-                const tjs_int rowRightB = lerpChannelLike_0x6A7518(
+                const tjs_int rowRightB = lerpTintChannel_guess(
                     topRight[2], bottomRight[2], rowPosition, spanY);
-                const tjs_int rowRightA = lerpChannelLike_0x6A7518(
+                const tjs_int rowRightA = lerpTintChannel_guess(
                     topRight[3], bottomRight[3], rowPosition, spanY);
 
                 auto *dst = row;
                 tjs_int x = left;
                 do {
                     const tjs_int columnPosition = subtractW32(x, rect.x);
-                    const tjs_int tintR = lerpChannelLike_0x6A7518(
+                    const tjs_int tintR = lerpTintChannel_guess(
                         rowLeftR, rowRightR, columnPosition, spanX);
-                    const tjs_int tintG = lerpChannelLike_0x6A7518(
+                    const tjs_int tintG = lerpTintChannel_guess(
                         rowLeftG, rowRightG, columnPosition, spanX);
-                    const tjs_int tintB = lerpChannelLike_0x6A7518(
+                    const tjs_int tintB = lerpTintChannel_guess(
                         rowLeftB, rowRightB, columnPosition, spanX);
-                    const tjs_int tintA = lerpChannelLike_0x6A7518(
+                    const tjs_int tintA = lerpTintChannel_guess(
                         rowLeftA, rowRightA, columnPosition, spanX);
-                    dst[1] = multiplyTintChannelLike_0x6A7518(
+                    dst[1] = multiplyTintChannel_guess(
                         tintR, dst[1], colorDivisor);
-                    dst[0] = multiplyTintChannelLike_0x6A7518(
+                    dst[0] = multiplyTintChannel_guess(
                         tintG, dst[0], colorDivisor);
-                    dst[-1] = multiplyTintChannelLike_0x6A7518(
+                    dst[-1] = multiplyTintChannel_guess(
                         tintB, dst[-1], colorDivisor);
-                    dst[2] = multiplyTintChannelLike_0x6A7518(
+                    dst[2] = multiplyTintChannel_guess(
                         tintA, dst[2], 255u);
                     x = addW32(x, 1);
                     dst += 4;
@@ -253,13 +241,8 @@ namespace {
     void decodeObjSourceRL8_guess(
         std::uint8_t *destination, const std::uint8_t *source,
         std::uint32_t sourceSize) {
-        // Four-reference mapping:
-        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6D7834 (inline),
-        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_599A34 (inline),
-        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F5510 called by sub_10012686C,
-        // Kirikiroid2_1.3.9_iOS_armv7!sub_F1F6A called by sub_125D4C. All form
-        // sourceEnd from the signed low 32-bit size before the signed <1 gate.
-        // The exact source identifier is stripped.
+        // All four references form sourceEnd from the signed low 32-bit size
+        // before the signed <1 gate. The exact source identifier is stripped.
         const tjs_int signedSourceSize = signedW32(sourceSize);
         const std::uint8_t *const sourceEnd = source + signedSourceSize;
         if(signedSourceSize < 1) {
@@ -283,12 +266,7 @@ namespace {
     void decodeObjSourceRL32_guess(
         std::uint8_t *destination, const std::uint8_t *source,
         std::uint32_t sourceSize) {
-        // Four-reference mapping:
-        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6D7834 (inline),
-        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_571DA4 called by
-        // sub_599A34, Kirikiroid2_1.3.9_iOS_arm64!sub_1000F5474 called by
-        // sub_10012686C, Kirikiroid2_1.3.9_iOS_armv7!sub_F1F10 called by
-        // sub_125D4C. The no-palette branch uses the same signed size gate.
+        // The four no-palette branches use the same signed low-word size gate.
         const tjs_int signedSourceSize = signedW32(sourceSize);
         const std::uint8_t *const sourceEnd = source + signedSourceSize;
         if(signedSourceSize < 1) {
@@ -314,43 +292,12 @@ namespace {
         } while(source < sourceEnd);
     }
 
-    tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject) {
-        if(!layerObject) {
-            return nullptr;
-        }
-        tTJSNI_BaseLayer *layer = nullptr;
-        if(TJS_FAILED(layerObject->NativeInstanceSupport(
-               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
-            return nullptr;
-        }
-        return layer;
-    }
-
-    tTJSVariant createLayerVariant_guess(
-        const tTJSVariant &owner, const tTJSVariant &parent) {
-        iTJSDispatch2 *global = TVPGetScriptDispatch();
-        iTJSDispatch2 *created = nullptr;
-        tTJSVariant *args[] = {
-            const_cast<tTJSVariant *>(&owner),
-            const_cast<tTJSVariant *>(&parent)
-        };
-        (void)global->CreateNew(
-            0, TJS_W("Layer"), &motion::detail::layerClassMemberHint_guess,
-            &created, 2, args, global);
-        tTJSVariant result(created, created);
-        created->Release();
-        global->Release();
-        return result;
-    }
-
     iTVPTexture2D *textureFromLayerVariant(const tTJSVariant &value) {
-        if(value.Type() != tvtObject || !value.AsObjectNoAddRef()) {
-            return nullptr;
-        }
-        auto *layer = resolveNativeLayer(value.AsObjectNoAddRef());
-        auto *image = layer ? layer->GetMainImage() : nullptr;
-        return image ? image->GetTexture() : nullptr;
+        // The render-source path uses the engine's strict Layer conversion,
+        // then unconditionally follows Layer -> MainImage -> Texture.  Native
+        // query failure throws TVPSpecifyLayer before either image call.
+        auto *layer = tTJSNI_Layer::FromVariant(value);
+        return layer->GetMainImage()->GetTexture();
     }
 
 } // namespace
@@ -358,6 +305,8 @@ namespace {
 namespace motion {
 
     ObjSource::~ObjSource() {
+        // ObjSource's explicit body runs before PSBRawNode's implicit member
+        // destructor, so the retained texture is released before the PSB owner.
         if(_texture) {
             _texture->Release();
         }
@@ -389,12 +338,9 @@ namespace motion {
     }
 
     void ObjSource::ensureTexture_guess() {
-        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_6D7834,
-        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_599A34,
-        // Kirikiroid2_1.3.9_iOS_arm64!sub_10012686C, and
-        // Kirikiroid2_1.3.9_iOS_armv7!sub_125D4C all return once the lazy
-        // texture is non-null. Every following read is a strict raw-node read;
-        // the original source identifier is stripped.
+        // All four references return once the lazy texture is non-null. Every
+        // following read is a strict raw-node read; the original source
+        // identifier is stripped.
         if(_texture) {
             return;
         }
@@ -415,6 +361,9 @@ namespace motion {
         // resource lookup.
         std::uint32_t resourceSize;
         const std::uint8_t *pixelData = nullptr;
+        // These aligned buffers are deliberately raw. None of the four
+        // references installs an unwind owner for decoded/BGRA storage, so an
+        // exception after allocation preserves the native leak boundary.
         std::uint8_t *decoded = nullptr;
         const std::uint8_t *sourcePixels = nullptr;
         if(compressed) {
@@ -482,6 +431,11 @@ namespace motion {
                 static_cast<tjs_int>(pixelCount));
         }
 
+        // The two references that emit local exception cleanups delete only a
+        // still-pending new-expression allocation if this constructor
+        // unwinds. Once construction returns, no reference has a guard for the
+        // bitmap; the other two optimized bodies have no local landing pad at
+        // all. This raw pointer is therefore load-bearing source structure.
         auto *bitmap = new tTVPBitmap(width, static_cast<tjs_uint>(height), 32);
         const tjs_int pitch = bitmap->GetPitch();
         auto *destination = static_cast<std::uint8_t *>(bitmap->GetScanLine(0));
@@ -498,18 +452,21 @@ namespace motion {
                 source += rowBytes;
             }
         }
+        // The returned retained reference is published directly. If render
+        // manager lookup or CreateTexture2D throws, the store has not happened:
+        // the member remains null while the constructed bitmap and BGRA buffer
+        // have no exception cleanup. Once the call returns, publication
+        // precedes bitmap Release and aligned deallocation; a later failure
+        // therefore leaves the retained member committed. There is no
+        // temporary texture owner or later swap/commit step.
         _texture = TVPGetRenderManager()->CreateTexture2D(bitmap);
         bitmap->Release();
         TJSAlignedDealloc(bgra);
     }
 
     void ObjSource::drawLayer(tTJSVariant target) {
-        // The current drawLayer wrappers are
-        // Kirikiroid2_1.3.9_Android_arm64-v8a.so!sub_69AAB8,
-        // Kirikiroid2_1.3.9_Android_armabi-v7a.so!sub_5754E4,
-        // Kirikiroid2_1.3.9_iOS_arm64!sub_1000F930C, and
-        // Kirikiroid2_1.3.9_iOS_armv7!sub_F63C0. Each gates only on raw source
-        // category 7, then materialises, assigns and sizes the texture.
+        // Each current drawLayer wrapper gates only on raw source category 7,
+        // then materialises, assigns and sizes the texture.
         if(_source.GetTypeCategory() != 7) {
             return;
         }
@@ -525,8 +482,6 @@ namespace motion {
         layer->SetSize(_texture->GetWidth(), _texture->GetHeight());
     }
 
-    SourceCache::SourceCache() = default;
-
     SourceCache::SourceCache(tTJSVariant owner, tjs_int cacheSize) :
         _owner(owner),
         _cacheLimitBytes(static_cast<std::uint32_t>(cacheSize)) {
@@ -538,19 +493,23 @@ namespace motion {
             TJS_W("primaryLayer"), ncbTypedefs::Tag<tTJSVariant>(), 0,
             &detail::primaryLayerMemberHint_guess);
         tTJSVariant createdLayer =
-            createLayerVariant_guess(_owner, _primaryLayer);
+            detail::createLayerVariant_guess(_owner, _primaryLayer);
+        // Keep a closure owner distinct from both constructor inputs.  The
+        // public getter returns ordinary CopyRef aliases of this same Layer.
         _bufLayer = createdLayer;
     }
 
-    SourceCache::~SourceCache() {
-        clearCache();
-    }
+    // Native destruction does not reuse the public clearCache callback: the
+    // list destructor releases cached entry Variants directly, then the three
+    // persistent Variants unwind in reverse member order.  In particular,
+    // cached Layers receive no script-visible Invalidate call at this boundary.
+    SourceCache::~SourceCache() = default;
 
     tTJSVariant SourceCache::loadSource(iTJSDispatch2 *source,
                                         iTJSDispatch2 *descriptor) {
-        // Current callbacks 6A4F88/57ACC8/1001009AC/FDB50 receive two borrowed
-        // dispatches. ncbPropAccessor supplies temporary AddRef/Release while
-        // the cache entry itself never retains `source`.
+        // All four current callbacks receive two borrowed dispatches.
+        // ncbPropAccessor supplies temporary AddRef/Release while the cache
+        // entry itself never retains `source`.
         ncbPropAccessor descriptorAccessor(descriptor);
         // Construct one complete candidate before reading the descriptor.
         // key/layer/src and byteWeight initialize; blendMode/colors do not.
@@ -573,7 +532,9 @@ namespace motion {
                     colorAccessor.getIntValue(index, 0);
             }
         } else {
-            // Only slot zero is written on this branch.
+            // Only slot zero is written on this branch.  The later cache
+            // comparison, node copy and tint path still consume slots 1..3,
+            // preserving the original source-level indeterminate-value bug.
             entry.colors[0] = (entry.blendMode & 0xF0) != 0
                 ? static_cast<tjs_int>(0xFF808080u)
                 : static_cast<tjs_int>(0xFFFFFFFFu);
@@ -581,13 +542,18 @@ namespace motion {
 
         tTJSVariant result;
         for(auto it = _entries.begin(); it != _entries.end(); ++it) {
+            // The native 32-bit and iOS arm64 builds call a compact helper
+            // comparing this exact triple; Android arm64 inlines the same
+            // Variant-key, string and integer comparisons into the list walk.
             if(it->key.DiscernCompareStrictReal(entry.key) &&
                it->src == entry.src && it->blendMode == entry.blendMode) {
                 result = it->layer;
                 if(packedColorsEqual(it->colors, entry.colors)) {
+                    // An unchanged hit returns in place; it is not promoted.
                     return result;
                 }
 
+                // A color-changing hit updates only the four packed colors.
                 copyPackedColors(it->colors, entry.colors);
                 bakeSource_guess(source, *it);
                 // This is push_front(copy) followed by erase(old), not splice:
@@ -601,7 +567,7 @@ namespace motion {
         trimCacheBeforeInsert_guess();
         {
             tTJSVariant createdLayer =
-                createLayerVariant_guess(
+                detail::createLayerVariant_guess(
                     _owner, _primaryLayer);
             entry.layer = createdLayer;
             result = entry.layer;
@@ -612,43 +578,27 @@ namespace motion {
         return result;
     }
 
-    tTJSVariant SourceCache::loadSourceByName(
-        const Player *player,
-        const ttstr &name,
-        const tTJSVariant &currentSource) {
-        // Web compatibility boundary for Player.loadSource(name).  It resolves
-        // the raw object but intentionally does not create a second, by-name
-        // cache topology beside Android's descriptor-keyed std::list.
-        if(currentSource.Type() != tvtVoid) {
-            return currentSource;
-        }
-        std::string resolvedKey;
-        return loadRawSourceVariant(player, name, resolvedKey);
-    }
-
-    tTJSVariant Player::resolveRenderSourceLike_0x6C1B70_guess(
+    tTJSVariant Player::resolveRenderSource_guess(
         const tTJSVariant &sourceObject) {
         tTJSVariant result;
-        // sub_6C1B70 @0x6C1BAC compares only the two Variant Object dispatch
-        // pointers.  Typed-null Objects therefore also compare equal; do not
-        // add a non-null safety gate that the binary does not have.
+        // The resolver compares only the two Variant Object dispatch pointers.
+        // Typed-null Objects therefore also compare equal; do not add a
+        // non-null safety gate that the references do not have.
         if(sourceObject.Type() == tvtObject &&
            _internalRenderLayer.Type() == tvtObject &&
-           sourceObject.AsObjectNoAddRef() ==
+            sourceObject.AsObjectNoAddRef() ==
                _internalRenderLayer.AsObjectNoAddRef()) {
             ncbPropAccessor descriptor{tTJSVariant(_sourceDescriptor)};
-            const tjs_int blendMode = propGetIntOnceLike_0x6635DC(
-                descriptor.GetDispatch(), TJS_W("blendMode"), 0,
+            const tjs_int blendMode = descriptor.GetValue(
+                TJS_W("blendMode"), ncbTypedefs::Tag<tjs_int>(), 0,
                 &detail::blendModeMemberHint_guess);
 
             ncbPropAccessor color{tTJSVariant(_sourceColors)};
             tjs_int colors[4];
             for(tjs_int index = 0; index < 4; ++index) {
-                tTJSVariant value;
-                (void)color.GetDispatch()->PropGetByNum(
-                    0, index, &value, color.GetDispatch());
                 colors[static_cast<std::size_t>(index)] =
-                    static_cast<tjs_int>(value.AsInteger());
+                    color.GetValue(
+                        index, ncbTypedefs::Tag<tjs_int>(), 0);
             }
 
             ncbPropAccessor work{
@@ -656,15 +606,15 @@ namespace motion {
             work.FuncCall(0, TJS_W("assignImages"),
                           &detail::assignImagesMemberHint_guess, &result,
                           _internalRenderLayer);
-            const tjs_int height = propGetIntAfterProbeLike_0x6C1B70(
-                work.GetDispatch(), TJS_W("height"),
+            const tjs_int height = getRenderSourceDimension_guess(
+                work, TJS_W("height"),
                 &detail::heightMemberHint_guess);
-            const tjs_int width = propGetIntAfterProbeLike_0x6C1B70(
-                work.GetDispatch(), TJS_W("width"),
+            const tjs_int width = getRenderSourceDimension_guess(
+                work, TJS_W("width"),
                 &detail::widthMemberHint_guess);
-            applyPackedCornerTintLike_0x6A7518(
+            applyPackedCornerTint_guess(
                 _internalSourceWorkLayer_guess, colors,
-                TintRectLike_0x6A7518{0, 0, width, height},
+                TintRect_guess{0, 0, width, height},
                 (blendMode & 0xF0) == 0x10);
             return result;
         }
@@ -676,18 +626,17 @@ namespace motion {
         return result;
     }
 
-    tTJSVariant SourceCache::loadRenderSourceLayerFromItemLike_0x6C1B70(
+    tTJSVariant SourceCache::loadRenderSourceLayerFromItem_guess(
         Player &player,
         const detail::PreparedRenderItem &item) {
-        // Player_ctor @0x6CED30 owns one persistent descriptor Dictionary and
-        // one persistent color Dictionary.  Every 0x6C1B70 caller overwrites
-        // these exact objects before entering the Player resolver; only its
-        // fallback branch dispatches ResourceManager.loadSource.
+        // Player owns one persistent descriptor Dictionary and one persistent
+        // color Dictionary. Every caller overwrites these exact objects before
+        // entering the resolver; only its fallback dispatches loadSource.
         ncbPropAccessor descriptor{tTJSVariant(player._sourceDescriptor)};
         descriptor.SetValue(TJS_W("key"), item.commandKey, TJS_MEMBERENSURE,
                             &detail::commandKeyMemberHint_guess);
         descriptor.SetValue(TJS_W("src"), item.commandSrc, TJS_MEMBERENSURE,
-                            &detail::commandSrcMemberHint_guess);
+                            &detail::srcMemberHint_guess);
         descriptor.SetValue(TJS_W("blendMode"),
                             static_cast<tjs_int>(item.blendMode),
                             TJS_MEMBERENSURE,
@@ -697,36 +646,48 @@ namespace motion {
         for(tjs_int index = 0; index < 4; ++index) {
             color.SetValue(
                 index,
-                // Player_renderToCanvas @0x6C7944..0x6C7A40 loads each
-                // packed color through W8 then stores X8, i.e. zero-extended
-                // uint32_t into the 64-bit TJS Integer payload.
+                // Every reference zero-extends the packed uint32_t into the
+                // 64-bit TJS Integer payload.
                 item.packedColors[static_cast<std::size_t>(index)],
                 TJS_MEMBERENSURE);
         }
 
         auto &source = *item.sourceState;
-        return player.resolveRenderSourceLike_0x6C1B70_guess(source.object);
+        return player.resolveRenderSource_guess(source.object);
     }
 
     iTVPTexture2D *
-    SourceCache::loadRenderSourceTextureFromItemLike_0x6C1B70(
+    SourceCache::loadRenderSourceTextureFromItem_guess(
         Player &player,
         detail::PreparedRenderItem &item) {
         return textureFromLayerVariant(
-            loadRenderSourceLayerFromItemLike_0x6C1B70(player, item));
+            loadRenderSourceLayerFromItem_guess(player, item));
     }
 
     iTVPTexture2D *SourceCache::loadRenderSourceTextureForItem_guess(
         Player &player,
+        D3DAdaptor &adaptor,
         detail::PreparedRenderItem &item) {
         auto &source = *item.sourceState;
-        // Four-reference getter mapping: Android arm64 sub_6EE440, Android
-        // armv7 sub_5AC518, iOS arm64 sub_10014019C, iOS armv7 sub_1414C0.
-        // It observes the persistent descriptor first.
+        // The four-reference getter observes the persistent descriptor first
+        // and returns an existing atlas borrow before even asking whether the
+        // process renderer is software. Only the generic Layer fallback below
+        // is eligible for the adaptor's software-copy map.
         if(source.texture) {
             return source.texture;
         }
 
+        // Native-instance extraction precedes materializing the temporary
+        // motion-context ttstr in every reference. This path calls strict
+        // Variant::AsObject(), which AddRefs a nonnull dispatch, then asks for
+        // the ResourceManager adaptor without ever releasing that new dispatch
+        // reference. Preserve that per-retry leak instead of using nativeRM()'s
+        // friendly, borrowed fast pointer.
+        iTJSDispatch2 *resourceManagerDispatch =
+            player._findSourceResourceManager.AsObject();
+        ResourceManager *resourceManager =
+            ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(
+                resourceManagerDispatch);
         bool atlasLoaded;
         {
             // Materialize a temporary ttstr from the Player-owned motion-context
@@ -735,22 +696,32 @@ namespace motion {
             const ttstr moduleKey =
                 static_cast<ttstr>(player._findMotionContextVariant);
             atlasLoaded = Player::loadKrkrAtlasSource_guess(
-                source, player.nativeRM(), moduleKey);
+                source, resourceManager, moduleKey);
         }
         if(atlasLoaded && source.texture) {
+            // A newly recovered atlas borrow takes the same pre-software return
+            // as the initial fast path.
             return source.texture;
         }
 
         // The helper may have cleared source.object before failing.  Pass the
         // post-call object onward without consulting source.path; the fallback
-        // receives only that object plus the prepared descriptor.
-        return loadRenderSourceTextureFromItemLike_0x6C1B70(player, item);
+        // receives only that object plus the prepared descriptor. Its Layer
+        // main-image texture is the sole source passed through the software
+        // renderer bridge/cache.
+        return adaptor.getRenderTexture_guess(
+            loadRenderSourceTextureFromItem_guess(player, item));
     }
 
     void SourceCache::clearCache() {
+        // The persistent scratch Layer is not a cache entry.  Native clearCache
+        // walks only this list, invalidates its entry Layers, releases the
+        // nodes, and resets the accumulated byte count.
         for(auto &entry : _entries) {
-            if(entry.layer.Type() == tvtObject &&
-               entry.layer.AsObjectNoAddRef()) {
+            if(entry.layer.Type() == tvtObject) {
+                // All four callbacks test only the Variant type tag, then
+                // dereference Object without a typed-null recovery branch.
+                // They also pass Object itself as objthis, not closure.ObjThis.
                 auto *object = entry.layer.AsObjectNoAddRef();
                 (void)object->Invalidate(0, nullptr, nullptr, object);
             }
@@ -759,20 +730,9 @@ namespace motion {
         _currentCacheBytes = 0;
     }
 
-    void SourceCache::eraseSource(ttstr name) {
-        const tTJSVariant key(name);
-        for(auto it = _entries.begin(); it != _entries.end();) {
-            if(it->key.DiscernCompareStrictReal(key) || it->src == name) {
-                _currentCacheBytes -=
-                    static_cast<std::uint32_t>(it->byteWeight);
-                it = _entries.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
     tTJSVariant SourceCache::getBufLayer() const {
+        // Returning by value deliberately preserves the original closure's
+        // Object and ObjThis identity while acquiring an independent owner.
         return _bufLayer;
     }
 
@@ -781,45 +741,60 @@ namespace motion {
     }
 
     void SourceCache::bakeSource_guess(iTJSDispatch2 *source, Entry &entry) {
+        // The reference constructs one Void result Variant before drawLayer
+        // and reuses that same storage for every later scratch-layer call.
+        // Ordinary HRESULT failures neither clear it nor stop the chain; its
+        // final value is released only after the Layer accessor is destroyed.
+        tTJSVariant dispatchResult;
         {
             ncbPropAccessor sourceAccessor(source);
             sourceAccessor.FuncCall(0, TJS_W("drawLayer"),
                                     &detail::drawLayerMemberHint_guess,
-                                    nullptr, entry.layer);
+                                    &dispatchResult, entry.layer);
         }
 
         ncbPropAccessor layer(entry.layer);
         const tjs_int width = layer.getIntValue(TJS_W("width"), 0);
         const tjs_int height = layer.getIntValue(TJS_W("height"), 0);
-        entry.byteWeight = 4 * width * height;
+        // All four targets perform one 32-bit width*height MUL followed by a
+        // two-bit left shift; retain the low word without C++ signed-overflow
+        // undefined behavior.
+        entry.byteWeight = multiplyW32(multiplyW32(width, height), 4);
 
-        applyPackedCornerTintLike_0x6A7518(
+        applyPackedCornerTint_guess(
             entry.layer, entry.colors,
-            TintRectLike_0x6A7518{0, 0, width, height},
+            TintRect_guess{0, 0, width, height},
             (entry.blendMode & 0xF0) != 0);
 
         const tjs_int lowBlend = entry.blendMode & 0x0F;
         if(static_cast<tjs_uint>(lowBlend - 1) < 2u) {
-            const bool software = TVPGetRenderManager()->IsSoftware();
-            if(software || !resolvePrivateMotionGLLNativeLike_0x6DE24C(
-                               entry.layer.AsObjectNoAddRef())) {
+            const bool software = TVPIsSoftwareRenderManager();
+            if(software ||
+               !queryPrivateMotionGLLNativeFromVariant_guess(entry.layer)) {
                 ncbPropAccessor buffer(_bufLayer);
                 buffer.FuncCall(0, TJS_W("setSize"),
-                                &detail::setSizeMemberHint_guess, nullptr,
+                                &detail::setSizeMemberHint_guess,
+                                &dispatchResult,
                                 tTJSVariant(width), tTJSVariant(height));
                 buffer.FuncCall(0, TJS_W("copyRect"),
-                                &detail::copyRectMemberHint_guess, nullptr,
+                                &detail::copyRectMemberHint_guess,
+                                &dispatchResult,
                                 tTJSVariant(0), tTJSVariant(0), entry.layer,
                                 tTJSVariant(0), tTJSVariant(0),
                                 tTJSVariant(width), tTJSVariant(height));
                 layer.FuncCall(0, TJS_W("fillRect"),
-                               &detail::fillRectMemberHint_guess, nullptr,
+                               &detail::fillRectMemberHint_guess,
+                               &dispatchResult,
                                tTJSVariant(0), tTJSVariant(0),
                                tTJSVariant(width), tTJSVariant(height),
+                               // The Integer payload is zero-extended from the
+                               // packed 32-bit ARGB value on both 32/64-bit
+                               // references, so this is +4278190080.
                                tTJSVariant(
-                                   static_cast<tjs_int>(0xFF000000u)));
+                                   static_cast<tjs_int64>(0xFF000000u)));
                 layer.FuncCall(0, TJS_W("operateRect"),
-                               &detail::operateRectMemberHint_guess, nullptr,
+                               &detail::operateRectMemberHint_guess,
+                               &dispatchResult,
                                tTJSVariant(0), tTJSVariant(0), _bufLayer,
                                tTJSVariant(0), tTJSVariant(0),
                                tTJSVariant(width), tTJSVariant(height),
@@ -827,7 +802,8 @@ namespace motion {
                 if(lowBlend == 2) {
                     layer.FuncCall(
                         0, TJS_W("adjustGamma"),
-                        &detail::adjustGammaMemberHint_guess, nullptr,
+                        &detail::adjustGammaMemberHint_guess,
+                        &dispatchResult,
                         tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
                         tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
                         tTJSVariant(1), tTJSVariant(255), tTJSVariant(0));
@@ -858,35 +834,6 @@ namespace motion {
                 static_cast<std::uint32_t>(it->byteWeight);
             it = _entries.erase(it);
         }
-    }
-
-    tTJSVariant SourceCache::loadRawSourceVariant(
-        const Player *player,
-        const ttstr &name,
-        std::string &resolvedKey) const {
-        resolvedKey.clear();
-        if(!player || !player->nativeRM()) {
-            return {};
-        }
-
-        // Player::findSourceForNode_guess passes the retained motion-context
-        // key and requested path directly to the current ResourceManager
-        // findSource callbacks 6A7F1C/57BDE0/100102594/FF890.
-        tTJSVariant raw = player->nativeRM()->findSource(
-            static_cast<ttstr>(player->_findMotionContextVariant), name);
-        if(raw.Type() != tvtVoid) {
-            resolvedKey = detail::narrow(name);
-            return raw;
-        }
-
-        // External graphic fallback uses the storage normalizer only. The
-        // former decoded-tree source-candidate cache was removed because the
-        // four-reference chain resolves through the retained context and RM.
-        const ttstr placed = TVPGetPlacedPath(name);
-        if(!placed.IsEmpty() && TVPIsExistentStorage(placed)) {
-            resolvedKey = detail::narrow(placed);
-        }
-        return {};
     }
 
 } // namespace motion
