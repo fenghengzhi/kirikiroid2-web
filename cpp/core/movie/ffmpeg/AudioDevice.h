@@ -69,7 +69,8 @@ protected:
     double m_timeOfPts;
     double m_syncError;
     unsigned int m_syncErrorTime;
-    double m_resampleRatio{};
+    // Undefined until a fresh in-sync sample publishes its ratio.
+    double m_resampleRatio;
     std::recursive_mutex m_critSection;
 
     unsigned int m_sampeRate;
@@ -78,7 +79,8 @@ protected:
     CAEChannelInfo m_channelLayout;
     bool m_bPaused;
 
-    std::atomic_bool m_bAbort{};
+    // Every consuming path stores a value before it loads this flag.
+    std::atomic_bool m_bAbort;
     CDVDClock *m_pClock;
 };
 NS_KRMOVIE_END

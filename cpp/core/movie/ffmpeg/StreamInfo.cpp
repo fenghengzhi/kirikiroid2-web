@@ -124,6 +124,9 @@ void CDVDStreamInfo::Assign(const CDVDStreamInfo &right, bool withextradata) {
     filename = right.filename;
     //	dvd = right.dvd;
 
+    // Prefix assignment and old-owner release happen before allocation.
+    // Allocation failure therefore returns with extrasize committed,
+    // extradata null, and the video/audio suffix still holding its old state.
     if(extradata && extrasize)
         free(extradata);
 
@@ -167,6 +170,9 @@ void CDVDStreamInfo::Assign(const CDVDStreamInfo &right, bool withextradata) {
 }
 
 void CDVDStreamInfo::Assign(const CDemuxStream &right, bool withextradata) {
+    // This overload deliberately clears first.  Allocation failure keeps the
+    // common demux prefix and extrasize, while type-specific fields stay at
+    // the cleared defaults.
     Clear();
 
     codec = right.codec;

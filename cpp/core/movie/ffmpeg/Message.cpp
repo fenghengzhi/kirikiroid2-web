@@ -54,10 +54,10 @@ bool CDVDMsgGeneralSynchronize::Wait(unsigned int milliseconds,
             //	CLog::Log(LOGDEBUG, "CDVDMsgGeneralSynchronize -
             // global
             // timeout");
-            return true; // global timeout, we are done
+            return true; // global timeout completes the shared barrier
         }
         if(timeout.IsTimePast()) {
-            return false; /* request timeout, should be retried */
+            return false; /* only this wait slice expired; child workers retry */
         }
     }
     return true;
@@ -84,16 +84,21 @@ long CDVDMsgGeneralSynchronize::Release() {
  */
 CDVDMsgDemuxerPacket::CDVDMsgDemuxerPacket(DemuxPacket *packet, bool drop) :
     CDVDMsg(DEMUXER_PACKET) {
+    // This message becomes the sole raw DemuxPacket owner before queue Put.
     m_packet = packet;
     m_drop = drop;
 }
 
 CDVDMsgDemuxerPacket::~CDVDMsgDemuxerPacket() {
+    // A successful queue insertion transfers lifetime to the list-held message
+    // ref; pop/flush/destruction eventually reaches this exact packet release.
     if(m_packet)
         DemuxPacket::Free(m_packet);
 }
 
 unsigned int CDVDMsgDemuxerPacket::GetPacketSize() {
+    // iSize is signed.  The public unsigned return preserves the native
+    // conversion, so a negative malformed size becomes a large unsigned value.
     if(m_packet)
         return m_packet->iSize;
     else

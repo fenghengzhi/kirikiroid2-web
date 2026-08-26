@@ -2,11 +2,13 @@
 #include "Clock.h"
 #include "DemuxPacket.h"
 #include <cmath>
-#include <utility>
 
 NS_KRMOVIE_BEGIN
 CDVDMessageQueue::CDVDMessageQueue(std::string owner) :
-    /*m_hEvent(true),*/ m_owner(std::move(owner)) {
+    /*m_hEvent(true),*/ m_owner(owner) {
+    // The reference constructor copy-constructs m_owner from its parameter.
+    // It also intentionally leaves m_drain indeterminate until Init (or the
+    // first WaitUntilEmpty); do not add a constructor initializer for it.
     m_iDataSize = 0;
     m_bAbortRequest = false;
     m_bInitialized = false;
@@ -23,6 +25,11 @@ CDVDMessageQueue::~CDVDMessageQueue() {
 }
 
 void CDVDMessageQueue::Init() {
+    // Init resets only bookkeeping.  It does not clear either
+    // std::list, so messages queued on a never-started player survive a repeat
+    // OpenFromStream and are older than newly queued messages.  Their eventual
+    // effect is type-specific: speed messages are not coalesced, while a seek
+    // is discarded if another seek/chapter request remains after it is popped.
     m_iDataSize = 0;
     m_bAbortRequest = false;
     m_bInitialized = true;
@@ -32,6 +39,9 @@ void CDVDMessageQueue::Init() {
 }
 
 void CDVDMessageQueue::Flush(CDVDMsg::Message type) {
+    // m_section is recursive because End calls Flush while already holding it.
+    // Both lists own message references through DVDMessageListItem; erasing a
+    // node releases the message before deallocating the list node.
     CSingleLock lock(m_section);
 
     m_messages.remove_if([type](const DVDMessageListItem &item) {
@@ -54,13 +64,17 @@ void CDVDMessageQueue::Abort() {
 
     m_bAbortRequest = true;
 
-    // inform waiter for abort action
+    // Notify while m_section is still held.  The condition variable uses the
+    // distinct m_mtxEvent mutex, so this does not form a predicate+mutex pair
+    // with Get and does not eliminate Get's pre-wait lost-wakeup window.
     m_hEvent.notify_all();
 }
 
 void CDVDMessageQueue::End() {
     CSingleLock lock(m_section);
 
+    // NONE removes both normal and priority lists.  drain is not reset and no
+    // waiter notification is sent here; the next Init resets drain.
     Flush(CDVDMsg::NONE);
 
     m_bInitialized = false;
@@ -75,16 +89,30 @@ MsgQueueReturnCode CDVDMessageQueue::Put(CDVDMsg *pMsg, int priority,
     if(!m_bInitialized) {
         //	CLog::Log(LOGWARNING, "CDVDMessageQueue(%s)::Put
         // MSGQ_NOT_INITIALIZED", m_owner.c_str());
+        // Put checks initialization before null: a null pointer on this path
+        // is dereferenced and crashes.  A non-null Put consumes the supplied
+        // ref even on this failure.  Child
+        // SendMessage discards the -2 result, so its parent may still advance
+        // a producer-side packet counter after this destroys the packet.
         pMsg->Release();
         return MSGQ_NOT_INITIALIZED;
     }
     if(!pMsg) {
         //	CLog::Log(LOGFATAL, "CDVDMessageQueue(%s)::Put
         // MSGQ_INVALID_MSG", m_owner.c_str());
+        // Initialization is checked first; only the initialized-null case
+        // reaches this -3 return, and there is no reference to release.
         return MSGQ_INVALID_MSG;
     }
 
     if(priority > 0) {
+        // The priority list is ascending from begin to end and Get pops back.
+        // front=true inserts before the existing equal-priority run, so old
+        // equal-priority nodes are consumed first (FIFO).  front=false uses
+        // priority+1 only for the search key, placing the new node after the
+        // equal-priority run while storing the original priority (LIFO within
+        // that run).  The compiled INT_MAX+1 search key wraps on all four ARM
+        // targets even though signed overflow is not portable C++ behavior.
         int prio = priority;
         if(!front)
             prio++;
@@ -95,12 +123,18 @@ MsgQueueReturnCode CDVDMessageQueue::Put(CDVDMsg *pMsg, int priority,
                                });
         m_prioMessages.emplace(it, pMsg, priority);
     } else {
+        // Normal nodes use the opposite physical ends for insertion, while
+        // Get always pops back: front=true is FIFO and front=false is LIFO.
+        // Negative priorities are normal-list nodes, not priority-list nodes.
         if(front)
             m_messages.emplace_front(pMsg, priority);
         else
             m_messages.emplace_back(pMsg, priority);
     }
 
+    // Only priority exactly zero participates in byte/timestamp accounting;
+    // positive-priority and negative-priority packet messages remain nodes but
+    // are invisible to m_iDataSize/m_TimeFront/m_TimeBack.
     if(pMsg->IsType(CDVDMsg::DEMUXER_PACKET) && priority == 0) {
         DemuxPacket *packet = ((CDVDMsgDemuxerPacket *)pMsg)->GetPacket();
         if(packet) {
@@ -128,6 +162,8 @@ MsgQueueReturnCode CDVDMessageQueue::Get(CDVDMsg **pMsg,
                                          int &priority) {
     CSingleLock lock(m_section);
 
+    // The output slot is cleared before initialization is checked.  Passing a
+    // null pMsg therefore crashes even when the queue is uninitialized.
     *pMsg = nullptr;
 
     int ret = 0;
@@ -139,6 +175,10 @@ MsgQueueReturnCode CDVDMessageQueue::Get(CDVDMsg **pMsg,
     }
 
     while(!m_bAbortRequest) {
+        // A positive requested priority always selects m_prioMessages.  At a
+        // non-positive threshold, any priority node still blocks selection of
+        // the normal list.  m_drain bypasses only the back-node priority gate;
+        // it does not change that list-selection rule.
         std::list<DVDMessageListItem> &msgs =
             (priority > 0 || !m_prioMessages.empty()) ? m_prioMessages
                                                       : m_messages;
@@ -172,7 +212,13 @@ MsgQueueReturnCode CDVDMessageQueue::Get(CDVDMsg **pMsg,
             //			m_hEvent.Reset();
             m_section.unlock();
 
-            // wait for a new message
+            // The queue predicate is protected by m_section, but waiting uses
+            // the separate m_mtxEvent.  A Put/Abort notify between the unlock
+            // above and the actual wait can be lost.  Every non-timeout wake
+            // restarts the full relative timeout; End neither notifies nor
+            // causes this loop to recheck m_bInitialized.  The CSingleLock
+            // still records ownership while the raw recursive mutex is
+            // temporarily unlocked, matching the reference exception path.
             std::unique_lock<std::mutex> eventLock(m_mtxEvent);
             if(m_hEvent.wait_for(
                    eventLock,
@@ -219,8 +265,17 @@ void CDVDMessageQueue::WaitUntilEmpty() {
 
     //	CLog::Log(LOGNOTICE, "CDVDMessageQueue(%s)::WaitUntilEmpty",
     // m_owner.c_str());
+    // This is a FIFO barrier for normal messages already ahead of the marker,
+    // not an atomic "queue is empty" observation: later front=true normal
+    // messages remain behind it, while priority messages and front=false
+    // normal messages can still run first.  drain lets consumers pass their
+    // priority threshold but does not alter priority-list precedence.
     CDVDMsgGeneralSynchronize *msg =
         new CDVDMsgGeneralSynchronize(40000, SYNCSOURCE_ANY);
+    // Put's return and Wait's result are deliberately ignored.  On a normal
+    // path the temporary AddRef is consumed by Put and the list node holds its
+    // own AddRef.  If allocation/insertion/wait throws, there is no scope guard
+    // for msg or m_drain, so references can leak and drain can remain true.
     Put(msg->AddRef());
     msg->Wait(m_bAbortRequest, 0);
     msg->Release();
@@ -234,6 +289,8 @@ void CDVDMessageQueue::WaitUntilEmpty() {
 int CDVDMessageQueue::GetLevel() {
     CSingleLock lock(m_section);
 
+    // The fast-full comparison is strict.  At dataSize == maxDataSize a
+    // timestamp-based queue can still report less than 100.
     if(m_iDataSize > m_iMaxDataSize)
         return 100;
     if(m_iDataSize == 0)
@@ -249,6 +306,7 @@ int CDVDMessageQueue::GetLevel() {
     // if we added lots of packets with NOPTS, make sure that the
     // queue is not signalled empty
     if(level == 0 && m_iDataSize != 0) {
+        // Preserve the non-empty minimum; AcceptsData only rejects level 100.
         //	CLog::Log(LOGDEBUG, "CDVDMessageQueue::GetLevel() - can't
         // determine level");
         return 1;
@@ -258,6 +316,7 @@ int CDVDMessageQueue::GetLevel() {
 }
 
 void CDVDMessageQueue::SetMaxTimeSize(double sec) {
+    // <=1, negative infinity and NaN all select 1.0; +infinity stores 0.0.
     m_TimeSize = 1.0 / std::max(1.0, sec);
 }
 

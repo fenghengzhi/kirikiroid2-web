@@ -80,32 +80,55 @@ iTVPBaseForm::~iTVPBaseForm() = default;
 
 void iTVPBaseForm::Show() {}
 
-namespace {
-Node *findDescendant(Node *root, const std::string &name) {
-    if (!root) return nullptr;
-    for (auto child : root->getChildren()) {
-        if (child->getName() == name)
-            return child;
-        if (auto *found = findDescendant(child, name))
-            return found;
-    }
-    return nullptr;
-}
+bool iTVPBaseForm::initFromFile(const char *naviBarFile,
+                                const char *bodyFile,
+                                const char *bottomBarFile, Node *parent) {
+    const bool ret = Node::init();
 
-class DeepSearchProxy : public Node {
-    Node *_target;
-public:
-    static DeepSearchProxy *create(Node *target) {
-        auto *p = new DeepSearchProxy;
-        p->_target = target;
-        p->autorelease();
-        return p;
+    NaviBar.Left = nullptr;
+    NaviBar.Right = nullptr;
+    NaviBar.Root = nullptr;
+
+    CSBReader reader;
+    if(naviBarFile) {
+        NaviBar.Root = reader.Load(naviBarFile);
+        if(!NaviBar.Root)
+            return false;
+
+        auto it = reader.find("left");
+        NaviBar.Left = it == reader.end()
+                           ? nullptr
+                           : static_cast<Button *>(it->second);
+        it = reader.find("right");
+        NaviBar.Right = it == reader.end()
+                            ? nullptr
+                            : static_cast<Button *>(it->second);
+        bindHeaderController(reader);
     }
-    Node *getChildByName(const std::string &name) const override {
-        return findDescendant(_target, name);
+
+    BottomBar.Root = nullptr;
+    if(bottomBarFile) {
+        BottomBar.Root = reader.Load(bottomBarFile);
+        if(!BottomBar.Root)
+            return false;
+        bindFooterController(reader);
     }
-};
-} // namespace
+
+    RootNode = static_cast<Widget *>(reader.Load(bodyFile));
+    if(!RootNode)
+        return false;
+
+    if(!parent)
+        parent = this;
+    parent->addChild(RootNode);
+    if(NaviBar.Root)
+        parent->addChild(NaviBar.Root);
+    if(BottomBar.Root)
+        parent->addChild(BottomBar.Root);
+    rearrangeLayout();
+    bindBodyController(reader);
+    return ret;
+}
 
 bool iTVPBaseForm::initFromFile(Node *naviBarNode, Node *bodyNode,
                                 Node *bottomBarNode, Node *parent) {
@@ -119,15 +142,15 @@ bool iTVPBaseForm::initFromFile(Node *naviBarNode, Node *bodyNode,
     LinearLayoutParameter *param = nullptr;
 
     if (naviBarNode) {
-        auto *proxy = DeepSearchProxy::create(naviBarNode);
-        NaviBar.Root = findDescendant(naviBarNode, "background");
+        const NodeMap allNodes("code-generated navi", naviBarNode);
+        NaviBar.Root = allNodes.findController("background", false);
         if (!NaviBar.Root)
             NaviBar.Root = naviBarNode->getChildren().front();
         NaviBar.Left = dynamic_cast<Button *>(
-            findDescendant(naviBarNode, "left"));
+            allNodes.findController("left", false));
         NaviBar.Right = dynamic_cast<Button *>(
-            findDescendant(naviBarNode, "right"));
-        bindHeaderController(proxy);
+            allNodes.findController("right", false));
+        bindHeaderController(allNodes);
 
         param = LinearLayoutParameter::create();
         param->setGravity(LinearLayoutParameter::LinearGravity::TOP);
@@ -138,8 +161,8 @@ bool iTVPBaseForm::initFromFile(Node *naviBarNode, Node *bodyNode,
 
     if (bottomBarNode) {
         BottomBar.Root = bottomBarNode;
-        auto *proxy = DeepSearchProxy::create(bottomBarNode);
-        bindFooterController(proxy);
+        const NodeMap allNodes("code-generated footer", bottomBarNode);
+        bindFooterController(allNodes);
 
         param = LinearLayoutParameter::create();
         param->setGravity(LinearLayoutParameter::LinearGravity::BOTTOM);
@@ -154,8 +177,8 @@ bool iTVPBaseForm::initFromFile(Node *naviBarNode, Node *bodyNode,
         w->setLayoutParameter(param);
     parent->addChild(RootNode);
 
-    auto *bodyProxy = DeepSearchProxy::create(bodyNode);
-    bindBodyController(bodyProxy);
+    const NodeMap allNodes("code-generated body", bodyNode);
+    bindBodyController(allNodes);
     return ret;
 }
 
@@ -186,7 +209,8 @@ bool iTVPBaseForm::initFromFile(const Csd::NodeBuilderFn &naviBarCall,
         NaviBar.Root = naviBar->getChildByName("background");
         NaviBar.Left = NaviBar.Root->getChildByName<Button *>("left");
         NaviBar.Right = NaviBar.Root->getChildByName<Button *>("right");
-        bindHeaderController(NaviBar.Root);
+        const NodeMap allNodes("code-generated navi", NaviBar.Root);
+        bindHeaderController(allNodes);
 
         param = LinearLayoutParameter::create();
         param->setGravity(LinearLayoutParameter::LinearGravity::TOP);
@@ -196,7 +220,8 @@ bool iTVPBaseForm::initFromFile(const Csd::NodeBuilderFn &naviBarCall,
 
     if(bottomBar) {
         BottomBar.Root = bottomBar;
-        bindFooterController(bottomBar);
+        const NodeMap allNodes("code-generated footer", bottomBar);
+        bindFooterController(allNodes);
 
         param = LinearLayoutParameter::create();
         param->setGravity(LinearLayoutParameter::LinearGravity::BOTTOM);
@@ -209,7 +234,8 @@ bool iTVPBaseForm::initFromFile(const Csd::NodeBuilderFn &naviBarCall,
     body->setLayoutParameter(param);
     parent->addChild(RootNode);
 
-    bindBodyController(RootNode);
+    const NodeMap allNodes("code-generated body", RootNode);
+    bindBodyController(allNodes);
     return ret;
 }
 

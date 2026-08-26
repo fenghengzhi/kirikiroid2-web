@@ -93,8 +93,11 @@ class CAEStreamAL : public IAEStream {
                 srcFormat = AV_SAMPLE_FMT_FLTP;
                 break;
             default:
+                // Reference code deliberately throws a heap-allocated pointer.
                 throw new std::invalid_argument("unknown sample format");
         }
+        // Only these four planar formats use one source pointer per channel.
+        // AE_FMT_U8P is deliberately treated as a single source buffer.
         switch(audioFormat.m_dataFormat) {
             case AE_FMT_S16NEP:
             case AE_FMT_S32NEP:
@@ -124,6 +127,8 @@ class CAEStreamAL : public IAEStream {
         tgt_frameSize = av_get_bytes_per_sample(swr_tgtFormat) *
             m_format.m_channelLayout.Count();
         int result = swr_init(swr_ctx);
+        // The iOS reference retains this Debug assertion; Android NDEBUG
+        // removes it. Neither build has a runtime recovery path here.
         assert(swr_ctx && result >= 0);
         return bitsPerSample;
     }
@@ -171,6 +176,8 @@ public:
                 m_impl = nullptr;
             }
         }
+        // Reference order: notify only after releasing every raw owner. This
+        // is not a join and does not make concurrent destruction safe.
         _cond.notify_all();
     }
 
@@ -198,6 +205,7 @@ public:
         if(swr_ctx) {
             uint32_t srcoff =
                 offset * (m_format.m_frameSize / src_buffer_count);
+            // Fixed-size and intentionally unchecked, matching the reference.
             const uint8_t *in[8];
             for(unsigned int i = 0; i < src_buffer_count; ++i) {
                 in[i] = data[i] + srcoff;
@@ -213,6 +221,8 @@ public:
                        "audio buffer is probably too small\n");
                 swr_init(swr_ctx);
             }
+            // Negative/short swr results are not filtered; the multiplication
+            // is passed through the unsigned AppendBuffer length ABI.
             m_impl->AppendBuffer(audio_buf, len2 * tgt_frameSize);
         } else {
             m_impl->AppendBuffer(data[0] + offset * m_format.m_frameSize,
@@ -228,7 +238,8 @@ public:
     double GetDelay() override { return (double)m_impl->GetLatencySeconds(); }
 
     CAESyncInfo GetSyncInfo() override {
-        CAESyncInfo info; // TODO
+        // The reference implementation is a fixed all-zero/SYNC_OFF stub.
+        CAESyncInfo info;
         info.delay = 0;
         info.error = 0;
         info.rr = 0;
@@ -288,7 +299,9 @@ bool CAEFactory::SupportsRaw(AEAudioFormat &format) {
         if(AE)
           return AE->SupportsRaw(format);
 #endif
-    // refer to the format in TVPALSoundWrap::Init
+    // Reference accepts only U8/S16LE. AE_FMT_RAW is rejected, so the current
+    // passthrough candidate is always discarded and codec creation falls back
+    // to FFmpeg even when the parser opens successfully.
     switch(format.m_dataFormat) {
         case AE_FMT_U8:
         case AE_FMT_S16LE:

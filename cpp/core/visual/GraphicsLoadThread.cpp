@@ -204,6 +204,9 @@ void tTVPAsyncImageLoader::HandleLoadedImage() {
 void tTVPAsyncImageLoader::LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
                                        const ttstr &name) {
     // tTVPBaseBitmap* dest = new tTVPBaseBitmap( 32, 32, 32 );
+    // Observed native callers arrive through Bitmap::LoadAsync, whose native
+    // constructor already owns the holder.  This lower-level entry itself
+    // takes no holder reference before constructing dest and accepts raw nulls.
     tTVPBaseBitmap dest(TVPGetInitialBitmap());
     iTJSDispatch2 *metainfo = nullptr;
     ttstr nname = TVPNormalizeStorageName(name);
@@ -214,6 +217,8 @@ void tTVPAsyncImageLoader::LoadRequest(iTJSDispatch2 *owner, tTJSNI_Bitmap *bmp,
             bmp->CopyFrom(&dest);
             bmp->SetLoading(false);
         }
+        // Deliberately precedes metainfo's balancing Release below.  A null
+        // owner therefore returns with the cache-supplied reference leaked.
         if(!owner)
             return;
         tTJSVariant param[4];
@@ -248,6 +253,8 @@ void tTVPAsyncImageLoader::PushLoadQueue(iTJSDispatch2 *owner,
                                          const ttstr &nname) {
     auto *cmd = new tTVPImageLoadCommand();
     cmd->owner_ = owner;
+    // This AddRef is the command's only retention for the raw bmp_ companion;
+    // owner==nullptr leaves bmp_ wholly unretained.
     if(owner)
         owner->AddRef();
     cmd->bmp_ = bmp;

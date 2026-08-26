@@ -196,6 +196,9 @@ void CDVDAudioCodecPassthrough::GetData(DVDAudioFrame &frame) {
     frame.format = m_format;
     frame.planes = 1;
     frame.bits_per_sample = 8;
+    // The reference does not publish the top-level frame.framesize here;
+    // format.m_frameSize is copied as part of m_format, but they are distinct
+    // fields.  A reused caller frame therefore keeps its old framesize.
     frame.duration = DVD_MSEC_TO_TIME(frame.format.m_streamInfo.GetDuration());
     frame.pts = m_currentPts;
     m_currentPts = DVD_NOPTS_VALUE;

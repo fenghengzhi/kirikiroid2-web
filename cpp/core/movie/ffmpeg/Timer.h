@@ -5,6 +5,7 @@
 
 NS_KRMOVIE_BEGIN
 class Timer {
+    // All four references keep Timer as exactly two uint32 fields (8 bytes).
     unsigned int startTime;
     unsigned int totalWaitTime;
 
@@ -23,6 +24,8 @@ public:
     }
 
     [[nodiscard]] inline bool IsTimePast() const {
+        // UINT_MAX is the infinite sentinel.  The elapsed subtraction is
+        // deliberately uint32, preserving the reference's single-wrap rule.
         return totalWaitTime == InfiniteValue
             ? false
             : (totalWaitTime == 0
@@ -41,6 +44,7 @@ public:
             : (totalWaitTime - timeWaitedAlready);
     }
 
+    // These sentinel setters intentionally preserve startTime.
     inline void SetExpired() { totalWaitTime = 0; }
 
     inline void SetInfinite() { totalWaitTime = InfiniteValue; }

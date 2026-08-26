@@ -17,7 +17,12 @@ struct CDVDStreamInfo {
 
     ~CDVDStreamInfo();
 
-    void Clear(); // clears current information
+    // Resets the declared state.  Extradata release intentionally requires
+    // both a non-null pointer and a non-zero size.
+    void Clear();
+
+    // Reference equality intentionally ignores filename, software, aspect,
+    // and orientation; they remain copied state but are not reopen keys.
     bool Equal(const CDVDStreamInfo &right, bool withextradata);
 
     bool Equal(const CDemuxStream &right, bool withextradata);
@@ -64,7 +69,10 @@ struct CDVDStreamInfo {
     uint64_t channellayout;
 
     // CODEC EXTRADATA
-    void *extradata; // extra data for codec to use
+    // malloc-owned codec data.  Clear/destruction preserve the original
+    // pointer-and-size release gate rather than treating either field alone
+    // as a valid owner description.
+    void *extradata;
     unsigned int extrasize; // size of extra data
     unsigned int codec_tag; // extra identifier hints for decoding
 

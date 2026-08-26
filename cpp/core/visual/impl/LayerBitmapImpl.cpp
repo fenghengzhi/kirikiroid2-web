@@ -484,6 +484,9 @@ tTVPNativeBaseBitmap::tTVPNativeBaseBitmap(const tTVPNativeBaseBitmap &r) {
     TVPInializeFontRasterizers();
     // TVPFontRasterizer->AddRef(); TODO
 
+    // Copy construction shares the texture directly and does not consult the
+    // destination class's render manager.  GlobalFontState, ascent offsets,
+    // RadianAngle and FontHash intentionally retain indeterminate storage.
     Bitmap = r.Bitmap;
     if(Bitmap)
         Bitmap->AddRef();
@@ -497,8 +500,9 @@ tTVPNativeBaseBitmap::tTVPNativeBaseBitmap(const tTVPNativeBaseBitmap &r) {
 //---------------------------------------------------------------------------
 tTVPNativeBaseBitmap::~tTVPNativeBaseBitmap() {
     // Bitmap final release is deferred by iTVPTexture2D::Release; destroying a
-    // tTVPBaseTexture wrapper does not synchronously delete its texture. Keep
-    // this order and do not clear either raw member before its Release call.
+    // base-texture/base-bitmap wrapper need not synchronously delete its
+    // texture. Keep this order and do not clear either raw member before its
+    // Release call.
     if(Bitmap)
         Bitmap->Release();
     if(PrerenderedFont)

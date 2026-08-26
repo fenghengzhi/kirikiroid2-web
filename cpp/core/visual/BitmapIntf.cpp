@@ -10,6 +10,8 @@
 
 tTJSNI_Bitmap::tTJSNI_Bitmap() :
     Owner(nullptr), Bitmap(nullptr), Loading(false) {
+    // This persistent reference is the lifetime precondition for every
+    // TVPGetInitialBitmap() borrow issued by this native instance.
     TVPTempBitmapHolderAddRef();
 }
 tTJSNI_Bitmap::~tTJSNI_Bitmap() { TVPTempBitmapHolderRelease(); }
@@ -38,6 +40,8 @@ tjs_error tTJSNI_Bitmap::Construct(tjs_int numparams, tTJSVariant **param,
             Bitmap = new tTVPBaseBitmap(width, height, bpp);
         }
     } else {
+        // Copy construction shares the initial tTVPBaseTexture's raw texture;
+        // it does not create a software replacement until a later operation.
         Bitmap = new tTVPBaseBitmap(TVPGetInitialBitmap());
     }
     return TJS_S_OK;
@@ -98,6 +102,8 @@ void tTJSNI_Bitmap::Independ(bool copy) {
 iTJSDispatch2 *tTJSNI_Bitmap::Load(const ttstr &name, tjs_uint32 colorkey) {
     if(Loading)
         TVPThrowExceptionMessage(TVPCurrentlyAsyncLoadBitmap);
+    // Invalidate may clear Bitmap, but this native instance's constructor-held
+    // holder reference still protects the borrowed initial texture here.
     if(!Bitmap)
         Bitmap = new tTVPBaseBitmap(TVPGetInitialBitmap());
 
@@ -110,6 +116,8 @@ void tTJSNI_Bitmap::LoadAsync(const ttstr &name) {
     if(Loading)
         TVPThrowExceptionMessage(TVPCurrentlyAsyncLoadBitmap);
     Loading = true;
+    // The queued command retains Owner while storing this as a raw companion;
+    // it takes no separate native-instance or bitmap-holder reference.
     Application->LoadImageRequest(Owner, this, name);
 }
 //----------------------------------------------------------------------

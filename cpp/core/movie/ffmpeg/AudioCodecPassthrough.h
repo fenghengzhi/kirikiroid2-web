@@ -26,12 +26,12 @@ private:
     CAEStreamParser m_parser;
     uint8_t *m_buffer;
     unsigned int m_bufferSize;
-    unsigned int m_dataSize{};
+    unsigned int m_dataSize;
     AEAudioFormat m_format;
-    uint8_t m_backlogBuffer[61440]{};
-    unsigned int m_backlogSize{};
-    double m_currentPts{};
-    double m_nextPts{};
+    uint8_t m_backlogBuffer[61440];
+    unsigned int m_backlogSize;
+    double m_currentPts;
+    double m_nextPts;
 
     // TrueHD specifics
     std::unique_ptr<uint8_t[]> m_trueHDBuffer;

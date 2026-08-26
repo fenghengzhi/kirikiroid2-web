@@ -57,7 +57,10 @@ public:
                                     bool notice = true) const {
         auto *node = findController<cocos2d::Node>(name, notice);
         if(node) {
-            return dynamic_cast<T *>(node);
+            auto *controller = dynamic_cast<T *>(node);
+            if(!controller)
+                onLoadError(name);
+            return controller;
         }
         return nullptr;
     }
@@ -94,6 +97,11 @@ public:
                               cocos2d::Event *event);
 
 protected:
+    bool initFromFile(const char *naviBarFile, const char *bodyFile,
+                      const char *bottomBarFile, Node *parent = nullptr);
+
+    // Code-generated UI adapter. The reference CSB path above remains the
+    // canonical BaseForm loading path.
     bool initFromFile(const Csd::NodeBuilderFn &naviBarCall,
                       const Csd::NodeBuilderFn &bodyCall,
                       const Csd::NodeBuilderFn &bottomBarCall,
@@ -128,9 +136,9 @@ protected:
         return { pSize.width, pSize.height * 0.1f };
     }
 
-    virtual void bindHeaderController(const Node *allNodes) = 0;
-    virtual void bindBodyController(const Node *allNodes) = 0;
-    virtual void bindFooterController(const Node *allNodes) = 0;
+    virtual void bindBodyController(const NodeMap &allNodes) {}
+    virtual void bindFooterController(const NodeMap &allNodes) {}
+    virtual void bindHeaderController(const NodeMap &allNodes) {}
 
     cocos2d::ui::Widget *RootNode;
 
@@ -206,9 +214,9 @@ class iTVPFloatForm : public iTVPBaseForm {
 public:
     void rearrangeLayout() override;
 
-    void bindHeaderController(const Node *allNodes) override {}
-    void bindBodyController(const Node *allNodes) override {}
-    void bindFooterController(const Node *allNodes) override {}
+    void bindHeaderController(const NodeMap &allNodes) override {}
+    void bindBodyController(const NodeMap &allNodes) override {}
+    void bindFooterController(const NodeMap &allNodes) override {}
 };
 
 void ReloadTableViewAndKeepPos(cocos2d::extension::TableView *pTableView);

@@ -223,6 +223,8 @@ public:
      * the data is cleared to zero
      */
     virtual bool ClearPicture(DVDVideoPicture *pDvdVideoPicture) {
+        // CDVDVideoCodecFFmpeg inherits this exact default; it does not provide
+        // an override.  sizeof(...) is ABI-specific in the four references.
         memset(pDvdVideoPicture, 0, sizeof(DVDVideoPicture));
         return true;
     }
@@ -234,6 +236,7 @@ public:
      * captioning
      */
     virtual bool GetUserData(DVDVideoUserData *pDvdVideoUserData) {
+        // Also inherited unchanged by CDVDVideoCodecFFmpeg.
         pDvdVideoUserData->data = nullptr;
         pDvdVideoUserData->size = 0;
         return false;
@@ -250,6 +253,8 @@ public:
      * will be called by video player indicating the playback speed.
      * see DVD_PLAYSPEED_NORMAL, DVD_PLAYSPEED_PAUSE and friends.
      */
+    // CDVDVideoCodecFFmpeg inherits this no-op, so player speed notifications
+    // have no decoder-side effect on the current concrete codec.
     virtual void SetSpeed(int iSpeed) {};
 
     /**

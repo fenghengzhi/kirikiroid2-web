@@ -139,6 +139,9 @@ private:
         // rectangle
         RefCount = 1;
         Bitmap = new tTVPBaseTexture(32, 32);
+        // Bitmap is deliberately a raw member.  If Fill throws after this
+        // publication, constructor unwinding destroys Temporaries only and
+        // does not delete the already-constructed texture.
         Bitmap->Fill(tTVPRect(0, 0, 32, 32), TVP_RGBA2COLOR(255, 255, 255, 0));
     }
 
@@ -156,6 +159,8 @@ private:
     tTVPBaseTexture *InternalGetTemp(tjs_uint w, tjs_uint h, bool fit) {
         // compact initialization
         if(!TempCompactInit) {
+            // The compact registry stores this raw pointer.  Set the flag only
+            // after its vector push has completed.
             TVPAddCompactEventHook(this);
             TempCompactInit = true;
         }
@@ -165,10 +170,14 @@ private:
             w += (w & 1);
 
         // get temporary bitmap (nested)
+        // Deliberately commit the nesting level before allocation or resize;
+        // no exceptional path below rolls this increment back.
         TempLevel++;
         if(TempLevel > Temporaries.size()) {
             // increase buffer size
             tTVPBaseTexture *bmp = new tTVPBaseTexture(w, h);
+            // bmp stays a raw local until vector publication.  A throwing
+            // push_back therefore leaves both TempLevel and bmp unbalanced.
             Temporaries.push_back(bmp);
             return bmp;
         } else {
@@ -227,6 +236,8 @@ public:
         if(!TVPTempBitmapHolder)
             return;
         if(TVPTempBitmapHolder->RefCount == 1) {
+            // Keep the global published through the complete destructor and
+            // raw delete; reentrant access can still observe the dying holder.
             delete TVPTempBitmapHolder;
             TVPTempBitmapHolder = nullptr;
         } else {
@@ -247,6 +258,9 @@ public:
 const tTVPBaseTexture &TVPGetInitialBitmap() {
     tTVPTempBitmapHolder::AddRef(); // ensure default bitmap
     const tTVPBaseTexture *bmp = TVPTempBitmapHolder->Get();
+    // This temporary reference does not retain the returned borrow.  Callers
+    // require an outer Bitmap/Layer holder reference; otherwise Release
+    // destroys Bitmap before the reference is returned.
     tTVPTempBitmapHolder::Release();
 
     return *bmp;
@@ -336,6 +350,8 @@ bool TVPDefaultHoldAlpha = false;
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
     // creates bitmap holder
+    // This process-global reference is not guarded by a constructed member;
+    // a later constructor failure does not run this destructor body to release it.
     tTVPTempBitmapHolder::AddRef();
 
     // object lifetime stuff
@@ -7981,6 +7997,8 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         sop = new tTVPSimpleOptionProvider(options);
 
         // notify starting of the transition to the provider
+        // This live BaseLayer's constructor-held temp-holder reference is the
+        // outer owner for synchronous TVPSimpleImageProvider image loads.
         tjs_error er = pro->StartTransition(
             sop, &TVPSimpleImageProvider, DisplayType,
             withchildren ? GetWidth() : MainImage->GetWidth(),

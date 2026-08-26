@@ -2,7 +2,6 @@
 #include <windows.h>
 #endif
 
-#include <spdlog/spdlog.h>
 #include <thread>
 #include "krmovie.h"
 
@@ -120,29 +119,18 @@ static int64_t AVSeekFunc(void *opaque, int64_t offset, int whence) {
 
 bool TVPCheckIsVideoFile(const char *uri) {
     TVPInitLibAVCodec();
-    std::unique_ptr<tTJSBinaryStream> stream{};
-    try {
-        tTJSBinaryStream *rawStream = TVPCreateStream(uri, TJS_BS_READ);
-        if(!rawStream) {
-            spdlog::error("TVPCreateStream returned nullptr for {}", uri);
-            return false;
-        }
-        stream.reset(rawStream);
-    } catch(eTJSError &e) {
-        spdlog::error("Error opening video file: {}", e.what());
-        return false;
-    }
+    tTJSBinaryStream *stream = TVPCreateStream(uri, TJS_BS_READ);
 
     int bufSize = 32 * 1024;
     if(stream->GetSize() < bufSize) {
+        delete stream;
         return false;
     }
     AVIOContext *pIOCtx = avio_alloc_context(
         (unsigned char *)av_malloc(bufSize + AVPROBE_PADDING_SIZE),
         bufSize, // internal Buffer and its size
         false, // bWriteable (1=true,0=false)
-        stream.get(), // user data ; will be passed to our callback
-                      // functions
+        stream, // user data ; will be passed to our callback functions
         AVReadFunc,
         nullptr, // Write callback function (not used in this example)
         AVSeekFunc);
@@ -168,5 +156,6 @@ bool TVPCheckIsVideoFile(const char *uri) {
         avformat_free_context(ic);
     }
     av_free(pIOCtx);
+    delete stream;
     return ret;
 }

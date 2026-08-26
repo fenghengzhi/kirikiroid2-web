@@ -44,6 +44,9 @@ public:
     enum ESyncState { SYNC_STARTING, SYNC_WAITSYNC, SYNC_INSYNC };
 
 protected:
+    // Sole data member of the secondary stream-player subobject.  The
+    // reference is represented as a borrowed raw pointer: neither the base
+    // nor either intermediate interface retains or releases CProcessInfo.
     CProcessInfo &m_processInfo;
 };
 
@@ -131,6 +134,8 @@ public:
 
     void SendMessage(CDVDMsg *pMsg, int priority = 0) override = 0;
 
+    // The four current audio vtables retain exact no-op defaults for these two
+    // slots; neither body reads this or its value argument.
     virtual void SetVolume(float fVolume) {};
 
     virtual void SetMute(bool bOnOff) {};
@@ -150,6 +155,7 @@ public:
 
     virtual float GetDynamicRangeAmplification() const = 0;
 
+    // ABI-retained default: no queue/codec/device query, always false.
     virtual bool IsEOS() { return false; };
 
     virtual class CDVDAudio *GetOutputDevice() = 0;

@@ -30,6 +30,8 @@ public:
     // waits until all available data has been rendered
     bool AcceptsData() override;
 
+    // This is the queue's demux-packet byte counter; control nodes such as
+    // GENERAL_EOF do not make HasData true.
     bool HasData() const override { return m_messageQueue.GetDataSize() > 0; }
 
     int GetLevel() override { return m_messageQueue.GetLevel(); }
@@ -40,10 +42,14 @@ public:
         m_messageQueue.Put(pMsg, priority);
     }
 
+    // The default argument is DEMUXER_PACKET: this preserves control nodes and
+    // is distinct from Flush(bool), which also publishes GENERAL_FLUSH and
+    // aborts device packet addition.
     void FlushMessages() override { m_messageQueue.Flush(); }
 
     //	void SetDynamicRangeCompression(long drc)             {
     // m_dvdAudio.SetDynamicRangeCompression(drc); }
+    // Exact constant +0.0f; no audio-device or stream query is performed.
     float GetDynamicRangeAmplification() const override { return 0.0f; }
 
     std::string GetPlayerInfo() override;
@@ -56,6 +62,8 @@ public:
     CDVDStreamInfo m_streaminfo;
 
     double GetCurrentPts() override {
+        // Return the raw published double under its own lock transaction. No
+        // NOPTS/NaN conversion is performed at this consumer boundary.
         CSingleLock lock(m_info_section);
         return m_info.pts;
     }
@@ -64,6 +72,8 @@ public:
 
     bool IsPassthrough() override;
 
+    // Borrowed alias to the embedded value object. The child retains ownership
+    // and the pointer becomes invalid with the CVideoPlayerAudio lifetime.
     CDVDAudio *GetOutputDevice() override { return &m_dvdAudio; }
 
 protected:

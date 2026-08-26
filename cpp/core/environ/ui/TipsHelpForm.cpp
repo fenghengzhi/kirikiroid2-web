@@ -53,9 +53,9 @@ void TVPTipsHelpForm::rearrangeLayout() {
     ui::Helper::doLayout(RootNode);
 }
 
-void TVPTipsHelpForm::bindBodyController(const Node *allNodes) {
-    _tipslist = dynamic_cast<ListView *>(allNodes->getChildByName("tipslist"));
-    auto *btn_close = allNodes->getChildByName<Widget *>("btn_close");
+void TVPTipsHelpForm::bindBodyController(const NodeMap &allNodes) {
+    _tipslist = dynamic_cast<ListView *>(allNodes.findController("tipslist"));
+    auto *btn_close = allNodes.findController<Widget>("btn_close");
     btn_close->addClickEventListener([this](Ref *p) {
         dynamic_cast<Widget *>(p)->setEnabled(false);
         TVPMainScene::GetInstance()->popUIForm(this);

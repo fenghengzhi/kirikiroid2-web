@@ -51,6 +51,8 @@ public:
     virtual ~CBaseRenderer();
 
     // Player functions
+    // The four reference binaries retain this as a true stub: every argument
+    // is ignored, no renderer field is committed, and the result is true.
     virtual bool Configure(unsigned int width, unsigned int height,
                            unsigned int d_width, unsigned int d_height,
                            float fps, unsigned flags, ERenderFormat format,
@@ -141,7 +143,10 @@ protected:
 
     void ManageRenderArea();
 
-    virtual void ReorderDrawPoints(); // might be overwritten (by egl e.x.)
+    // Kept virtual as part of the 23-slot ABI.  Every retained derived vtable
+    // in the four references reuses this base implementation; no EGL override
+    // is present in these targets.
+    virtual void ReorderDrawPoints();
     void saveRotatedCoords(); // saves the current state of
                               // m_rotatedDestCoords
     void syncDestRectToRotatedPoints(); // sync any changes of m_destRect
@@ -174,6 +179,8 @@ protected:
 
     // rendering flags
     unsigned m_iFlags;
+    // Deliberately left uninitialized by the constructor.  The base Configure
+    // stub also does not write it; HandlesRenderFormat compares it directly.
     ERenderFormat m_format;
 };
 NS_KRMOVIE_END

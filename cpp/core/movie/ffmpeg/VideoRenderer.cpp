@@ -17,6 +17,9 @@ DispDeviceDesc g_graphicsContext;
 AppliactionDesc g_application;
 
 bool AppliactionDesc::IsCurrentThread() {
+    // This facade is stateless.  The separately published thread id is read
+    // without a lock; startup ordering, rather than this object, owns the
+    // publication protocol.
     return std::this_thread::get_id() == TVPMainThreadID;
 }
 
@@ -94,20 +97,31 @@ CRenderManager::CRenderManager(CDVDClock &clock, IRenderMsg *player) :
                                             // m_captureWaitCounter(0),
                                             // m_hasCaptures(false)
 {
+    // m_flags, the six SPresent records and m_clockSync are deliberately not
+    // initialized here.  Public Configure writes flags; the first successful
+    // internal Configure initializes the queue topology and resets clock sync.
     m_videoDelay = 0;
 }
 
 CRenderManager::~CRenderManager() {
-    //	delete m_pRenderer;
+    // m_pRenderer is deliberately not deleted.  Only the ordinary member
+    // destructors run here, releasing the locks/events and all three deques.
+    // A renderer that did not pass through an outer UnInit remains outside
+    // this destructor's ownership.
+    // delete m_pRenderer;
 }
 
 void CRenderManager::GetVideoRect(CRect &source, CRect &dest, CRect &view) {
+    // V303: live in all four references.  A null borrowed renderer leaves all
+    // three caller-owned rectangles unchanged rather than zeroing them.
     CSingleLock lock(m_statelock);
     if(m_pRenderer)
         m_pRenderer->GetVideoRect(source, dest, view);
 }
 
 float CRenderManager::GetAspectRatio() {
+    // V303: live in all four references; the null-renderer fallback is exact
+    // float 1.0 and is published while the state lock is held.
     CSingleLock lock(m_statelock);
     if(m_pRenderer)
         return m_pRenderer->GetAspectRatio();
@@ -201,7 +215,9 @@ bool CRenderManager::Configure(DVDVideoPicture &picture, float fps,
 }
 
 bool CRenderManager::Configure() {
-    // lock all interfaces
+    // The native lock order is state -> present -> data.  The existing
+    // renderer's HandlesRenderFormat result is deliberately ignored because
+    // the DeleteRenderer branch below is disabled.
     CSingleLock lock(m_statelock);
     CSingleLock lock2(m_presentlock);
     CSingleLock lock3(m_datalock);
@@ -241,6 +257,8 @@ bool CRenderManager::Configure() {
 
         m_playerPort->UpdateRenderInfo(info);
 
+        // This order and the reserved source slot are significant: slot zero
+        // stays current and only [1, QueueSize) becomes initially free.
         m_queued.clear();
         m_discard.clear();
         m_free.clear();
@@ -264,6 +282,9 @@ bool CRenderManager::Configure() {
         //	CLog::Log(LOGDEBUG, "CRenderManager::Configure - %d",
         // m_QueueSize);
     } else
+        // Failure preserves the three queues, present source and clock-sync
+        // accumulation; only the render state changes before the unconditional
+        // notification and VideoParamsChange callback below.
         m_renderState = STATE_UNCONFIGURED;
 
     m_stateEvent.notify_all();
@@ -272,6 +293,8 @@ bool CRenderManager::Configure() {
 }
 
 bool CRenderManager::IsConfigured() {
+    // V303: only Android retains this zero-xref out-of-line copy.  HasFrame
+    // inlines the same locked comparison; both iOS linkers remove the method.
     CSingleLock lock(m_statelock);
     if(m_renderState == STATE_CONFIGURED)
         return true;
@@ -280,6 +303,8 @@ bool CRenderManager::IsConfigured() {
 }
 
 void CRenderManager::FrameWait(int ms) {
+    // Timeout accounting uses the 32-bit rough tick.  Zero never waits, -1 is
+    // the indefinite sentinel, and spurious wakes recheck both state and time.
     Timer timeout(ms);
     CSingleLock lock(m_presentlock);
     while(m_presentstep == PRESENT_IDLE && !timeout.IsTimePast())
@@ -288,6 +313,9 @@ void CRenderManager::FrameWait(int ms) {
 }
 
 bool CRenderManager::HasFrame() {
+    // The state and present checks deliberately use two separate lock scopes.
+    // A state change between them is not revalidated.  Only steps 2..4
+    // (FRAME, FRAME2, READY) count; FLIP does not.
     if(!IsConfigured())
         return false;
 
@@ -323,6 +351,8 @@ void CRenderManager::FrameMove() {
     {
         CSingleLock lock2(m_presentlock);
 
+        // Empty queued state overwrites any prior present step with IDLE before
+        // the READY/FLIP tests; it does not preserve a stray FLIP state.
         if(m_queued.empty()) {
             m_presentstep = PRESENT_IDLE;
         }
@@ -336,7 +366,9 @@ void CRenderManager::FrameMove() {
             m_presentevent.notify_all();
         }
 
-        // release all previous
+        // Release is prefix-committing.  If a renderer callback or deque
+        // operation throws, earlier release/free/erase mutations stay applied
+        // and m_bRenderGUI may not yet have been restored to true.
         for(auto it = m_discard.begin(); it != m_discard.end();) {
             // renderer may want to keep the frame for postprocessing
             if(!m_pRenderer->NeedBuffer(*it) || !m_bRenderGUI) {
@@ -354,6 +386,10 @@ void CRenderManager::FrameMove() {
     //	ManageCaptures();
 }
 
+// V302 four-reference-binary boundary: these legacy render-thread lifecycle
+// entry points are retained without callers in both Android shared objects and
+// are dead-stripped from both iOS slices.  Keep their Android-observable body
+// exact even though the current player path does not invoke them.
 void CRenderManager::PreInit() {
     if(!g_application.IsCurrentThread()) {
         //	CLog::Log(LOGERROR, "CRenderManager::PreInit - not called
@@ -397,6 +433,8 @@ void CRenderManager::UnInit() {
 }
 
 bool CRenderManager::Flush() {
+    // The fast check deliberately precedes all manager locks.  The main-thread
+    // branch repeats the check after taking state -> present -> data.
     if(!m_pRenderer)
         return true;
 
@@ -423,10 +461,18 @@ bool CRenderManager::Flush() {
             for(int i = 1; i < m_QueueSize; i++)
                 m_free.push_back(i);
 
+            // CEvent::Set is only a pulse.  It runs while all three manager
+            // locks are held, but does not acquire CEvent's external mutex or
+            // publish a persistent signaled state.
             m_flushEvent.Set();
         }
     } else {
-        assert(false);
+        // The two Android reference builds do not abort on this boundary: the
+        // surviving path goes straight to the 1000 ms event wait.  An active
+        // assert here would make local Debug builds observably stricter than
+        // the reference binaries.
+        // Reset is a no-op and the messenger post remains absent, so this can
+        // finish only on a future pulse, a spurious wake, or the timeout.
         m_flushEvent.Reset();
         //		CApplicationMessenger::GetInstance().PostMsg(TMSG_RENDERER_FLUSH);
         if(!m_flushEvent.WaitMSec(1000)) {
@@ -441,6 +487,9 @@ bool CRenderManager::Flush() {
 }
 
 void CRenderManager::CreateRenderer() {
+    // V303 correction: Android also retains a zero-xref out-of-line copy of
+    // this method; PreInit and internal Configure inline the same body.  Both
+    // iOS slices dead-strip the standalone copy.
     if(!m_pRenderer) {
 #if 0
             if (m_format == RENDER_FMT_VAAPI || m_format == RENDER_FMT_VAAPINV12)
@@ -525,6 +574,10 @@ void CRenderManager::DeleteRenderer() {
         //	CLog::Log(LOGDEBUG, "%s - deleting renderer",
         //__FUNCTION__);
 
+        // V302: this manager is deliberately non-owning.  Both Android
+        // implementations only clear the pointer; neither invokes UnInit nor
+        // delete.  The out-of-line method has no callers and is absent from
+        // both dead-stripped iOS slices, but UnInit inlines the same store.
         //	delete m_pRenderer;
         m_pRenderer = nullptr;
     }
@@ -718,6 +771,10 @@ void CRenderManager::FlipPage(
             return;
     }
 
+    // AddVideoPicture/WaitForBuffer bypass this manager queue and call the
+    // concrete renderer directly.  FlipPage nevertheless maintains this
+    // separate SPresent/free/queued/discard bookkeeping queue for stats and
+    // render-thread scheduling.
     CSingleLock lock(m_presentlock);
 
     if(m_free.empty())
@@ -771,6 +828,9 @@ void CRenderManager::FlipPage(
     }
 #endif
 
+// V302: retained with zero callers on Android and dead-stripped on iOS.  The
+// Android compilers inline PresentSingle/Fields/Blend below into this body;
+// their out-of-line copies are likewise unreferenced.
 void CRenderManager::Render(bool clear, uint32_t flags, uint32_t alpha,
                             bool gui) {
     //	CSingleExit exitLock(g_graphicsContext);
@@ -950,6 +1010,9 @@ void CRenderManager::UpdateDisplayLatency() {
 }
 
 void CRenderManager::UpdateResolution() {
+    // V303: the complete reference body is empty.  FrameMove's source-level
+    // call is optimized away; Android retains only a zero-xref nullsub and iOS
+    // dead-strips it.  In particular, this never consumes the trigger flag.
 #if 0
         if (m_bTriggerUpdateResolution)
         {
@@ -971,6 +1034,9 @@ void CRenderManager::UpdateResolution() {
 }
 
 void CRenderManager::TriggerUpdateResolution(float fps, int width, int flags) {
+    // Android-only zero-xref remnant.  There is no lock: width==0 preserves
+    // fps/width/flags, but the trigger becomes true unconditionally and remains
+    // sticky because UpdateResolution is empty.
     if(width) {
         m_fps = fps;
         m_width = width;
@@ -980,12 +1046,16 @@ void CRenderManager::TriggerUpdateResolution(float fps, int width, int flags) {
 }
 
 void CRenderManager::ToggleDebug() {
+    // Android-only zero-xref remnant.  This is intentionally unlocked and
+    // expires the timer by clearing totalWaitTime, not by changing startTime.
     m_renderDebug = !m_renderDebug;
     m_debugTimer.SetExpired();
 }
 
 // Get renderer info, can be called before configure
 CRenderInfo CRenderManager::GetRenderInfo() {
+    // V303: live in all four references before codec creation.  The null path
+    // returns optimal=0, max=NUM_BUFFERS, empty formats and null opaque pointer.
     CSingleLock lock(m_statelock);
     CRenderInfo info;
     if(!m_pRenderer) {
@@ -997,6 +1067,8 @@ CRenderInfo CRenderManager::GetRenderInfo() {
 }
 
 int CRenderManager::AddVideoPicture(DVDVideoPicture &pic) {
+    // This immediate virtual forwarding is the complete executable native
+    // path.  The legacy manager-buffer implementation below is unreachable.
     return m_pRenderer->AddVideoPicture(pic, 0);
 
     int index;
@@ -1085,6 +1157,8 @@ int CRenderManager::AddVideoPicture(DVDVideoPicture &pic) {
 
 int CRenderManager::WaitForBuffer(volatile std::atomic_bool &bStop,
                                   int timeout) {
+    // Buffer capacity belongs to the concrete four-slot picture ring.  The
+    // manager's own free/queued/discard deques are not consulted here.
     return m_pRenderer->WaitForBuffer(bStop, timeout);
 
     CSingleLock lock(m_presentlock);
@@ -1143,6 +1217,8 @@ void CRenderManager::PrepareNextRender() {
         //	CLog::Log(LOGERROR, "CRenderManager::PrepareNextRender -
         // asked
         // to prepare with nothing available");
+        // No timing/selection state is reset here: forceNext, lateframes,
+        // presentpts and presentsource all survive the empty notification.
         m_presentstep = PRESENT_IDLE;
         m_presentevent.notify_all();
         return;
@@ -1180,6 +1256,7 @@ void CRenderManager::PrepareNextRender() {
         m_dvdClock.SetVsyncAdjust(0);
     }
 
+    // forceNext is a persistent bypass; this function never clears it.
     if(renderPts >= nextFramePts || m_forceNext) {
         // see if any future queued frames are already due
         auto iter = m_queued.begin();
@@ -1206,6 +1283,8 @@ void CRenderManager::PrepareNextRender() {
             m_QueueSkip++;
         }
 
+        // Conversion truncates toward zero.  A zero result clears the entire
+        // accumulated late-frame count instead of leaving it unchanged.
         int lateframes = (renderPts - m_Queue[idx].pts) * m_fps / DVD_TIME_BASE;
         if(lateframes)
             m_lateframes += lateframes;
@@ -1222,6 +1301,9 @@ void CRenderManager::PrepareNextRender() {
 }
 
 void CRenderManager::DiscardBuffer() {
+    // Concrete flush intentionally precedes the manager lock and has no null
+    // guard.  Only queued slots move to discard; current/free/discard contents,
+    // timing state, and non-READY present steps survive.
     m_pRenderer->Flush();
     CSingleLock lock2(m_presentlock);
 
@@ -1248,6 +1330,8 @@ void CRenderManager::CheckEnableClockSync() {
     // refresh rate can be a multiple of video fps
     double diff = 1.0;
 
+    // The native path has no guard for negative/NaN/tiny adjusted fps.  A
+    // failed GetClockInfo simply leaves the configured fps unchanged.
     if(m_fps != 0) {
         float fps = m_fps;
         double refreshrate, clockspeed;

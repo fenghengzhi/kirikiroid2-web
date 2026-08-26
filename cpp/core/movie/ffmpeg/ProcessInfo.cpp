@@ -1,15 +1,5 @@
 #include "ProcessInfo.h"
 
-#include <utility>
-
-#include <utility>
-
-#include <utility>
-
-#include <utility>
-
-#include <utility>
-
 NS_KRMOVIE_BEGIN
 // Override for platform ports
 #if !defined(PLATFORM_OVERRIDE)
@@ -26,6 +16,8 @@ CProcessInfo::~CProcessInfo() = default;
 void CProcessInfo::ResetVideoCodecInfo() {
     CSingleLock lock(m_videoCodecSection);
 
+    // The reference implementation deliberately performs the render-info and
+    // seeking resets below while holding only the video-codec lock.
     m_videoIsHWDecoder = false;
     m_videoDecoderName = "unknown";
     m_videoDeintMethod = "unknown";
@@ -54,7 +46,8 @@ void CProcessInfo::SetVideoDecoderName(std::string name, bool isHw) {
     CSingleLock lock(m_videoCodecSection);
 
     m_videoIsHWDecoder = isHw;
-    m_videoDecoderName = std::move(name);
+    // The reference setter copies from its by-value argument; do not move it.
+    m_videoDecoderName = name;
 
     //	CServiceBroker::GetDataCacheCore().SetVideoDecoderName(m_videoDecoderName,
     // m_videoIsHWDecoder);
@@ -75,7 +68,8 @@ bool CProcessInfo::IsVideoHwDecoder() {
 void CProcessInfo::SetVideoDeintMethod(std::string method) {
     CSingleLock lock(m_videoCodecSection);
 
-    m_videoDeintMethod = std::move(method);
+    // The reference setter copies from its by-value argument; do not move it.
+    m_videoDeintMethod = method;
 
     //	CServiceBroker::GetDataCacheCore().SetVideoDeintMethod(m_videoDeintMethod);
 }
@@ -89,7 +83,8 @@ std::string CProcessInfo::GetVideoDeintMethod() {
 void CProcessInfo::SetVideoPixelFormat(std::string pixFormat) {
     CSingleLock lock(m_videoCodecSection);
 
-    m_videoPixelFormat = std::move(pixFormat);
+    // The reference setter copies from its by-value argument; do not move it.
+    m_videoPixelFormat = pixFormat;
 
     //	CServiceBroker::GetDataCacheCore().SetVideoPixelFormat(m_videoPixelFormat);
 }
@@ -211,7 +206,6 @@ void CProcessInfo::ResetAudioCodecInfo() {
     m_audioDecoderName = "unknown";
     m_audioChannels = "unknown";
     m_audioSampleRate = 0;
-    ;
     m_audioBitsPerSample = 0;
 
     // 	CServiceBroker::GetDataCacheCore().SetAudioDecoderName(m_audioDecoderName);
@@ -223,7 +217,8 @@ void CProcessInfo::ResetAudioCodecInfo() {
 void CProcessInfo::SetAudioDecoderName(std::string name) {
     CSingleLock lock(m_audioCodecSection);
 
-    m_audioDecoderName = std::move(name);
+    // The reference setter copies from its by-value argument; do not move it.
+    m_audioDecoderName = name;
 
     //	CServiceBroker::GetDataCacheCore().SetAudioDecoderName(m_audioDecoderName);
 }
@@ -237,7 +232,8 @@ std::string CProcessInfo::GetAudioDecoderName() {
 void CProcessInfo::SetAudioChannels(std::string channels) {
     CSingleLock lock(m_audioCodecSection);
 
-    m_audioChannels = std::move(channels);
+    // The reference setter copies from its by-value argument; do not move it.
+    m_audioChannels = channels;
 
     //	CServiceBroker::GetDataCacheCore().SetAudioChannels(m_audioChannels);
 }
@@ -306,6 +302,8 @@ void CProcessInfo::UpdateRenderInfo(CRenderInfo &info) {
 
 // player states
 void CProcessInfo::SetStateSeeking(bool active) {
+    // This is intentionally asymmetric with IsSeeking(): the reference setter
+    // takes the render lock while the getter takes the state lock.
     CSingleLock lock(m_renderSection);
 
     m_stateSeeking = active;

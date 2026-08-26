@@ -27,6 +27,9 @@ NS_KRMOVIE_BEGIN
 
 void CSelectionStreams::Clear(StreamType type, StreamSource source) {
     std::lock_guard<std::recursive_mutex> lock(m_section);
+    // NONE is an independent wildcard for each dimension.  remove_if keeps
+    // survivor order; erase destroys only the compacted tail and retains
+    // vector capacity.
     auto new_end = std::remove_if(
         m_Streams.begin(), m_Streams.end(),
         [type, source](const SelectionStream &stream) {
@@ -43,6 +46,9 @@ int CSelectionStreams::IndexOf(StreamType type, int source, int64_t demuxerId,
     for(auto &m_Stream : m_Streams) {
         if(type && m_Stream.type != type)
             continue;
+        // Count is type-relative and advances before the optional source
+        // filter.  With id<0 the identity arguments are deliberately ignored;
+        // Count(type) depends on that exact behavior.
         count++;
         if(source && m_Stream.source != source)
             continue;
@@ -65,12 +71,18 @@ SelectionStream &CSelectionStreams::Get(StreamType type, int index) {
             continue;
         count++;
         if(count == index)
+            // The guard is released on return.  A concurrent vector erase or
+            // reallocation can therefore invalidate this reference.
             return m_Stream;
     }
+    // m_invalid is mutable and shares the CSelectionStreams lifetime.
     return m_invalid;
 }
 
 std::vector<SelectionStream> CSelectionStreams::Get(StreamType type) {
+    // Intentionally unlocked in all four references.  This is a value snapshot
+    // only under the player's normal single-writer assumption; concurrent
+    // mutation is not serialized here.
     std::vector<SelectionStream> streams;
     std::copy_if(
         m_Streams.begin(), m_Streams.end(), std::back_inserter(streams),
@@ -86,6 +98,7 @@ bool CSelectionStreams::Get(StreamType type, CDemuxStream::EFlags flag,
             continue;
         if((m_Stream.flags & flag) != flag)
             continue;
+        // flag==0 consequently selects the first stream of this exact type.
         out = m_Stream;
         return true;
     }
@@ -99,7 +112,9 @@ int CSelectionStreams::Source(StreamSource source,
     for(auto &s : m_Streams) {
         if(STREAM_SOURCE_MASK(s.source) != source)
             continue;
-        // if it already exists, return same
+        // The first exact, case-sensitive filename match wins across all
+        // stream types.  Otherwise the full source id, not just its mask, is
+        // used for max+1; there is no integer-overflow guard.
         if(s.filename == filename)
             return s.source;
         if(index < s.source)
@@ -111,6 +126,10 @@ int CSelectionStreams::Source(StreamSource source,
 
 void CSelectionStreams::Update(SelectionStream &s) {
     std::lock_guard<std::recursive_mutex> lock(m_section);
+    // IndexOf and the Get/Count paths recursively acquire the same mutex.
+    // Both branches write s.type_index before a potentially throwing
+    // assignment or vector copy, so the caller object can be changed even if
+    // the container update does not complete.
     int index = IndexOf(s.type, s.source, s.demuxerId, s.id);
     if(index >= 0) {
         SelectionStream &o = Get(s.type, index);
@@ -125,6 +144,9 @@ void CSelectionStreams::Update(SelectionStream &s) {
 void CSelectionStreams::Update(InputStream *input, IDemux *demuxer,
                                const std::string &filename2) {
     if(demuxer) {
+        // GetFileName is inlined as a member reference before input is tested.
+        // A null input therefore does not safely select VIDEOMUX: Source below
+        // still receives a string reference derived from the null pointer.
         int source;
         const std::string &filename = input->GetFileName();
         if(input) /* hack to know this is sub decoder */
@@ -135,11 +157,15 @@ void CSelectionStreams::Update(InputStream *input, IDemux *demuxer,
         else
             source = Source(STREAM_SOURCE_VIDEOMUX, filename);
 
+        // GetStreams returns a temporary owning vector of borrowed raw stream
+        // pointers.  The vector storage is destroyed here; stream objects stay
+        // demux-owned.  Null elements are not guarded.
         for(auto stream : demuxer->GetStreams()) {
             /* skip streams with no type */
             if(stream->type == STREAM_NONE)
                 continue;
-            /* make sure stream is marked with right source */
+            // This demux-stream mutation precedes all potentially throwing
+            // string copies and the selection upsert, and is not rolled back.
             stream->source = source;
 
             SelectionStream s;
@@ -171,6 +197,9 @@ void CSelectionStreams::Update(InputStream *input, IDemux *demuxer,
                 }
                 s.channels = ((CDemuxStreamAudio *)stream)->iChannels;
             }
+            // Upsert only; this function never removes stale selection rows.
+            // Duplicate identities later in the demux vector overwrite the
+            // earlier value while preserving its first type_index.
             Update(s);
         }
     }
@@ -193,8 +222,15 @@ BasePlayer::BasePlayer(CBaseRenderer *renderer) :
 }
 
 BasePlayer::~BasePlayer() {
+    // CloseInputStream relies on CThread::entry calling OnExit to delete the
+    // demuxer and release its InputStream reference.  If Play/Create was never
+    // reached there is no worker and no OnExit: CloseInputStream drops only
+    // this object's InputStream reference, while the raw demuxer (and its
+    // retained stream) survives the remaining member teardown.
     CloseInputStream();
     DestroyPlayers();
+    // The four reference binaries contain no non-empty registration producer
+    // for this host.  Preserve their unconditional absent-key erase anyway.
     ::Application->RegisterActiveEvent(this, nullptr);
 }
 
@@ -210,7 +246,8 @@ void BasePlayer::Play() {
 
 void BasePlayer::Stop() {
     m_bStopStatus = true;
-    // pause and rewind
+    // Pause and rewind through queued player messages.  SeekTime is not a
+    // direct demux seek; it also waits on a 500 ms synchronize message.
     SetSpeed(0);
     SeekTime(0);
 }
@@ -221,10 +258,16 @@ void BasePlayer::Pause() {
 }
 
 void BasePlayer::GetVideoSize(long *width, long *height) {
+    // This outer recursive lock deliberately spans the nested IndexOf/Get
+    // locks, the returned SelectionStream reference use, and both output
+    // stores.  It keeps that reference stable here even though Get alone
+    // returns after releasing its own guard.
     std::lock_guard<std::recursive_mutex> lock(m_SelectionStreams.m_section);
     int streamId = GetVideoStream();
 
     if(streamId < 0) {
+        // Width is committed first.  A bad height output can therefore fault
+        // after width changed and before the outer lock's normal release.
         *width = 0;
         *height = 0;
         return;
@@ -232,6 +275,8 @@ void BasePlayer::GetVideoSize(long *width, long *height) {
 
     SelectionStream &s = m_SelectionStreams.Get(STREAM_VIDEO, streamId);
 
+    // Keep the same width-then-height partial-publication boundary.  In
+    // particular, aliasing the outputs leaves the final value as height.
     *width = s.width;
     *height = s.height;
 }
@@ -252,26 +297,41 @@ void BasePlayer::OnActive() {
 }
 
 void BasePlayer::VideoParamsChange() {
+    // Plain ref=1 PLAYER_AVCHANGE goes to the normal FIFO.  Put owns/deletes
+    // it on ordinary success or an uninitialized queue, but an exception
+    // before Put's final Release can leak this raw message; status is ignored.
     m_messenger.Put(new CDVDMsg(CDVDMsg::PLAYER_AVCHANGE));
 }
 
 void BasePlayer::GetDebugInfo(std::string &audio, std::string &video,
                               std::string &general) {
+    // Exact no-op: preserve all three caller strings, including their storage
+    // representation and capacity.  The native body does not read this or the
+    // reference addresses.
     // 	audio = m_VideoPlayerAudio->GetPlayerInfo();
     // 	video = m_VideoPlayerVideo->GetPlayerInfo();
     // 	GetGeneralInfo(general);
 }
 
 void BasePlayer::UpdateClockSync(bool enabled) {
+    // Thin raw-pointee forwarder.  CProcessInfo owns the render-section lock;
+    // this layer does not null-check or extend its unique-owned lifetime.
     m_processInfo->SetRenderClockSync(enabled);
 }
 
 void BasePlayer::UpdateRenderInfo(CRenderInfo &info) {
+    // The downstream memberwise copy commits both scalars before its owning
+    // formats vector and opaque pointer.  Keep exception/partial-copy behavior
+    // in CProcessInfo rather than adding a BasePlayer transaction.
     m_processInfo->UpdateRenderInfo(info);
 }
 
 bool BasePlayer::OpenFromStream(IStream *stream, const tjs_char *streamname,
                                 const tjs_char *type, uint64_t size) {
+    // A never-started instance skips CloseInputStream here.
+    // OpenInputStream/OpenDemuxStream below replace the old stream/demuxer,
+    // but MessageQueue::Init does not clear either message list, so messages
+    // queued before the first worker can carry into this new open.
     if(IsRunning())
         CloseInputStream();
 
@@ -295,6 +355,9 @@ bool BasePlayer::OpenFromStream(IStream *stream, const tjs_char *streamname,
 
     //	m_ready.Reset();
 
+    // V302: intentionally disabled in the reference player call chain.  Both
+    // Android binaries retain CRenderManager::PreInit with zero xrefs and both
+    // iOS binaries dead-strip it.
     //	m_renderManager.PreInit();
 
     m_CurrentVideo.Clear();
@@ -303,7 +366,7 @@ bool BasePlayer::OpenFromStream(IStream *stream, const tjs_char *streamname,
     // 	m_CurrentTeletext.Clear();
     // 	m_CurrentRadioRDS.Clear();
 
-    m_messenger.Init();
+    m_messenger.Init(); // resets bookkeeping, not queued list nodes
 
     //	CUtil::ClearTempFonts();
     m_playSpeed = DVD_PLAYSPEED_PAUSE; // pause at begin
@@ -355,6 +418,9 @@ bool BasePlayer::CloseInputStream() {
     // 	if (m_pSubtitleDemuxer)
     // 		m_pSubtitleDemuxer->Abort();
 
+    // The demuxer took its own InputStream AddRef in Open.  Releasing this
+    // field before joining is therefore safe only because a live worker's
+    // OnExit later deletes the demuxer and drops that remaining reference.
     SAFE_RELEASE(m_pInputStream);
 
     // 	if (m_pInputStream)
@@ -363,9 +429,9 @@ bool BasePlayer::CloseInputStream() {
     //	CLog::Log(LOGNOTICE, "VideoPlayer: waiting for threads to
     // exit");
 
-    // wait for the main thread to finish up
-    // since this main thread cleans up all other resources and
-    // threads we are done after the StopThread call
+    // A real worker runs OnExit before join returns; OnExit deletes demuxer,
+    // releases its InputStream and ends the message queue.  With no thread,
+    // StopThread only sets/notifies m_bStop and none of that cleanup occurs.
     StopThread();
 
     m_HasVideo = false;
@@ -373,6 +439,8 @@ bool BasePlayer::CloseInputStream() {
     //	m_canTempo = false;
 
     //	CLog::Log(LOGNOTICE, "VideoPlayer: finished waiting");
+    // V302: same native reachability boundary as PreInit: zero xrefs on
+    // Android and no emitted method on iOS.
     //	m_renderManager.UnInit();
     return true;
 }
@@ -411,7 +479,8 @@ void BasePlayer::OnExit() {
     // 	CloseStream(m_CurrentTeletext, !m_bAbortRequest);
     // 	CloseStream(m_CurrentRadioRDS, !m_bAbortRequest);
 
-    // destroy objects
+    // This is the only CloseInputStream path that destroys the demuxer.  It is
+    // reached from CThread::entry, not from an unstarted BasePlayer destructor.
     SAFE_DELETE(m_pDemuxer);
     // 	SAFE_DELETE(m_pSubtitleDemuxer);
     // 	SAFE_DELETE(m_pCCDemuxer);
@@ -465,6 +534,7 @@ bool BasePlayer::IsValidStream(CCurrentStream &stream) {
         }
 #endif
     if(source == STREAM_SOURCE_DEMUX) {
+        // There is no m_pDemuxer null guard once a DEMUX current is selected.
         CDemuxStream *st = m_pDemuxer->GetStream(stream.demuxerId, stream.id);
         if(st == nullptr || st->disabled)
             return false;
@@ -489,6 +559,8 @@ bool BasePlayer::IsValidStream(CCurrentStream &stream) {
 }
 
 bool BasePlayer::IsBetterStream(CCurrentStream &current, CDemuxStream *stream) {
+    // This is only an empty-slot gate, not a priority comparison.  Ranking is
+    // confined to OpenDefaultStreams' sorted snapshots.
     if(stream->disabled)
         return false;
     if(stream->source == current.source && stream->uniqueId == current.id &&
@@ -510,6 +582,9 @@ bool BasePlayer::IsBetterStream(CCurrentStream &current, CDemuxStream *stream) {
 void BasePlayer::CheckBetterStream(CCurrentStream &current,
                                    CDemuxStream *stream) {
     IDVDStreamPlayer *player = GetStreamPlayer(current.player);
+    // An invalid selected stream remains selected while its child is not
+    // stalled.  ProcessPacket can subsequently route this same packet using
+    // its weaker id/source/type identity test.
     if(!IsValidStream(current) && (player == nullptr || player->IsStalled()))
         CloseStream(current, true);
 
@@ -520,6 +595,10 @@ void BasePlayer::CheckBetterStream(CCurrentStream &current,
 
 void BasePlayer::CheckStreamChanges(CCurrentStream &current,
                                     CDemuxStream *stream) {
+    // Pointer identity and the stream changes counter are separate gates.  A
+    // changed hint rebuilds DEMUX selections/default streams before the final
+    // pointer/counter publication; a throwing rebuild can therefore leave
+    // partial selection/reopen effects and make the next packet retry here.
     if(current.stream != (void *)stream || current.changes != stream->changes) {
         /* check so that dmuxer hints or extra data hasn't changed */
         /* if they have, reopen stream */
@@ -592,6 +671,10 @@ void BasePlayer::Process() {
 
         DemuxPacket *pPacket = nullptr;
         CDemuxStream *pStream = nullptr;
+        // The bool result is deliberately ignored.  A natural EOF, an FFmpeg
+        // read failure and AVERROR_EXIT from demux Abort all arrive here as a
+        // null packet.  There is no second abort check between ReadPacket and
+        // the null-packet branch below.
         ReadPacket(pPacket, pStream);
         if(pPacket && !pStream) {
             /* probably a empty packet, just free it and move on */
@@ -623,6 +706,9 @@ void BasePlayer::Process() {
             if(m_CurrentVideo.inited)
                 m_VideoPlayerVideo->SendMessage(
                     new CDVDMsg(CDVDMsg::GENERAL_EOF));
+            // GENERAL_EOF is a no-op control message in both child consumers.
+            // HasData counts only queued demux-packet bytes, so the wait below
+            // neither counts nor waits for this marker itself to be consumed.
             // 			if (m_CurrentSubtitle.inited)
             // 				m_VideoPlayerSubtitle->SendMessage(new
             // CDVDMsg(CDVDMsg::GENERAL_EOF)); 			if
@@ -662,6 +748,13 @@ void BasePlayer::Process() {
             // TODO process loop info
             SetSpeed(0);
             SeekTime(0); // rewind
+            // This is the worker-thread producer for layerExMovie's Ended
+            // event.  The callback is neither cleared nor once-guarded here;
+            // the Process loop continues and subsequent delivery is governed
+            // only by the rewound demux/player state.  An Abort-induced null
+            // read can also reach this callback when playback is non-paused
+            // and both child data-byte counts are already zero; buffered data
+            // instead causes one Sleep/continue and the next loop aborts.
             if(m_callback)
                 m_callback(KRMovieEvent::Ended, nullptr);
             continue;
@@ -670,7 +763,9 @@ void BasePlayer::Process() {
         // it's a valid data packet, reset error counter
         m_errorCount = 0;
 
-        // see if we can find something better to play
+        // Every packet checks audio first and video second before dispatch.
+        // IsBetterStream does not rank candidates; it opens only an empty
+        // current slot (possibly just cleared as invalid/stalled).
         CheckBetterStream(m_CurrentAudio, pStream);
         CheckBetterStream(m_CurrentVideo, pStream);
         // 		CheckBetterStream(m_CurrentSubtitle, pStream);
@@ -762,6 +857,9 @@ void BasePlayer::CreatePlayers() {
     } else
 #endif
     {
+        // Each assignment publishes an adjusted secondary-interface pointer.
+        // Video publishes first: if audio allocation/construction throws, the
+        // false gate leaks that child together with its borrowed parent aliases.
         m_VideoPlayerVideo =
             new CVideoPlayerVideo(&m_clock, /*&m_overlayContainer,*/
                                   m_messenger, m_renderManager, *m_processInfo);
@@ -779,12 +877,15 @@ void BasePlayer::DestroyPlayers() {
     if(!m_players_created)
         return;
 
+    // These deletes enter through secondary vtables; their deleting-dtor
+    // thunks recover the complete allocation before calling operator delete.
     delete m_VideoPlayerVideo;
     delete m_VideoPlayerAudio;
     // 	delete m_VideoPlayerSubtitle;
     // 	delete m_VideoPlayerTeletext;
     // 	delete m_VideoPlayerRadioRDS;
 
+    // The raw fields are not nulled; the flag is the only gate.
     m_players_created = false;
 }
 
@@ -830,6 +931,8 @@ bool BasePlayer::OpenStream(CCurrentStream &current, int64_t demuxerId,
         } else
 #endif
     if(STREAM_SOURCE_MASK(source) == STREAM_SOURCE_TEXT) {
+        // TEXT has no CDemuxStream pointer.  It copies the selection filename
+        // and always borrows fps scale/rate from the current video hint.
         int index = m_SelectionStreams.IndexOf(current.type, source, demuxerId,
                                                iStream);
         if(index < 0)
@@ -847,6 +950,9 @@ bool BasePlayer::OpenStream(CCurrentStream &current, int64_t demuxerId,
         if(!stream || stream->disabled)
             return false;
 
+        // Enable precedes hint construction and child open.  A later throw is
+        // not rolled back; a false child-open result marks stream disabled but
+        // does not call EnableStream(..., false).
         m_pDemuxer->EnableStream(demuxerId, iStream, true);
 
         hint.Assign(*stream, true);
@@ -864,6 +970,8 @@ bool BasePlayer::OpenStream(CCurrentStream &current, int64_t demuxerId,
 #endif
     }
 
+    // Source masks other than TEXT/DEMUX still reach this switch with the
+    // default-constructed empty hint and a null stream.
     bool res;
     switch(current.type) {
         case STREAM_AUDIO:
@@ -904,7 +1012,7 @@ bool BasePlayer::OpenStream(CCurrentStream &current, int64_t demuxerId,
             /* mark stream as disabled, to disallaw further attempts*/
             //			CLog::Log(LOGWARNING, "%s - Unsupported stream
             //%d. Stream disabled.", __FUNCTION__, stream->uniqueId);
-            stream->disabled = true;
+            stream->disabled = true; // the earlier demux enable remains set
         }
     }
 
@@ -923,11 +1031,16 @@ bool BasePlayer::OpenAudioStream(CDVDStreamInfo &hint, bool reset) {
         if(!player->OpenStream(hint))
             return false;
 
+        // On a running child the normal-priority codec change was just queued;
+        // this priority speed message overtakes it.  Audio records the speed
+        // before the change while the parent immediately publishes STARTING.
         static_cast<IDVDStreamPlayerAudio *>(player)->SetSpeed(
             m_streamPlayerSpeed);
         m_CurrentAudio.syncState = IDVDStreamPlayer::SYNC_STARTING;
         m_CurrentAudio.packets = 0;
     } else if(reset)
+        // Equal hints never reopen a codec.  reset adds only a normal RESET
+        // message; the parent packet/sync bookkeeping below is not restarted.
         player->SendMessage(new CDVDMsg(CDVDMsg::GENERAL_RESET), 0);
 
     m_HasAudio = true;
@@ -940,6 +1053,10 @@ bool BasePlayer::OpenVideoStream(CDVDStreamInfo &hint, bool reset) {
     // 		hint.stereo_mode =
     // CStereoscopicsManager::GetInstance().DetectStereoModeByString(m_item.GetPath());
 
+    // This is the original insertion-order row at video index 0, not the
+    // candidate selected from OpenDefaultStreams' stable-sorted copy.  The
+    // returned reference is already unlocked; missing index 0 yields mutable
+    // m_invalid, and a concurrent Clear/reallocation can invalidate it.
     SelectionStream &s = m_SelectionStreams.Get(STREAM_VIDEO, 0);
 
     // 	if (hint.flags & AV_DISPOSITION_ATTACHED_PIC)
@@ -961,11 +1078,15 @@ bool BasePlayer::OpenVideoStream(CDVDStreamInfo &hint, bool reset) {
         if(s.stereo_mode == "mono")
             s.stereo_mode = "";
 
+        // The priority speed message overtakes the normal codec-change message:
+        // the old video codec receives SetSpeed before it is drained/deleted;
+        // the private install path does not explicitly SetSpeed on the new one.
         static_cast<IDVDStreamPlayerVideo *>(player)->SetSpeed(
             m_streamPlayerSpeed);
         m_CurrentVideo.syncState = IDVDStreamPlayer::SYNC_STARTING;
         m_CurrentVideo.packets = 0;
     } else if(reset)
+        // Same-hint reset is a queued RESET only, not a codec reopen.
         player->SendMessage(new CDVDMsg(CDVDMsg::GENERAL_RESET), 0);
 
     m_HasVideo = true;
@@ -1022,6 +1143,9 @@ void BasePlayer::ProcessPacket(CDemuxStream *pStream, DemuxPacket *pPacket) {
     // process packet if it belongs to selected stream.
     // for dvd's don't allow automatic opening of streams*/
 
+    // Audio has strict first-match priority.  Identity uses packet stream-id
+    // plus pStream demuxerId/source/type; packet.demuxerId and current.stream
+    // pointer identity are not checked at this dispatch layer.
     if(CheckIsCurrent(m_CurrentAudio, pStream, pPacket))
         ProcessAudioData(pStream, pPacket);
     else if(CheckIsCurrent(m_CurrentVideo, pStream, pPacket))
@@ -1051,6 +1175,9 @@ void BasePlayer::ProcessAudioData(CDemuxStream *pStream, DemuxPacket *pPacket) {
     if(CheckPlayerInit(m_CurrentAudio))
         drop = true;
 
+    // The message takes the raw packet owner.  Child SendMessage is void and
+    // hides queue.Put's result: an uninitialized queue releases the message
+    // (and packet) with -2, yet this parent packet counter still increments.
     m_VideoPlayerAudio->SendMessage(new CDVDMsgDemuxerPacket(pPacket, drop));
     m_CurrentAudio.packets++;
 }
@@ -1059,7 +1186,9 @@ void BasePlayer::ProcessVideoData(CDemuxStream *pStream, DemuxPacket *pPacket) {
     CheckStreamChanges(m_CurrentVideo, pStream);
     bool checkcont = false;
 
-    if(pPacket->iSize != 4) // don't check the EOF_SEQUENCE of stillframes
+    // Size alone is the gate: every exactly-four-byte video packet skips both
+    // continuity and timestamp updates; the payload bytes are never inspected.
+    if(pPacket->iSize != 4)
     {
         checkcont = CheckContinuity(m_CurrentVideo, pPacket);
         UpdateTimestamps(m_CurrentVideo, pPacket);
@@ -1074,6 +1203,8 @@ void BasePlayer::ProcessVideoData(CDemuxStream *pStream, DemuxPacket *pPacket) {
     if(CheckSceneSkip(m_CurrentVideo))
         drop = true;
 
+    // As on audio, the owning message may be consumed by an uninitialized
+    // child queue while this cumulative producer count still advances.
     m_VideoPlayerVideo->SendMessage(new CDVDMsgDemuxerPacket(pPacket, drop));
     m_CurrentVideo.packets++;
 }
@@ -1212,6 +1343,10 @@ void BasePlayer::HandleMessages() {
 
     while(m_messenger.Get(&pMsg, 0) == MSGQ_OK) {
 
+        // Get already removed the current oldest node.  A seek is executed only
+        // when neither kind of seek remains; superseded seeks fall through to
+        // the common Release below.  Speed and synchronize messages do not use
+        // this coalescing gate.
         if(pMsg->IsType(CDVDMsg::PLAYER_SEEK) &&
            m_messenger.GetPacketCount(CDVDMsg::PLAYER_SEEK) == 0 &&
            m_messenger.GetPacketCount(CDVDMsg::PLAYER_SEEK_CHAPTER) == 0) {
@@ -1629,6 +1764,9 @@ void BasePlayer::HandleMessages() {
 #endif
         } else if(pMsg->IsType(CDVDMsg::PLAYER_STARTED)) {
             SStartMsg &msg = ((CDVDMsgType<SStartMsg> *)pMsg)->m_value;
+            // No stream id, child pointer, generation or expected-state check:
+            // any surviving player=1/2 node overwrites the corresponding
+            // current-stream handshake, even if it belongs to an older stream.
             if(msg.player == VideoPlayer_AUDIO) {
                 m_CurrentAudio.syncState = IDVDStreamPlayer::SYNC_WAITSYNC;
                 m_CurrentAudio.cachetime = msg.cachetime;
@@ -1654,6 +1792,9 @@ void BasePlayer::HandleMessages() {
                     }
 #endif
         } else if(pMsg->IsType(CDVDMsg::GENERAL_SYNCHRONIZE)) {
+            // The player source is consumed once and never requeued here.  A
+            // player-only message left behind by a caller-side global timeout
+            // reaches its complete mask immediately and is then released.
             ((CDVDMsgGeneralSynchronize *)pMsg)->Wait(100, SYNCSOURCE_PLAYER);
             // 			if ()
             // 				CLog::Log(LOGDEBUG, "CVideoPlayer -
@@ -1671,12 +1812,17 @@ void BasePlayer::HandleMessages() {
 void BasePlayer::SetCaching(ECacheState state) {
     if(state == CACHESTATE_FLUSH) {
         double level, delay, offset;
+        // GetCachingTimes is a compile-time false path in the four references,
+        // so FLUSH always becomes INIT.  Keep the source-level branch because
+        // it is the structure that produces that optimized result.
         if(GetCachingTimes(level, delay, offset))
             state = CACHESTATE_FULL;
         else
             state = CACHESTATE_INIT;
     }
 
+    // A repeated state request does not refresh either timer and does not clear
+    // a pre-existing clock speed adjustment.
     if(m_caching == state)
         return;
 
@@ -1684,6 +1830,8 @@ void BasePlayer::SetCaching(ECacheState state) {
     //%d",
     // state);
     if(state == CACHESTATE_FULL || state == CACHESTATE_INIT) {
+        // Cache pause leaves m_playSpeed and demux speed untouched.  It pauses
+        // the clock/children and separately publishes streamPlayerSpeed=0.
         m_clock.SetSpeed(DVD_PLAYSPEED_PAUSE);
 #ifdef HAS_OMXPLAYER
         if(m_omxplayer_mode)
@@ -1702,12 +1850,16 @@ void BasePlayer::SetCaching(ECacheState state) {
 
     if(state == CACHESTATE_PLAY ||
        (state == CACHESTATE_DONE && m_caching != CACHESTATE_PLAY)) {
+        // PLAY always restores.  DONE reached from PLAY does not restore again,
+        // because the PLAY transition already did so.
         m_clock.SetSpeed(m_playSpeed);
         m_VideoPlayerAudio->SetSpeed(m_playSpeed);
         m_VideoPlayerVideo->SetSpeed(m_playSpeed);
         m_streamPlayerSpeed = m_playSpeed;
         //		m_pInputStream->ResetScanTimeout(0);
     }
+    // State publication precedes the independent clock-adjust reset.  None of
+    // the calls above or below are covered by a rollback transaction.
     m_caching = state;
 
     m_clock.SetSpeedAdjust(0);
@@ -1794,6 +1946,9 @@ double BasePlayer::GetSpeed() {
 }
 
 void BasePlayer::SeekTime(int64_t iTime) {
+    // The public 64-bit value and offset are narrowed to the message's int
+    // fields.  The message is FIFO-inserted and changes no demux state here;
+    // the worker later discards it if a newer seek/chapter request remains.
     int seekOffset = (int)(iTime - GetTime());
 
     CDVDMsgPlayerSeek::CMode mode;
@@ -1805,6 +1960,10 @@ void BasePlayer::SeekTime(int64_t iTime) {
     mode.sync = true;
 
     m_messenger.Put(new CDVDMsgPlayerSeek(mode));
+    // When the queue is initialized but no worker exists, this waits in 100 ms
+    // slices until the synchronize message's 500 ms global deadline.  The node
+    // stays linked across a later Init/reopen; the eventual worker marks the
+    // player-only source complete once and releases it.
     SynchronizeDemuxer();
     OnPlayBackSeek((int)iTime, seekOffset);
 }
@@ -1838,11 +1997,17 @@ int64_t BasePlayer::GetTime() {
 }
 
 int BasePlayer::GetCurrentFrame() {
-    // TODO accuracy
+    // GetTime completes its locked state/clock snapshot first; FPS is then
+    // sampled unlocked from the current video hint.  The int64 time is
+    // converted to double, and the final double-to-int conversion truncates
+    // toward zero with no finite or range guard.
     return GetTime() * GetFPS() / DVD_PLAYSPEED_NORMAL;
 }
 
 int BasePlayer::GetVideoStream() {
+    // As for audio, id<0 is not rejected here: IndexOf then returns the last
+    // video type-index when selection rows remain.  The current identity is
+    // sampled before the selection-vector mutex is acquired.
     return m_SelectionStreams.IndexOf(STREAM_VIDEO, m_CurrentVideo.source,
                                       m_CurrentVideo.demuxerId,
                                       m_CurrentVideo.id);
@@ -1857,6 +2022,10 @@ int BasePlayer::GetAudioStreamCount() {
 }
 
 int BasePlayer::GetAudioStream() {
+    // There is deliberately no id-validity gate here.  IndexOf's id<0 mode
+    // returns the last audio type-index when selection rows still exist.
+    // These current fields are also sampled before IndexOf takes its own
+    // selection-vector mutex; that mutex does not protect this identity.
     return m_SelectionStreams.IndexOf(STREAM_AUDIO, m_CurrentAudio.source,
                                       m_CurrentAudio.demuxerId,
                                       m_CurrentAudio.id);
@@ -1868,6 +2037,8 @@ void BasePlayer::HandlePlaySpeed() {
     // 	if (isInMenu && m_caching != CACHESTATE_DONE)
     // 		SetCaching(CACHESTATE_DONE);
 
+    // These are deliberately independent live-state tests, not an else-if
+    // chain.  One invocation may progress FULL -> INIT -> PLAY -> DONE.
     if(m_caching == CACHESTATE_FULL) {
         double level, delay, offset;
         if(GetCachingTimes(level, delay, offset)) {
@@ -2074,6 +2245,8 @@ void BasePlayer::HandlePlaySpeed() {
                 new CDVDMsgDouble(CDVDMsg::GENERAL_RESYNC, clock), 1);
             m_VideoPlayerVideo->SendMessage(
                 new CDVDMsgDouble(CDVDMsg::GENERAL_RESYNC, clock), 1);
+            // Both priority resync nodes precede SetCaching's priority speed
+            // restore nodes; same-priority queue order is FIFO.
             SetCaching(CACHESTATE_DONE);
 
             m_syncTimer.Set(3000);
@@ -2139,6 +2312,9 @@ void BasePlayer::HandlePlaySpeed() {
 
                 double error;
                 error = m_clock.GetClock() - m_SpeedState.lastpts;
+                // Both divisions here are intentionally integer divisions.
+                // The first is exactly the sign (+1/-1); the second creates the
+                // capped fast-forward error window.
                 error *= m_playSpeed / abs(m_playSpeed);
 
                 // allow a bigger error when going ff, the faster we
@@ -2191,6 +2367,9 @@ void BasePlayer::SynchronizeDemuxer() {
 
     CDVDMsgGeneralSynchronize *message =
         new CDVDMsgGeneralSynchronize(500, SYNCSOURCE_PLAYER);
+    // Put takes/list-owns a reference; this local reference is released after
+    // Wait.  A caller-side timeout does not unlink the node; later player-side
+    // consumption completes this source mask immediately and does not requeue.
     m_messenger.Put(message->AddRef());
     message->Wait(m_bStop, 0);
     message->Release();
@@ -2248,6 +2427,9 @@ bool BasePlayer::CheckContinuity(CCurrentStream &current,
         // current.dts);
     }
 
+    // Keep the original candidate.  An unconfirmed jump invalidates the
+    // packet's pts/dts but still publishes this original value as lastdts so
+    // the opposite stream can confirm it on a later packet.
     double lastdts = pPacket->dts;
     if(correction != 0.0) {
         // we want the dts values of two streams to close, or for one
@@ -2256,6 +2438,8 @@ bool BasePlayer::CheckContinuity(CCurrentStream &current,
         double that_dts = current.type == STREAM_AUDIO ? m_CurrentVideo.lastdts
                                                        : m_CurrentAudio.lastdts;
 
+        // All thresholds are strict: forward >1 s, backward >500 ms above,
+        // and two-stream confirmation <1 s here (equality does not qualify).
         if(m_CurrentAudio.id == -1 || m_CurrentVideo.id == -1 ||
            current.lastdts == DVD_NOPTS_VALUE ||
            fabs(this_dts - that_dts) < DVD_MSEC_TO_TIME(1000)) {
@@ -2309,6 +2493,9 @@ bool BasePlayer::CheckPlayerInit(CCurrentStream &current) {
             return true;
         }
 
+        // Strictly more than 20 seconds realigns every non-NOPTS audio/video
+        // start point to this stream's dts.  At exactly 20 seconds the normal
+        // dts<startpts drop test remains in force.
         if((current.startpts - current.dts) > DVD_SEC_TO_TIME(20)) {
             //	CLog::Log(LOGDEBUG, "%s - too far to decode before
             // finishing
@@ -2335,6 +2522,9 @@ bool BasePlayer::CheckPlayerInit(CCurrentStream &current) {
         }
     }
 
+    // With both startpts and dts NOPTS the packet is passed without setting
+    // inited.  Comparisons use the exact sentinel, so IEEE NaN is treated as a
+    // valid timestamp and initializes the stream.
     if(current.dts != DVD_NOPTS_VALUE) {
         current.inited = true;
         current.startpts = current.dts;
@@ -2343,6 +2533,8 @@ bool BasePlayer::CheckPlayerInit(CCurrentStream &current) {
 }
 
 void BasePlayer::UpdateCorrection(DemuxPacket *pkt, double correction) {
+    // The two exact-sentinel gates are independent and ordered DTS before PTS.
+    // There is deliberately no null, finite-value, or rollback guard.
     if(pkt->dts != DVD_NOPTS_VALUE)
         pkt->dts -= correction;
     if(pkt->pts != DVD_NOPTS_VALUE)
@@ -2361,6 +2553,8 @@ void BasePlayer::UpdateTimestamps(CCurrentStream &current,
     /* calculate some average duration */
     if(pPacket->duration != DVD_NOPTS_VALUE)
         current.dur = pPacket->duration;
+    // There is no guard for an old NOPTS/negative/NaN duration.  Missing packet
+    // duration with unchanged fallback dts also decays the old duration by 0.9.
     else if(dts != DVD_NOPTS_VALUE && current.dts != DVD_NOPTS_VALUE)
         current.dur = 0.1 * (current.dur * 9 + (dts - current.dts));
 
@@ -2370,6 +2564,8 @@ void BasePlayer::UpdateTimestamps(CCurrentStream &current,
 }
 
 IDVDStreamPlayer *BasePlayer::GetStreamPlayer(unsigned int target) {
+    // This is a borrowed view of the raw owning child fields.  It does not
+    // consult m_players_created; DestroyPlayers leaves both fields dangling.
     if(target == VideoPlayer_AUDIO)
         return m_VideoPlayerAudio;
     if(target == VideoPlayer_VIDEO)
@@ -2384,6 +2580,8 @@ IDVDStreamPlayer *BasePlayer::GetStreamPlayer(unsigned int target) {
 }
 
 void BasePlayer::SendPlayerMessage(CDVDMsg *pMsg, unsigned int target) {
+    // No standalone body or caller survives in the four reference binaries.
+    // Preserve this dead source surface without inferring stronger behavior.
     IDVDStreamPlayer *player = GetStreamPlayer(target);
     if(player)
         player->SendMessage(pMsg, 0);
@@ -2474,6 +2672,8 @@ bool BasePlayer::ReadPacket(DemuxPacket *&packet, CDemuxStream *&stream) {
 }
 
 void BasePlayer::OpenInputStream(IStream *stream, const std::string &filename) {
+    // Repeated non-running opens first drop the BasePlayer reference.  The old
+    // demuxer still pins that InputStream until OpenDemuxStream deletes it.
     SAFE_RELEASE(m_pInputStream);
     // 	if (m_pInputStream)
     // 		delete m_pInputStream;
@@ -2500,6 +2700,9 @@ bool BasePlayer::OpenDemuxStream() {
 
     //	m_pDemuxer = DemuxerFactory::CreateDemuxer(m_pInputStream);
     CDVDDemuxFFmpeg *demuxer = new CDVDDemuxFFmpeg;
+    // Open AddRefs m_pInputStream, but its bool result is ignored.
+    // Even a partially initialized/false-returning demuxer is published and
+    // later depends on Dispose for that reference to be released.
     demuxer->Open(m_pInputStream);
     m_pDemuxer = demuxer;
 
@@ -2538,6 +2741,7 @@ void BasePlayer::CloseDemuxer() {
 }
 
 static int GetCodecPriority(const std::string &codec) {
+    // Exact, case-sensitive ranks.  Unknown spellings remain priority zero.
     /*
      * Technically flac, truehd, and dtshd_ma are equivalently good as
      * they're all lossless. However, ffmpeg can't decode dtshd_ma
@@ -2608,6 +2812,8 @@ static bool PredicateAudioPriority(const SelectionStream &lh,
     // 			, rh.flags & CDemuxStream::FLAG_DEFAULT);
     // 	}
 
+    // More channels outrank every codec/default distinction.  Complete ties
+    // return false and are preserved by stable_sort.
     PREDICATE_RETURN(lh.channels, rh.channels);
 
     PREDICATE_RETURN(GetCodecPriority(lh.codec), GetCodecPriority(rh.codec));
@@ -2625,6 +2831,8 @@ static bool PredicateVideoPriority(const SelectionStream &lh,
     // , rh.type_index ==
     // CMediaSettings::GetInstance().GetCurrentVideoSettings().m_VideoStream);
 
+    // Video compares only the default bit; all other ties retain insertion
+    // order.
     PREDICATE_RETURN(lh.flags & CDemuxStream::FLAG_DEFAULT,
                      rh.flags & CDemuxStream::FLAG_DEFAULT);
     return false;
@@ -2633,6 +2841,9 @@ static bool PredicateVideoPriority(const SelectionStream &lh,
 void BasePlayer::OpenDefaultStreams(bool reset) {
     bool valid;
 
+    // Get(type,compare) copies without locking and stable-sorts only that
+    // snapshot.  reset is forwarded unchanged to every candidate attempt.
+    // Video is exhausted/closed/reset before the audio pass begins.
     // open video stream
     valid = false;
 
@@ -2747,6 +2958,8 @@ void BasePlayer::UpdatePlayState(double timeout) {
            m_clock.GetAbsoluteClock())
         return;
 
+    // The complete state (including player_state) is copied before taking
+    // m_StateSection.  There is one player-thread writer; readers use the lock.
     SPlayerState state(m_State);
 
     state.dts = DVD_NOPTS_VALUE;
@@ -2837,6 +3050,8 @@ void BasePlayer::UpdatePlayState(double timeout) {
     } else {
         state.cache_delay = 0.0;
         state.cache_level = std::min(1.0, GetQueueTime() / 8000.0);
+        // This intentionally repeats both GetLevel calls and has no guard for
+        // a zero or negative time_total; IEEE NaN/Inf/negative values survive.
         state.cache_offset = GetQueueTime() / state.time_total;
     }
 #if 0
@@ -2853,6 +3068,9 @@ void BasePlayer::UpdatePlayState(double timeout) {
     state.timestamp = m_clock.GetAbsoluteClock();
 
     CSingleLock lock(m_StateSection);
+    // Compiler-generated memberwise assignment writes the six-double prefix,
+    // then std::string, then the flags/cache tail.  A throwing string assignment
+    // can therefore leave a partially committed m_State, as in all references.
     m_State = state;
 }
 
@@ -2860,6 +3078,9 @@ void BasePlayer::UpdateStreamInfos() {
     if(!m_pDemuxer)
         return;
 
+    // V303 lock order is SelectionStreams -> render-manager state for the
+    // video aspect/rect queries.  With no renderer aspect becomes 1.0 while
+    // the existing SrcRect/DestRect values remain untouched.
     std::lock_guard<std::recursive_mutex> lock(m_SelectionStreams.m_section);
     int streamId;
     std::string retVal;

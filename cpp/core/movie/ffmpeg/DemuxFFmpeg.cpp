@@ -33,6 +33,7 @@ static const struct StereoModeConversionMap WmvToInternalStereoModeMap[] = {
 #define FFMPEG_FILE_BUFFER_SIZE 32768 // default reading size for ffmpeg
 
 std::string CDemuxStreamAudioFFmpeg::GetStreamName() {
+    // There is deliberately no decoder-name fallback on this path.
     if(!m_stream)
         return "";
     if(!m_description.empty())
@@ -42,6 +43,7 @@ std::string CDemuxStreamAudioFFmpeg::GetStreamName() {
 }
 
 std::string CDemuxStreamVideoFFmpeg::GetStreamName() {
+    // There is deliberately no decoder-name fallback on this path.
     if(!m_stream)
         return "";
     if(!m_description.empty())
@@ -61,6 +63,8 @@ static int dvd_file_read(void *h, uint8_t *buf, int size) {
     if(interrupt_cb(h))
         return AVERROR_EXIT;
 
+    // A null context is not made safe by interrupt_cb: the callback returns
+    // false for null, after which this dereference follows the native path.
     InputStream *pInputStream = static_cast<CDVDDemuxFFmpeg *>(h)->m_pInput;
     return pInputStream->Read(buf, size);
 }
@@ -70,6 +74,8 @@ static int64_t dvd_file_seek(void *h, int64_t pos, int whence) {
         return AVERROR_EXIT;
 
     InputStream *pInputStream = static_cast<CDVDDemuxFFmpeg *>(h)->m_pInput;
+    // AVSEEK_SIZE is tested before AVSEEK_FORCE is stripped.  Consequently
+    // AVSEEK_SIZE|AVSEEK_FORCE performs a real Seek with only FORCE removed.
     if(whence == AVSEEK_SIZE) {
         return pInputStream->GetLength();
     } else {
@@ -124,6 +130,9 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
     if(!pInput)
         return false;
 
+    // Ownership is established before any FFmpeg allocation/probe.  Several
+    // later false returns do not call Dispose, so the caller must still delete
+    // this demuxer to release the retained InputStream.
     m_pInput = pInput;
     m_pInput->AddRef();
     const std::string &strFile = pInput->GetFileName();
@@ -446,6 +455,10 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
 }
 
 void CDVDDemuxFFmpeg::Dispose() {
+    // Invalidate the saved FFmpeg packet before tearing down its context.
+    // Unlike Flush, Dispose does not reset current/display timestamps,
+    // program/checkvideo or the timeout; Open normally overwrites the subset it
+    // needs when this teardown is part of Reset/reopen.
     m_pkt.result = -1;
     av_packet_unref(&m_pkt.pkt);
 
@@ -476,10 +489,15 @@ void CDVDDemuxFFmpeg::Dispose() {
 
     DisposeStreams();
 
+    // This balances Open's early AddRef and is the last InputStream owner after
+    // BasePlayer::CloseInputStream has released/nullled its own field.
     SAFE_RELEASE(m_pInput);
 }
 
 void CDVDDemuxFFmpeg::Reset() {
+    // Deliberately no null guard: pin the current input across Dispose, ignore
+    // Open's bool result, then release the temporary owner.  A failed Open can
+    // therefore leave this demuxer in its documented partial-open state.
     InputStream *pInputStream = m_pInput;
     pInputStream->AddRef();
     Dispose();
@@ -488,14 +506,20 @@ void CDVDDemuxFFmpeg::Reset() {
 }
 
 void CDVDDemuxFFmpeg::Flush() {
+    // No lock is acquired here.  Read invokes this while holding the recursive
+    // demux lock; the function itself preserves stream-map/codec/program/speed/
+    // checkvideo/timeout state.
     if(m_pFormatContext) {
         if(m_pFormatContext->pb)
             avio_flush(m_pFormatContext->pb);
         avformat_flush(m_pFormatContext);
     }
 
+    // Flush's local reset set is exact and ordered independently of the FFmpeg
+    // context calls above.
     m_currentPts = DVD_NOPTS_VALUE;
 
+    // result is invalidated before AVPacket releases its referenced buffers.
     m_pkt.result = -1;
     av_packet_unref(&m_pkt.pkt);
 
@@ -503,15 +527,25 @@ void CDVDDemuxFFmpeg::Flush() {
     m_dtsAtDisplayTime = DVD_NOPTS_VALUE;
 }
 
-void CDVDDemuxFFmpeg::Abort() { m_timeout.SetExpired(); }
+void CDVDDemuxFFmpeg::Abort() {
+    // This is not a persistent abort flag and does not invalidate a saved
+    // program-change packet.  A later actual read also replaces this expiry by
+    // arming the same Timer for 20 seconds before av_read_frame.
+    m_timeout.SetExpired();
+}
 
 void CDVDDemuxFFmpeg::SetSpeed(int iSpeed) {
+    // This method takes no demux lock.  With no format, or when the requested
+    // value is already published, even externally changed discard fields are
+    // deliberately left untouched.
     if(!m_pFormatContext)
         return;
 
     if(m_speed == iSpeed)
         return;
 
+    // Pause identity is exactly speed==0.  The FFmpeg return value is ignored;
+    // speed/discard publication continues even when pause or play fails.
     if(m_speed != DVD_PLAYSPEED_PAUSE && iSpeed == DVD_PLAYSPEED_PAUSE) {
         //		m_pInput->Pause(m_currentPts);
         av_read_pause(m_pFormatContext);
@@ -521,6 +555,8 @@ void CDVDDemuxFFmpeg::SetSpeed(int iSpeed) {
     }
     m_speed = iSpeed;
 
+    // These are strict thresholds: 2000 remains NONE and 4000 remains BIDIR.
+    // Every negative speed uses NONKEY, including a transition out of pause.
     AVDiscard discard = AVDISCARD_NONE;
     if(m_speed > 4 * DVD_PLAYSPEED_NORMAL)
         discard = AVDISCARD_NONKEY;
@@ -531,6 +567,8 @@ void CDVDDemuxFFmpeg::SetSpeed(int iSpeed) {
 
     for(unsigned int i = 0; i < m_pFormatContext->nb_streams; i++) {
         if(m_pFormatContext->streams[i]) {
+            // A stream already disabled with ALL is never re-enabled by a
+            // speed change; all other non-null streams receive the same mode.
             if(m_pFormatContext->streams[i]->discard != AVDISCARD_ALL)
                 m_pFormatContext->streams[i]->discard = discard;
         }
@@ -731,6 +769,9 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
     // stop.
     bool bReturnEmpty = false;
     {
+        // Read/probe/program-rebuild/packet-copy state is serialized here.
+        // The final CDemuxStream reconciliation deliberately happens after
+        // this recursive lock has been released.
         CSingleLock lock(m_critSection); // open lock scope
         if(m_pFormatContext) {
             // assume we are not eof
@@ -743,7 +784,9 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
                 m_pkt.pkt.size = 0;
                 m_pkt.pkt.data = nullptr;
 
-                // timeout reads after 100ms
+                // All four references arm this read timeout for 20,000 ms.
+                // This overwrites an earlier Abort() expiry; Abort interrupts a
+                // read only when its timer write remains the latest one.
                 m_timeout.Set(20000);
                 m_pkt.result = av_read_frame(m_pFormatContext, &m_pkt.pkt);
                 m_timeout.SetInfinite();
@@ -755,6 +798,9 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
                 // packet
                 bReturnEmpty = true;
             } else if(m_pkt.result < 0) {
+                // AVERROR_EXIT from interrupt_cb (including Abort()) is not
+                // treated like EINTR/EAGAIN: it flushes and returns nullptr,
+                // merging with natural EOF in BasePlayer::Process.
                 Flush();
             } else if(IsProgramChange()) {
                 // update streams
@@ -764,6 +810,9 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
                 pPacket->iStreamId = DMX_SPECIALID_STREAMCHANGE;
                 pPacket->demuxerId = m_demuxerId;
 
+                // Return before resetting result or unrefing m_pkt: the
+                // already-read AVPacket is intentionally replayed by the next
+                // Read call after the stream-change notification.
                 return pPacket;
             }
             // check size and stream index for being in a valid range
@@ -938,6 +987,11 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
     if(!pPacket)
         return nullptr;
 
+    // Dynamic FFmpeg changes are published by replacing the map-owned stream
+    // object.  The replacement gates are exactly AVStream identity, codec id,
+    // audio channels/rate and video width/height; extradata and pix_fmt alone
+    // do not trigger it.  Every replacement starts with changes == 0, so the
+    // player observes this path through pointer identity, not changes++.
     // check streams, can we make this a bit more simple?
     if(pPacket && pPacket->iStreamId >= 0) {
         CDemuxStream *stream = GetStream(pPacket->iStreamId);
@@ -992,10 +1046,16 @@ bool CDVDDemuxFFmpeg::SeekTime(int time, bool backwords, double *startpts) {
         return false;
 
     if(time < 0) {
+        // This is not an early rejection: the demuxer still seeks to zero,
+        // refreshes state when av_seek_frame is accepted, and writes startpts.
+        // hitEnd only forces the final return value to false.
         time = 0;
         hitEnd = true;
     }
 
+    // SeekTime discards a saved packet before taking m_critSection.  It does
+    // not call Flush, so the AVIO/format and display-time reset paths are not
+    // part of this operation.
     m_pkt.result = -1;
     av_packet_unref(&m_pkt.pkt);
 
@@ -1045,6 +1105,7 @@ bool CDVDDemuxFFmpeg::SeekTime(int time, bool backwords, double *startpts) {
             // 			else
             // 				ret = 0;
         } else if(ret < 0 /*&& m_pInput->IsEOF()*/)
+            // Non-past-end seek failures are deliberately treated as success.
             ret = 0;
 
         if(ret >= 0)
@@ -1077,6 +1138,8 @@ bool CDVDDemuxFFmpeg::SeekByte(int64_t pos) {
     if(ret >= 0)
         UpdateCurrentPTS();
 
+    // Unlike SeekTime, the saved packet is invalidated after the seek attempt
+    // and while the recursive lock is still held, even when the seek failed.
     m_pkt.result = -1;
     av_packet_unref(&m_pkt.pkt);
 
@@ -1179,6 +1242,8 @@ void CDVDDemuxFFmpeg::CreateStreams(unsigned int program) {
                 m_program = i;
             }
 
+            // A selected program is not reset to AVDISCARD_DEFAULT here.  If
+            // an earlier call discarded it, that state is intentionally kept.
             if(i != m_program)
                 m_pFormatContext->programs[i]->discard = AVDISCARD_ALL;
         }
@@ -1204,12 +1269,16 @@ void CDVDDemuxFFmpeg::CreateStreams(unsigned int program) {
 
 void CDVDDemuxFFmpeg::DisposeStreams() {
     std::map<int, CDemuxStream *>::iterator it;
+    // No lock is taken.  Every pointer returned earlier by GetStream(s) is
+    // borrowed and becomes dangling as its corresponding value is deleted.
     for(it = m_streams.begin(); it != m_streams.end(); ++it)
         delete it->second;
     m_streams.clear();
 }
 
 CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
+    // streamIdx is trusted; the reference implementation performs no bounds
+    // check before indexing AVFormatContext::streams.
     AVStream *pStream = m_pFormatContext->streams[streamIdx];
     if(pStream) {
         CDemuxStream *stream = nullptr;
@@ -1400,6 +1469,8 @@ CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
         if(langTag)
             strncpy(stream->language, langTag->value, 3);
 
+        // Copy exactly extradata_size bytes, with no FFmpeg padding.  Unknown
+        // stream types remain in the map but deliberately skip this copy.
         if(stream->type != STREAM_NONE && pStream->codec->extradata &&
            pStream->codec->extradata_size > 0) {
             stream->ExtraSize = pStream->codec->extradata_size;
@@ -1436,6 +1507,8 @@ void CDVDDemuxFFmpeg::AddStream(int streamIdx, CDemuxStream *stream) {
         /* was new stream */
         stream->uniqueId = streamIdx;
     } else {
+        // Deliberately no self-replacement guard: the old owned value is
+        // destroyed before only the mapped pointer is overwritten.
         delete res.first->second;
         res.first->second = stream;
     }
@@ -1476,6 +1549,9 @@ bool CDVDDemuxFFmpeg::IsProgramChange() {
     if(m_program == 0 && !m_pFormatContext->nb_programs)
         return false;
 
+    // Deliberately dereference programs[m_program] before checking the upper
+    // bound below.  A stale nonzero out-of-range program therefore reaches the
+    // native invalid-access boundary rather than cleanly returning true.
     if(m_pFormatContext->programs[m_program]->nb_stream_indexes !=
        m_streams.size())
         return true;
@@ -1543,8 +1619,10 @@ void CDVDDemuxFFmpeg::ParsePacket(AVPacket *pkt) {
     if(st->parser && st->parser->parser->split && !st->codec->extradata) {
         int i = st->parser->parser->split(st->codec, pkt->data, pkt->size);
         if(i > 0 && i < FF_MAX_EXTRADATA_SIZE) {
-            // Found extradata, fill it in. This will cause
-            // a new stream to be created and used.
+            // Found extradata, fill it in.  This function itself does not
+            // mutate m_streams: Read replaces an existing stream only if one
+            // of its separate identity/audio/video-dimension gates also
+            // changed.  Extradata alone is not a replacement gate.
             st->codec->extradata_size = i;
             st->codec->extradata = (uint8_t *)av_malloc(
                 st->codec->extradata_size + FF_INPUT_BUFFER_PADDING_SIZE);
@@ -1617,6 +1695,9 @@ bool CDVDDemuxFFmpeg::IsVideoReady() {
     if(m_program == 0 && !m_pFormatContext->nb_programs)
         return false;
 
+    // This is an existential gate, not an all-video barrier: the first ready
+    // video returns true.  If no video exists the final !hasVideo is also true;
+    // only one-or-more videos with none ready returns false.
     if(m_program != UINT_MAX) {
         for(unsigned int i = 0;
             i < m_pFormatContext->programs[m_program]->nb_stream_indexes; i++) {
@@ -1646,6 +1727,8 @@ void CDVDDemuxFFmpeg::ResetVideoStreams() {
     for(unsigned int i = 0; i < m_pFormatContext->nb_streams; i++) {
         st = m_pFormatContext->streams[i];
         if(st->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
+            // Reset only the three fields present in all four references.
+            // height and pix_fmt deliberately retain their previous values.
             av_freep(&st->codec->extradata);
             st->codec->extradata_size = 0;
             st->codec->width = 0;

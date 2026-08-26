@@ -6,6 +6,8 @@
 NS_KRMOVIE_BEGIN
 class CDVDMsg : public IRef<CDVDMsg> {
 public:
+    // The contiguous numeric order is the queue protocol.  Producers and
+    // consumers store/switch on these exact enum values without a range gate.
     enum Message {
         NONE = 1000,
 
@@ -113,6 +115,8 @@ private:
 template <typename T>
 class CDVDMsgType : public CDVDMsg {
 public:
+    // Reference messages preserve the supplied scalar/aggregate value as-is;
+    // there is no validation, normalization or separate payload owner.
     CDVDMsgType(Message type, const T &value) : CDVDMsg(type), m_value(value) {}
 
     operator T() { return m_value; }
@@ -153,6 +157,9 @@ private:
 class CDVDMsgPlayerSeek : public CDVDMsg {
 public:
     struct CMode {
+        // All semantic fields have source-level defaults, but callers may
+        // overwrite any subset before the by-value message copy.  The active
+        // consumer intentionally never reads restore; it is still copied.
         int time = 0;
         bool relative = false;
         bool backward = false;

@@ -42,19 +42,19 @@ TVPSelectListForm::create(const std::vector<std::string> &info,
     return ret;
 }
 
-void TVPSelectListForm::bindBodyController(const Node *allNodes) {
-    Node *node = allNodes->getChildByName("pageview");
+void TVPSelectListForm::bindBodyController(const NodeMap &allNodes) {
+    Node *node = allNodes.findController("pageview");
     cocos2d::Size nodesize = node->getContentSize();
     pageView = XKPageView::create(nodesize, nullptr);
     node->addChild(pageView);
     pageView->setDirection(extension::ScrollView::Direction::VERTICAL);
-    ui::Button *btn = static_cast<ui::Button *>(allNodes->getChildByName("ok"));
+    ui::Button *btn = static_cast<ui::Button *>(allNodes.findController("ok"));
     btn->addClickEventListener([this](Ref *) {
         FuncOK(pageView->getCurPageIndex());
         TVPMainScene::GetInstance()->popUIForm(this,
                                                TVPMainScene::eLeaveToBottom);
     });
-    btn = static_cast<ui::Button *>(allNodes->getChildByName("cancel"));
+    btn = static_cast<ui::Button *>(allNodes.findController("cancel"));
     btn->addClickEventListener([this](Ref *) {
         TVPMainScene::GetInstance()->popUIForm(this,
                                                TVPMainScene::eLeaveToBottom);
@@ -114,17 +114,17 @@ TVPTextPairInputForm *TVPTextPairInputForm::create(
     return ret;
 }
 
-void TVPTextPairInputForm::bindBodyController(const Node *allNodes) {
-    input1 = static_cast<TextField *>(allNodes->getChildByName("input1"));
-    input2 = static_cast<TextField *>(allNodes->getChildByName("input2"));
+void TVPTextPairInputForm::bindBodyController(const NodeMap &allNodes) {
+    input1 = static_cast<TextField *>(allNodes.findController("input1"));
+    input2 = static_cast<TextField *>(allNodes.findController("input2"));
 
-    ui::Button *btn = static_cast<ui::Button *>(allNodes->getChildByName("ok"));
+    ui::Button *btn = static_cast<ui::Button *>(allNodes.findController("ok"));
     btn->addClickEventListener([this](Ref *) {
         FuncOK(input1->getString(), input2->getString());
         TVPMainScene::GetInstance()->popUIForm(this,
                                                TVPMainScene::eLeaveToBottom);
     });
-    btn = static_cast<ui::Button *>(allNodes->getChildByName("cancel"));
+    btn = static_cast<ui::Button *>(allNodes.findController("cancel"));
     btn->addClickEventListener([this](Ref *) {
         TVPMainScene::GetInstance()->popUIForm(this,
                                                TVPMainScene::eLeaveToBottom);

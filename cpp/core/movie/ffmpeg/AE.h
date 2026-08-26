@@ -51,6 +51,11 @@ enum AEQuality {
 /**
  * IAE Interface
  */
+// None of the four current products emits an attributable IAE backend object,
+// vtable/RTTI, singleton access, or callback-registration dispatch.  Their live
+// CAEFactory path constructs CAEStreamAL directly.  Keep this compatibility
+// declaration as an unobserved header surface: the inline defaults below are
+// not evidence that those methods execute in the reference products.
 class IAE {
 protected:
     friend class CAEFactory;

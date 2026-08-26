@@ -50,9 +50,9 @@ public:
     pathSplit(const std::string &path);
 
 protected:
-    void bindHeaderController(const Node *allNodes) override;
-    void bindBodyController(const Node *allNodes) override;
-    void bindFooterController(const Node *allNodes) override {}
+    void bindHeaderController(const NodeMap &allNodes) override;
+    void bindBodyController(const NodeMap &allNodes) override;
+    void bindFooterController(const NodeMap &allNodes) override {}
 
     void ListDir(std::string path);
     virtual void getShortCutDirList(std::vector<std::string> &pathlist);
@@ -200,7 +200,7 @@ public:
     }
 
 protected:
-    void bindFooterController(const Node *allNodes) override;
+    void bindFooterController(const NodeMap &allNodes) override;
 
     void onCellClicked(int idx) override;
     void close();

@@ -52,20 +52,41 @@ protected:
 
     int GetBitRate() override;
 
+    // Constructed once. Open, Reset and Dispose do not clear it; only a
+    // successfully decoded frame refreshes dataFormat/channelLayout,
+    // sampleRate and frameSize.
     AEAudioFormat m_format;
     AVCodecContext *m_pCodecContext;
+
+    // Retained source field: all four references write only
+    // AV_SAMPLE_FMT_NONE in the constructor and after a successful Open. No
+    // emitted path reads it or publishes another value.
     enum AVSampleFormat m_iSampleFormat;
+
+    // Fixed-array channel cache. Open resets m_channels but deliberately keeps
+    // both this value and m_layout until BuildChannelMap runs.
     CAEChannelInfo m_channelLayout;
+
+    // Deliberately not initialized by the constructor. Open first writes NONE
+    // only after codec-context allocation succeeds.
     enum AVMatrixEncoding m_matrixEncoding;
 
     AVFrame *m_pFrame1;
+
+    // Decoder output flag: constructor, raw GetData and Reset clear it. Open
+    // does not, which is observable if the same codec object is reopened.
     int m_gotFrame;
 
     int m_channels;
+
+    // Raw context layout cache. BuildChannelMap stores it before validating
+    // popcount/fallback; Open does not reset it.
     uint64_t m_layout;
 
     void BuildChannelMap();
 
+    // Declaration-only residue in all four current references: there is no
+    // caller and no emitted definition in the complete codec TU surface.
     void ConvertToFloat();
 };
 

@@ -31,7 +31,16 @@ public:
         int frames;
         double pts;
     };
+
+    // The references use the platform STL deque verbatim. CGain is 16 bytes
+    // on both Android ABIs and iOS arm64, but 12 bytes on iOS armv7. Android
+    // libstdc++ therefore uses 32-entry/512-byte blocks; iOS libc++ uses
+    // 256-entry/4096-byte (arm64) or 341-entry/4092-byte (armv7) blocks.
     std::deque<CGain> m_gain;
+
+    // Deliberately no in-class initializers: all four constructors leave both
+    // scalars indeterminate. Process() immediately Reset()s totalGain, while
+    // CalcDropRequirement() writes lastPts before the ordinary output path.
     double m_totalGain;
     double m_lastPts;
 };
@@ -56,6 +65,8 @@ public:
 
     bool AcceptsData() override;
 
+    // This is the queue's demux-packet byte counter; control nodes such as
+    // GENERAL_EOF do not make HasData true.
     bool HasData() const override { return m_messageQueue.GetDataSize() > 0; }
 
     int GetLevel() override { return m_messageQueue.GetLevel(); }
@@ -110,9 +121,14 @@ protected:
 
     int OutputPicture(const DVDVideoPicture *src, double pts);
 
+    // Not part of any of the four reference objects: HAS_VIDEO_PLAYBACK is
+    // absent, there is no overlay-container member/call, and OutputPicture
+    // proceeds directly to AddVideoPicture.
     //	void ProcessOverlays(DVDVideoPicture* pSource, double pts);
     void OpenStream(CDVDStreamInfo &hint, CDVDVideoCodec *codec);
 
+    // Both methods compile to empty Android remnants and are dead-stripped on
+    // iOS. Consequently the ctor's false m_bAllowDrop is never changed.
     void ResetFrameRateCalc();
 
     void CalcFrameRate();

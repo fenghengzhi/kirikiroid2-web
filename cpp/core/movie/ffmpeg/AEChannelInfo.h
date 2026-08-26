@@ -39,7 +39,8 @@ public:
 
     operator std::string() const;
 
-    /* remove any channels that dont exist in the provided info */
+    /* Keep directly supported channels and apply the original mono,
+     * side/back, and back-center remapping rules against rhs. */
     void ResolveChannels(const CAEChannelInfo &rhs);
 
     void Reset();

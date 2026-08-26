@@ -119,6 +119,7 @@ public:
 
     static unsigned int DataFormatToUsedBits(enum AEDataFormat dataFormat);
 
+    // AE_FMT_S24NE3 returns unsigned(-8), preserving the original wrap.
     static unsigned int DataFormatToDitherBits(enum AEDataFormat dataFormat);
 
     static const char *DataFormatToStr(enum AEDataFormat dataFormat);
@@ -189,6 +190,8 @@ public:
       This is NOT safe for crypto work, but perfectly fine for audio
       usage (dithering)
     */
+    // Both generators use (max-min)/2 around zero; they do not add the
+    // min/max midpoint for asymmetric bounds.
     static float FloatRand1(float min, float max);
 
     static void FloatRand4(float min, float max, float result[4],
@@ -196,8 +199,12 @@ public:
 
     static bool S16NeedsByteSwap(AEDataFormat in, AEDataFormat out);
 
+    // Presence-only conversion; duplicate/unknown AE entries do not create
+    // additional AV mask bits.
     static uint64_t GetAVChannelLayout(const CAEChannelInfo &info);
 
+    // The reference mapping retains its historical top-back to ordinary-back
+    // asymmetry and preserves duplicate output entries.
     static CAEChannelInfo GetAEChannelLayout(uint64_t layout);
 
     static AVSampleFormat GetAVSampleFormat(AEDataFormat format);

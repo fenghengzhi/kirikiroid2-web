@@ -45,6 +45,9 @@ DVDVideoPicture *CDVDCodecUtils::AllocatePicture(int iWidth, int iHeight) {
 }
 
 void CDVDCodecUtils::FreePicture(DVDVideoPicture *pPicture) {
+    // Preserve the reference boundary exactly: AllocatePicture uses new[],
+    // while this path releases data[0] through av_free and accepts no null
+    // picture (data[0] is read before delete's null check).
     av_free(pPicture->data[0]);
     delete pPicture;
 }

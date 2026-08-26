@@ -8,7 +8,9 @@ NS_KRMOVIE_BEGIN
 class VideoPresentLayer : public TVPMoviePlayer,
                           public tTVPContinuousEventCallbackIntf {
 protected:
-    tTVPBaseTexture *m_BmpBits[2]{};
+    // The native implicit constructor leaves both borrowed slots
+    // indeterminate.  SetVideoBuffer is their first initialization point.
+    tTVPBaseTexture *m_BmpBits[2];
     int m_nCurBmpBuff = 0;
 
 public:

@@ -560,6 +560,9 @@ void tTVPApplication::ProcessMessages() {
         std::lock_guard<std::mutex> cs(m_msgQueueLock);
         m_lstUserMsg.swap(lstUserMsg);
     }
+    // The detached snapshot is invoked without consulting tuple host/message
+    // and without owner validation.  A callback posted while this snapshot is
+    // being processed stays in the new live queue until a later pass.
     for(std::tuple<void *, int, tMsg> &it : lstUserMsg) {
         std::get<2>(it)();
     }
@@ -743,6 +746,8 @@ void tTVPApplication::CheckDigitizer() {
 void tTVPApplication::PostUserMessage(const std::function<void()> &func,
                                       void *host, int msg) {
     std::lock_guard<std::mutex> cs(m_msgQueueLock);
+    // Copying std::function preserves the callable's capture semantics; it
+    // does not infer ownership for a captured raw pointer.
     m_lstUserMsg.emplace_back(host, msg, func);
 }
 
@@ -836,6 +841,8 @@ void tTVPApplication::ModalFinished() {
 void tTVPApplication::LoadImageRequest(class iTJSDispatch2 *owner,
                                        class tTJSNI_Bitmap *bmp,
                                        const ttstr &name) {
+    // Bitmap::LoadAsync has already published Loading=true.  A missing loader
+    // silently drops the request and deliberately performs no rollback.
     if(image_load_thread_) {
         image_load_thread_->LoadRequest(owner, bmp, name);
     }

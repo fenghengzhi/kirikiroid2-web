@@ -25,8 +25,10 @@ class SimplePlayerOverlay {
 public:
     SimplePlayerOverlay() {
         _overlay = KRMovie::VideoPresentOverlay2::create();
+        // Native uses the member-function std::bind representation rather
+        // than a capture-lambda target; the raw wrapper pointer is not owned.
         _overlay->SetFuncGetBounds(
-            [this]() -> const tTVPRect & { return GetBounds(); });
+            std::bind(&SimplePlayerOverlay::GetBounds, this));
     }
     ~SimplePlayerOverlay() { _overlay->Release(); }
     void SetBounds(const tTVPRect &rect) { _rect = rect; }
@@ -85,10 +87,11 @@ static std::string _formatTime(unsigned int t, char prefix = 0) {
 
 SimpleMediaFilePlayer::SimpleMediaFilePlayer() {
     _player = new SimplePlayerOverlay;
-    _player->SetCallback([this](auto &&PH1, auto &&PH2) {
-        onPlayerEvent(std::forward<decltype(PH1)>(PH1),
-                      std::forward<decltype(PH2)>(PH2));
-    });
+    // Preserve the native member-function std::bind target: its erased payload
+    // stores the member pointer/adjust word and a borrowed raw this pointer.
+    _player->SetCallback(
+        std::bind(&SimpleMediaFilePlayer::onPlayerEvent, this,
+                  std::placeholders::_1, std::placeholders::_2));
 }
 
 SimpleMediaFilePlayer::~SimpleMediaFilePlayer() {
@@ -101,9 +104,8 @@ SimpleMediaFilePlayer::~SimpleMediaFilePlayer() {
 SimpleMediaFilePlayer *SimpleMediaFilePlayer::create() {
     SimpleMediaFilePlayer *ret = new SimpleMediaFilePlayer;
     ret->autorelease();
-    ret->initFromFile(Csd::createMediaPlayerNavi(),
-                      Csd::createMediaPlayerBody(),
-                      Csd::createMediaPlayerFoot());
+    ret->initFromFile("ui/MediaPlayerNavi.csb", "ui/MediaPlayerBody.csb",
+                      "ui/MediaPlayerFoot.csb");
     return ret;
 }
 
@@ -193,12 +195,12 @@ void SimpleMediaFilePlayer::rearrangeLayout() {
     BottomBar.Root->setScale(scale);
 }
 
-void SimpleMediaFilePlayer::bindBodyController(const Node *allNodes) {
-    OSD = allNodes->getChildByName("OSD");
+void SimpleMediaFilePlayer::bindBodyController(const NodeMap &allNodes) {
+    OSD = allNodes.findController("OSD");
     OSD->setVisible(false);
-    OSDText = static_cast<Text *>(allNodes->getChildByName("OSDText"));
+    OSDText = static_cast<Text *>(allNodes.findController("OSDText"));
 
-    Widget *overlay = allNodes->getChildByName<Widget *>("Overlay");
+    Widget *overlay = allNodes.findController<Widget>("Overlay");
     _player->InitRootNode(overlay);
     overlay->addClickEventListener([this](Ref *) {
         if(!NaviBar->isVisible()) {
@@ -215,10 +217,10 @@ void SimpleMediaFilePlayer::bindBodyController(const Node *allNodes) {
     this->Overlay = overlay;
 }
 
-void SimpleMediaFilePlayer::bindFooterController(const Node *allNodes) {
-    ControlBar = allNodes->getChildByName("ControlBar");
+void SimpleMediaFilePlayer::bindFooterController(const NodeMap &allNodes) {
+    ControlBar = allNodes.findController("ControlBar");
 
-    PlayBtn = allNodes->getChildByName<Widget *>("PlayBtn");
+    PlayBtn = allNodes.findController<Widget>("PlayBtn");
     PlayBtn->addClickEventListener([this](Ref *) { TooglePlayOrPause(); });
     PlayBtn->addTouchEventListener([this](Ref *_p, Widget::TouchEventType ev) {
         cocos2d::ui::Widget *p = static_cast<Widget *>(_p);
@@ -239,12 +241,12 @@ void SimpleMediaFilePlayer::bindFooterController(const Node *allNodes) {
                 break;
         }
     });
-    PlayBtnNormal = allNodes->getChildByName("PlayBtnNormal");
-    PlayBtnPress = allNodes->getChildByName("PlayBtnPress");
-    PlayIconNormal = allNodes->getChildByName("PlayIconNormal");
-    PlayIconPress = allNodes->getChildByName("PlayIconPress");
-    PauseIconNormal = allNodes->getChildByName("PauseIconNormal");
-    PauseIconPress = allNodes->getChildByName("PauseIconPress");
+    PlayBtnNormal = allNodes.findController("PlayBtnNormal");
+    PlayBtnPress = allNodes.findController("PlayBtnPress");
+    PlayIconNormal = allNodes.findController("PlayIconNormal");
+    PlayIconPress = allNodes.findController("PlayIconPress");
+    PauseIconNormal = allNodes.findController("PauseIconNormal");
+    PauseIconPress = allNodes.findController("PauseIconPress");
     PlayBtnPress->setVisible(false);
     PlayIconPress->setVisible(false);
     PauseIconPress->setVisible(false);
@@ -253,16 +255,16 @@ void SimpleMediaFilePlayer::bindFooterController(const Node *allNodes) {
     PauseIconNormal->setVisible(false);
 }
 
-void SimpleMediaFilePlayer::bindHeaderController(const Node *allNodes) {
-    NaviBar = allNodes->getChildByName("NaviBar");
+void SimpleMediaFilePlayer::bindHeaderController(const NodeMap &allNodes) {
+    NaviBar = allNodes.findController("NaviBar");
     cocos2d::ui::Button *Back =
-        static_cast<Button *>(allNodes->getChildByName("Back"));
+        static_cast<Button *>(allNodes.findController("Back"));
     Back->addClickEventListener([this](Ref *) { removeFromParent(); });
 
-    Title = static_cast<Text *>(allNodes->getChildByName("Title"));
-    PlayTime = static_cast<Text *>(allNodes->getChildByName("PlayTime"));
-    RemainTime = static_cast<Text *>(allNodes->getChildByName("RemainTime"));
-    Timeline = static_cast<Slider *>(allNodes->getChildByName("Timeline"));
+    Title = static_cast<Text *>(allNodes.findController("Title"));
+    PlayTime = static_cast<Text *>(allNodes.findController("PlayTime"));
+    RemainTime = static_cast<Text *>(allNodes.findController("RemainTime"));
+    Timeline = static_cast<Slider *>(allNodes.findController("Timeline"));
 
     Timeline->addEventListener(
         [this](Ref *, Slider::EventType ev) { onSliderChanged(); });

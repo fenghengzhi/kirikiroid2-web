@@ -4835,6 +4835,9 @@ void iTVPBaseBitmap::ConvertAlphaToAddAlpha() {
 //---------------------------------------------------------------------------
 
 tTVPBaseBitmap::tTVPBaseBitmap(tjs_uint w, tjs_uint h, tjs_uint bpp /*= 32*/) {
+    // The native-base constructor deliberately leaves Bitmap indeterminate.
+    // Keep the direct post-clamp factory assignment: if manager lookup or the
+    // factory throws, base unwinding observes that same partial object.
     if(!w)
         w = 1;
     if(!h)
@@ -4845,6 +4848,9 @@ tTVPBaseBitmap::tTVPBaseBitmap(tjs_uint w, tjs_uint h, tjs_uint bpp /*= 32*/) {
 }
 
 bool tTVPBaseBitmap::AssignBitmap(tTVPBitmap *bmp) {
+    // Preserve the two-stage raw-reference handoff.  The software factory
+    // returns a ref-count-one texture, AssignTexture adds another reference,
+    // and this caller deliberately does not balance the factory reference.
     return AssignTexture(TVPGetSoftwareRenderManager()->CreateTexture2D(bmp));
 }
 

@@ -126,7 +126,7 @@ void TVPMainFileSelectorForm::onEnter() {
     }
 }
 
-void TVPMainFileSelectorForm::bindBodyController(const Node *allNodes) {
+void TVPMainFileSelectorForm::bindBodyController(const NodeMap &allNodes) {
     TVPBaseFileSelectorForm::bindBodyController(allNodes);
 
     if(NaviBar.Right) {

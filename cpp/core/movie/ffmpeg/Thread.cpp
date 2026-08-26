@@ -33,6 +33,8 @@ void CThread::Create() {
 void CThread::StopThread(bool bWait /*= true*/) {
     m_bStop = true;
     m_StopEvent.notify_all();
+    // OnExit belongs to entry(), not StopThread.  A null m_ThreadId therefore
+    // means that setting/notifying stop performs no derived-class cleanup.
     if(m_ThreadId && bWait) {
         m_ThreadId->join();
         delete m_ThreadId;
@@ -81,6 +83,11 @@ bool CThread::IsCurrentThread() {
 }
 
 int CThread::entry() {
+    // OnExit completes before m_bRunning becomes false and before a joining
+    // StopThread returns.  There is no equivalent sequence without Create().
+    // There is also no exception boundary here: an exception escaping Process
+    // (for example, allocation failure in a worker Ended callback) prevents
+    // OnExit and escapes the std::thread entry, which terminates the process.
     OnStartup();
     Process();
     OnExit();

@@ -146,8 +146,11 @@ private:
 		// Generated specializations preserve this exact ownership boundary:
 		// sticky adaptors borrow the native object; non-sticky adaptors run the
 		// native ordinary destructor and scalar delete before both fields are
-		// cleared.  A deleting destructor for the adaptor shell is a separate
-		// outer operation and must not be conflated with native destruction.
+		// cleared.  The native pointer therefore remains discoverable during
+		// destructor callbacks.  The outer tTJSCustomObject invalidation guard
+		// blocks only another Invalidate, not ordinary native-method re-entry.
+		// A deleting destructor for the adaptor shell is a separate outer
+		// operation and must not be conflated with native destruction.
 		if (_instance && !_sticky) delete _instance;
 		_instance = 0;
 		_sticky   = false;

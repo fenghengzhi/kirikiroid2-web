@@ -265,6 +265,9 @@ CDVDVideoCodecFFmpeg::~CDVDVideoCodecFFmpeg() { Dispose(); }
 
 bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
                                 CDVDCodecOptions &options) {
+    // This method does not Dispose an already-open instance.  The saved
+    // values below commit before decoder lookup; later owner members are
+    // replaced directly at their individual allocation stages.
     m_hints = hints;
     m_options = options;
 
@@ -296,6 +299,8 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
     //  CLog::Log(LOGNOTICE,"CDVDVideoCodecFFmpeg::Open() Using codec:
     //  %s",pCodec->long_name ? pCodec->long_name : pCodec->name);
 
+    // Direct replacement is intentional: a repeated Open can leak an old
+    // context even when this allocation returns null.
     m_pCodecContext = avcodec_alloc_context3(pCodec);
     if(!m_pCodecContext)
         return false;
@@ -309,6 +314,11 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
 
     // setup threading model
     if(!hints.software) {
+        // Every backend candidate below is compiled out or constant-folded
+        // away in all four shipped mobile references.  Their emitted path
+        // therefore leaves tryhw false and publishes STATE_SW_MULTI; forced
+        // software publishes STATE_SW_SINGLE.  STATE_HW_SINGLE is never
+        // produced by those builds.
         bool tryhw = false;
 #ifdef HAVE_LIBVDPAU
         if(CSettings::GetInstance().GetBool(
@@ -365,6 +375,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
         m_pCodecContext->extradata_size = hints.extrasize;
         m_pCodecContext->extradata = (uint8_t *)av_mallocz(
             hints.extrasize + FF_INPUT_BUFFER_PADDING_SIZE);
+        // Allocation failure is not handled here; the copy is unconditional.
         memcpy(m_pCodecContext->extradata, hints.extradata, hints.extrasize);
     }
 
@@ -407,6 +418,8 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
         return false;
     }
 
+    // These three assignments are likewise direct owner replacements.  The
+    // failure cleanup below owns only allocations from this attempt.
     m_pFrame = av_frame_alloc();
     if(!m_pFrame) {
         avcodec_free_context(&m_pCodecContext);
@@ -442,6 +455,9 @@ void CDVDVideoCodecFFmpeg::Dispose() {
     SAFE_RELEASE(m_pHardware);
 
     FilterClose();
+    // All strings, vectors, saved hints/options, filterEof and scalar decode/
+    // drop state survive.  In particular, releasing hardware does not rebuild
+    // m_name here.
 }
 
 void CDVDVideoCodecFFmpeg::SetDropState(bool bDrop) {
@@ -726,6 +742,7 @@ int CDVDVideoCodecFFmpeg::Decode(uint8_t *pData, int iSize, double dts,
 }
 
 void CDVDVideoCodecFFmpeg::Reset() {
+    // Reset is a post-Open operation; the codec context is required.
     m_started = false;
     m_interlaced = false;
     m_decoderPts = DVD_NOPTS_VALUE;
@@ -739,11 +756,15 @@ void CDVDVideoCodecFFmpeg::Reset() {
 
     m_filters = "";
     FilterClose();
+    // filters_next and filterEof survive; Reset(false) also preserves the
+    // learned diff/state (and any current mismatch count) while VALID.
     m_dropCtrl.Reset(false);
 }
 
 void CDVDVideoCodecFFmpeg::Reopen() {
     Dispose();
+    // Open receives the object's own saved members.  A false return triggers
+    // the second Dispose; a C++ exception escapes without that cleanup.
     if(!Open(m_hints, m_options)) {
         Dispose();
     }
@@ -886,6 +907,7 @@ bool CDVDVideoCodecFFmpeg::GetPicture(DVDVideoPicture *pDvdVideoPicture) {
     pix_fmt = (AVPixelFormat)m_pFrame->format;
     pDvdVideoPicture->format = CDVDCodecUtils::EFormatFromPixfmt(pix_fmt);
 
+    // This is deliberately a one-shot early-exit loop.
     while(m_pCodecContext->coded_width > 0 &&
           m_pCodecContext->coded_height > 0) {
         if(pDvdVideoPicture->format == RENDER_FMT_YUV420P) {
@@ -934,6 +956,8 @@ int CDVDVideoCodecFFmpeg::FilterOpen(const std::string &filters, bool scale) {
         //    unable to alloc filter graph");
         return -1;
     }
+
+    // Error exits below retain partial graph state for FilterClose/Dispose.
 
     AVFilter *srcFilter = avfilter_get_by_name("buffer");
     AVFilter *outFilter = avfilter_get_by_name(
@@ -1106,6 +1130,8 @@ void CDVDVideoCodecFFmpeg::SetCodecControl(int flags) {
 }
 
 void CDVDVideoCodecFFmpeg::SetHardware(IHardwareDecoder *hardware) {
+    // Deliberately no AddRef and no self-assignment guard: passing the current
+    // last reference can delete it before the same raw address is republished.
     SAFE_RELEASE(m_pHardware);
     m_pHardware = hardware;
     UpdateName();

@@ -49,9 +49,15 @@ double CDVDClock::GetClock(bool interpolated /*= true*/) {
 }
 
 double CDVDClock::GetClock(double &absolute, bool interpolated /*= true*/) {
+    // This overload samples before locking and then uses m_systemsection, not
+    // the m_critSection used by the scalar overload.  Both paths eventually
+    // mutate the same playing-clock fields through SystemToPlaying().
     int64_t current = m_videoRefClock->GetTime(interpolated);
 
     CSingleLock lock(m_systemsection);
+    // The caller-visible absolute value is published before either internal
+    // accumulator.  The following compound assignment converts through double
+    // and then truncates back to signed int64_t without a finite/range guard.
     absolute = SystemToAbsolute(current);
 
     m_systemAdjust += m_speedAdjust * (current - m_lastSystemTime);
@@ -61,6 +67,10 @@ double CDVDClock::GetClock(double &absolute, bool interpolated /*= true*/) {
 }
 
 void CDVDClock::SetVsyncAdjust(double adjustment) {
+    // Publish the raw double under the primary clock lock.  SystemToPlaying's
+    // reset path can also clear this field while the absolute-output GetClock
+    // holds the distinct system lock, so this is deliberately not one global
+    // field generation and the value is not normalized or range-checked.
     CSingleLock lock(m_critSection);
     m_vSyncAdjust = adjustment;
 }
@@ -99,11 +109,13 @@ void CDVDClock::SetSpeed(int iSpeed) {
     }
 
     if(iSpeed == DVD_PLAYSPEED_PAUSE) {
+        // Repeated pause requests do not advance the frozen clock snapshot.
         if(!m_pauseClock)
             m_pauseClock = m_videoRefClock->GetTime();
         return;
     }
 
+    // Signed integer division is intentional and also covers reverse speeds.
     int64_t current;
     int64_t newfreq = m_systemFrequency * DVD_PLAYSPEED_NORMAL / iSpeed;
 
@@ -123,6 +135,7 @@ void CDVDClock::SetSpeedAdjust(double adjust) {
     // adjust);
 
     CSingleLock lock(m_critSection);
+    // SetCaching publishes its new cache state before making this reset call.
     m_speedAdjust = adjust;
 }
 
@@ -132,9 +145,13 @@ double CDVDClock::GetSpeedAdjust() {
 }
 
 double CDVDClock::ErrorAdjust(double error, const char *log) {
+    // This outer recursive lock remains held while GetClock takes the distinct
+    // system section and while Discontinuity recursively takes this lock again.
     CSingleLock lock(m_critSection);
 
     double clock, absolute, adjustment;
+    // Sampling and accumulator/reset publication happen even when a later gate
+    // returns zero.  The optimized Android/iOS bodies never read log.
     clock = GetClock(absolute);
 
     // skip minor updates while speed adjust is active
@@ -180,6 +197,9 @@ void CDVDClock::Discontinuity(double clock, double absolute) {
 }
 
 void CDVDClock::SetMaxSpeedAdjust(double speed) {
+    // The four references store the raw double under this dedicated recursive
+    // mutex without validating sign or finiteness. On 32-bit targets the two
+    // word stores both occur while the lock is held.
     CSingleLock lock(m_speedsection);
 
     m_maxspeedadjust = speed;
@@ -237,11 +257,16 @@ double CDVDClock::SystemToAbsolute(int64_t system) {
 }
 
 int64_t CDVDClock::AbsoluteToSystem(double absolute) {
+    // Preserve divide -> multiply -> signed-int64 conversion -> offset addition.
+    // There is no lock, finite/range guard or alternate saturating helper.
     return (int64_t)(absolute / DVD_TIME_BASE * m_systemFrequency) +
         m_systemOffset;
 }
 
 double CDVDClock::SystemToPlaying(int64_t system) {
+    // This helper deliberately has no lock of its own.  The scalar GetClock
+    // calls it under m_critSection, while the absolute-output overload calls it
+    // under m_systemsection, so the two APIs do not form one lock generation.
     int64_t current;
 
     if(m_bReset) {
@@ -256,6 +281,9 @@ double CDVDClock::SystemToPlaying(int64_t system) {
         m_bReset = false;
     }
 
+    // The frozen-clock decision uses the zero-sentinel pauseClock itself, not
+    // m_paused.  The final signed tick arithmetic/division has no zero or
+    // overflow guard.
     if(m_pauseClock)
         current = m_pauseClock;
     else

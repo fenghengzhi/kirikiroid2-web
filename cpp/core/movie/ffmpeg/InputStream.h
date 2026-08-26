@@ -13,7 +13,7 @@ class InputStream : public IRef<InputStream> {
     std::string m_strFileName;
 
 public:
-    InputStream(IStream *s, std::string filename);
+    InputStream(IStream *s, const std::string &filename);
 
     ~InputStream() override;
 

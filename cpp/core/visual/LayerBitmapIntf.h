@@ -175,8 +175,11 @@ public:
 
     bool FillMask(tTVPRect rect, tjs_int value);
 
-    virtual bool CopyRect(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
-                          tTVPRect refrect) {
+    // This convenience overload is intentionally non-virtual.  The native
+    // hierarchy has only the plane-taking CopyRect slot; calls through an
+    // iTVPBaseBitmap pointer must add the default plane here before dispatch.
+    bool CopyRect(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
+                  tTVPRect refrect) {
         return CopyRect(x, y, ref, refrect,
                         TVP_BB_COPY_MAIN | TVP_BB_COPY_MASK);
     }
@@ -224,9 +227,11 @@ public:
     bool DoBoxBlur(const tTVPRect &rect, const tTVPRect &area);
     bool DoBoxBlurForAlpha(const tTVPRect &rect, const tTVPRect &area);
 
-    virtual void UDFlip(const tTVPRect &rect);
+    // The flip helpers are ordinary statically-dispatched methods, not vtable
+    // entries.  Concrete bitmap classes may hide them for their own backend.
+    void UDFlip(const tTVPRect &rect);
 
-    virtual void LRFlip(const tTVPRect &rect);
+    void LRFlip(const tTVPRect &rect);
 
     void DoGrayScale(tTVPRect rect);
 
@@ -252,15 +257,15 @@ public:
     bool Fill(tTVPRect rect, tjs_uint32 value) override;
 
     bool CopyRect(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
-                  tTVPRect refrect) override {
+                  tTVPRect refrect) {
         return CopyRect(x, y, ref, refrect,
                         TVP_BB_COPY_MAIN | TVP_BB_COPY_MASK);
     }
 
     bool CopyRect(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
                   tTVPRect refrect, tjs_int plane) override;
-    void UDFlip(const tTVPRect &rect) override;
-    void LRFlip(const tTVPRect &rect) override;
+    void UDFlip(const tTVPRect &rect);
+    void LRFlip(const tTVPRect &rect);
 };
 //---------------------------------------------------------------------------
 class tTVPBaseTexture : public iTVPBaseBitmap {

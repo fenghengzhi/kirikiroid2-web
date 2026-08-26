@@ -145,8 +145,8 @@ CAEChannelInfo &CAEChannelInfo::operator=(const enum AEChannel *rhs) {
         ++m_channelCount;
     }
 
-    /* the last entry should be nullptr, if not we were passed a non
-     * nullptr terminated list */
+    /* The last entry should be AE_CH_NULL; otherwise the input was not
+     * terminated within the fixed-capacity scan. */
     assert(rhs[m_channelCount] == AE_CH_NULL);
 
     return *this;
@@ -225,7 +225,7 @@ enum AEChannel CAEChannelInfo::operator[](unsigned int i) const {
 
 CAEChannelInfo::operator std::string() const {
     if(m_channelCount == 0)
-        return "nullptr";
+        return "NULL";
 
     std::string s;
     for(unsigned int i = 0; i < m_channelCount - 1; ++i) {
@@ -300,8 +300,9 @@ int CAEChannelInfo::BestMatch(const std::vector<CAEChannelInfo> &dsts,
     src.ResolveChannels(availableDstChannels);
 
     bool remapped = (src != *this);
-    /* good enough approximation (does not account for added channels)
-     */
+    /* Historical reference behavior: despite its name, this term is the
+     * positive resolved-count growth. Removed and added channels are not
+     * tracked independently. */
     int dropped = std::max((int)src.Count() - (int)Count(), 0);
 
     int bestScore = std::numeric_limits<int>::min();

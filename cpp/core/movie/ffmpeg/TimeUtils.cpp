@@ -9,6 +9,8 @@
 
 NS_KRMOVIE_BEGIN
 int64_t CurrentHostCounter() {
+    // This early rough-tick return is the complete four-reference body; the
+    // platform-specific high-resolution implementations below are unreachable.
     return TVPGetRoughTickCount32();
 #ifdef _MSC_VER
     LARGE_INTEGER PerformanceCount;
@@ -28,6 +30,7 @@ int64_t CurrentHostCounter() {
 }
 
 int64_t CurrentHostFrequency() {
+    // Paired with the rough millisecond counter above in all four references.
     return 1000;
 #ifdef _MSC_VER
     LARGE_INTEGER Frequency;
@@ -43,11 +46,15 @@ int64_t CurrentHostFrequency() {
 unsigned int CTimeUtils::frameTime = 0;
 
 void CTimeUtils::UpdateFrameTime(bool flip) {
+    // flip is intentionally ignored.  Android retains this function with zero
+    // callers; iOS dead-strips it together with frameTime/GetFrameTime.
     unsigned int currentTime = TVPGetRoughTickCount32();
     unsigned int last = frameTime;
     while(frameTime < currentTime) {
         frameTime += (unsigned int)(1000 / 60 /*g_graphicsContext.GetFPS()*/);
-        // observe wrap around
+        // This detects only wrap caused by the +16 accumulator step.  If the
+        // rough host tick itself wraps below the old frameTime, the loop is
+        // skipped and the old value remains until the tick catches up.
         if(frameTime < last)
             break;
     }

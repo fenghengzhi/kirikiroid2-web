@@ -47,6 +47,13 @@ namespace MathUtils {
         assert(x < static_cast<double>((int)(INT_MAX / 2)) + 1.0);
 
 #if defined(DISABLE_MATHUTILS_ASM_ROUND_INT)
+        // The four ARM reference builds inline this exact path as an add of
+        // the double bit pattern 0x41E0000000100000 (2^31 + 0.5), an
+        // unsigned truncating conversion, then a bit-31 flip equivalent to
+        // the unsigned subtraction below.  iOS retains the two assertions;
+        // Android is built with them disabled.  Keep the hex-float token and
+        // do not replace this with std::round, floor, a clamp, or a finite
+        // check: those change the double-rounding and invalid-conversion edge.
         /* This implementation warrants some further explanation.
          *
          * First, a couple of notes on rounding:

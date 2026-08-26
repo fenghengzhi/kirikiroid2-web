@@ -20,14 +20,14 @@ TVPInGameMenuForm *TVPInGameMenuForm::create(const std::string &title,
     return ret;
 }
 
-void TVPInGameMenuForm::bindHeaderController(const Node *allNodes) {
-    _title = allNodes->getChildByName<Button *>("title");
+void TVPInGameMenuForm::bindHeaderController(const NodeMap &allNodes) {
+    _title = allNodes.findController<Button>("title");
     if(_title)
         _title->setEnabled(false);
 }
 
-void TVPInGameMenuForm::bindBodyController(const Node *allNodes) {
-    _list = allNodes->getChildByName<ListView *>("list");
+void TVPInGameMenuForm::bindBodyController(const NodeMap &allNodes) {
+    _list = allNodes.findController<ListView>("list");
     if(NaviBar.Left) {
         NaviBar.Left->addClickEventListener([this](cocos2d::Ref *) {
             TVPMainScene::GetInstance()->popUIForm(this);

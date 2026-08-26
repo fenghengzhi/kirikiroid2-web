@@ -18,9 +18,9 @@ private:
               const std::string *btnText,
               const std::function<void(int)> &callback);
 
-    void bindHeaderController(const Node *allNodes) override {}
-    void bindBodyController(const Node *allNodes) override;
-    void bindFooterController(const Node *allNodes) override {}
+    void bindHeaderController(const NodeMap &allNodes) override {}
+    void bindBodyController(const NodeMap &allNodes) override;
+    void bindFooterController(const NodeMap &allNodes) override {}
 
     void onKeyPressed(cocos2d::EventKeyboard::KeyCode keyCode,
                       cocos2d::Event *event) override;
@@ -53,9 +53,9 @@ public:
     void setProgress2Visible(bool visible);
 
 private:
-    void bindHeaderController(const Node *allNodes) override {}
-    void bindBodyController(const Node *allNodes) override;
-    void bindFooterController(const Node *allNodes) override {}
+    void bindHeaderController(const NodeMap &allNodes) override {}
+    void bindBodyController(const NodeMap &allNodes) override;
+    void bindFooterController(const NodeMap &allNodes) override {}
 
     cocos2d::ui::LoadingBar *_progressBar[2]{};
     cocos2d::ui::Text *_textTitle{}, *_textContent{}, *_textProgress[2]{};

@@ -12,6 +12,9 @@ NS_KRMOVIE_BEGIN
 
 struct DVDMessageListItem {
     DVDMessageListItem(CDVDMsg *msg, int prio) {
+        // Every linked node owns exactly one message reference.  Put consumes
+        // the reference supplied by its caller only after this AddRef and the
+        // list insertion have succeeded.
         message = msg->AddRef();
         priority = prio;
     }
@@ -69,6 +72,9 @@ public:
         return Get(pMsg, iTimeoutInMilliSeconds, priority);
     }
 
+    // These trivial accessors are intentionally unlocked in all four
+    // reference targets.  Only the abort flag is atomic; callers requiring a
+    // coherent queue snapshot do not get one from the remaining accessors.
     int GetDataSize() const { return m_iDataSize; }
 
     int GetTimeSize();
@@ -103,6 +109,9 @@ private:
 
     std::atomic<bool> m_bAbortRequest;
     bool m_bInitialized;
+    // Deliberately not initialized by the constructor in the four reference
+    // binaries.  Init is the normal first writer; WaitUntilEmpty before Init
+    // also writes it, while the other pre-Init methods do not read it.
     bool m_drain;
 
     int m_iDataSize;

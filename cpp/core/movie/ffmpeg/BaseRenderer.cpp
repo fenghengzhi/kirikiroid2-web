@@ -27,6 +27,8 @@ CBaseRenderer::CBaseRenderer() {
 CBaseRenderer::~CBaseRenderer() = default;
 
 float CBaseRenderer::GetAspectRatio() const {
+    // Preserve this exact floating-point operation order.  Algebraically
+    // cancelling the dimensions changes rounding and zero/NaN boundaries.
     float width = (float)m_sourceWidth;
     float height = (float)m_sourceHeight;
     return m_sourceFrameRatio * width / height * m_sourceHeight / m_sourceWidth;
@@ -70,6 +72,8 @@ inline void CBaseRenderer::ReorderDrawPoints() {
     //     changeAspect = false;
     //   }
 
+    // These are intentionally integers: rectangle dimensions, centers and
+    // halves all truncate at the same points in the four references.
     int diffX = 0;
     int diffY = 0;
     int centerX = 0;
@@ -173,10 +177,12 @@ void CBaseRenderer::CalcNormalRenderRect(float offsetX, float offsetY,
                                          float zoomAmount,
                                          float verticalShift) {
     // if view window is empty, set empty destination
-    if(height == 0 || width == 0) {
+    if(width == 0 || height == 0) {
         m_destRect.SetRect(0.0f, 0.0f, 0.0f, 0.0f);
         return;
     }
+    // The remaining upstream implementation is disabled below.  Consequently
+    // the active function does nothing for non-zero dimensions.
 #if 0
         // scale up image as much as possible
         // and keep the aspect ratio (introduces with black bars)
@@ -341,6 +347,7 @@ void CBaseRenderer::CalculateFrameAspectRatio(unsigned int desired_width,
 }
 
 void CBaseRenderer::ManageRenderArea() {
+    // Empty in the reference targets; the complete upstream body is disabled.
 #if 0
         m_viewRect = g_graphicsContext.GetViewWindow();
 
@@ -397,6 +404,7 @@ void CBaseRenderer::ManageRenderArea() {
 }
 
 void CBaseRenderer::SetViewMode(int viewMode) {
+    // Empty in the reference targets; the complete upstream body is disabled.
 #if 0
         if (viewMode < ViewModeNormal || viewMode > ViewModeZoom110Width)
           viewMode = ViewModeNormal;
@@ -533,6 +541,7 @@ void CBaseRenderer::SetViewMode(int viewMode) {
 }
 
 void CBaseRenderer::MarkDirty() {
+    // Intentionally empty in the reference targets.
     // g_windowManager.MarkDirty(m_destRect);
 }
 
@@ -541,6 +550,8 @@ void CBaseRenderer::
                                       std::vector<std::pair<std::string, int>>
                                           &list,
                                       int &current, void *data) {
+    // With neither HAS_DX nor HAS_GL, the retained Android implementation
+    // appends exactly this one pair; iOS dead-strips this unused function.
     list.emplace_back("rendermethod_auto" /*g_localizeStrings.Get(13416)*/,
                       RENDER_METHOD_AUTO);
 

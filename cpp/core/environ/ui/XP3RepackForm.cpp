@@ -207,9 +207,9 @@ class TVPXP3RepackFileListForm : public iTVPBaseForm {
 public:
     ~TVPXP3RepackFileListForm() override;
 
-    void bindHeaderController(const Node *allNodes) override {}
-    void bindBodyController(const Node *allNodes) override;
-    void bindFooterController(const Node *allNodes) override {}
+    void bindHeaderController(const NodeMap &allNodes) override {}
+    void bindBodyController(const NodeMap &allNodes) override;
+    void bindFooterController(const NodeMap &allNodes) override {}
 
     static TVPXP3RepackFileListForm *show(std::vector<std::string> &filelist,
                                           const std::string &dir);
@@ -232,16 +232,16 @@ TVPXP3RepackFileListForm::~TVPXP3RepackFileListForm() {
         delete m_pRepacker;
 }
 
-void TVPXP3RepackFileListForm::bindBodyController(const Node *allNodes) {
+void TVPXP3RepackFileListForm::bindBodyController(const NodeMap &allNodes) {
     LocaleConfigManager *locmgr = LocaleConfigManager::GetInstance();
-    const auto btnList = allNodes->getChildByName<ui::ScrollView *>("btn_list");
+    const auto btnList = allNodes.findController<ui::ScrollView>("btn_list");
     const cocos2d::Size containerSize = btnList->getContentSize();
     btnList->setInnerContainerSize(containerSize);
-    const auto btnCell = allNodes->getChildByName<Widget *>("btn_cell");
-    const auto btn = allNodes->getChildByName<Button *>("btn");
+    const auto btnCell = allNodes.findController<Widget>("btn_cell");
+    const auto btn = allNodes.findController<Button>("btn");
     constexpr int nButton = 2;
 
-    locmgr->initText(allNodes->getChildByName<Text *>("title"), "XP3 Repack");
+    locmgr->initText(allNodes.findController<Text>("title"), "XP3 Repack");
 
     btn->setTitleText(locmgr->GetText("start"));
     btn->addClickEventListener(
@@ -256,8 +256,8 @@ void TVPXP3RepackFileListForm::bindBodyController(const Node *allNodes) {
 
     btn->removeFromParent();
 
-    ListViewFiles = allNodes->getChildByName<ListView *>("list_2");
-    ListViewPref = allNodes->getChildByName<ListView *>("list_1");
+    ListViewFiles = allNodes.findController<ListView>("list_2");
+    ListViewPref = allNodes.findController<ListView>("list_1");
 }
 
 TVPXP3RepackFileListForm *

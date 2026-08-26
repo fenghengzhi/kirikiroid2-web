@@ -38,6 +38,8 @@ double AEDelayStatus::GetDelay() {
 }
 
 #if 0
+    // No GuessChLayout body or warning literal is emitted by any of the four
+    // reference binaries; keep this historical source block disabled.
     CAEChannelInfo CAEUtil::GuessChLayout(const unsigned int channels)
     {
       CLog::Log(LOGWARNING, "CAEUtil::GuessChLayout - "
@@ -128,6 +130,7 @@ unsigned int
 CAEUtil::DataFormatToDitherBits(const enum AEDataFormat dataFormat) {
     if(dataFormat == AE_FMT_S24NE4MSB)
         return 8;
+    // The unsigned return deliberately preserves the historical -8 wrap.
     if(dataFormat == AE_FMT_S24NE3)
         return -8;
     else
@@ -373,6 +376,8 @@ void CAEUtil::ClampArray(float *data, uint32_t count) {
   (dithering)
 */
 float CAEUtil::FloatRand1(const float min, const float max) {
+    // Historical range math is centered on zero: the midpoint of min/max is
+    // never added, so asymmetric bounds do not produce [min, max].
     const float delta = (max - min) / 2;
     const float factor = delta / (float)INT32_MAX;
     return ((float)(m_seed = (214013 * m_seed + 2531011)) * factor) - delta;
@@ -420,7 +425,7 @@ void CAEUtil::FloatRand4(const float min, const float max, float result[4],
     m_sseSeed = _mm_or_si128(m_sseSeed, cur_seed_split);
     m_sseSeed = _mm_add_epi32(m_sseSeed, adder);
 
-    /* adjust the value to the range requested */
+    /* scale the new state by the half-span around zero; no midpoint is added */
     res = _mm_cvtepi32_ps(m_sseSeed);
     if(sseresult)
         *sseresult = _mm_mul_ps(res, f);
@@ -433,6 +438,7 @@ void CAEUtil::FloatRand4(const float min, const float max, float result[4],
     }
 
 #else
+    // As above, this is a zero-centered half-span rather than [min, max].
     const float delta = (max - min) / 2.0f;
     const float factor = delta / (float)INT32_MAX;
 
@@ -458,6 +464,8 @@ bool CAEUtil::S16NeedsByteSwap(AEDataFormat in, AEDataFormat out) {
         AE_FMT_S16LE;
 #endif
 
+    // RAW participates in this comparison as native-endian S16, not as an
+    // opaque bitstream format.
     if(in == AE_FMT_S16NE || (in == AE_FMT_RAW))
         in = nativeFormat;
     if(out == AE_FMT_S16NE || (out == AE_FMT_RAW))
@@ -467,6 +475,8 @@ bool CAEUtil::S16NeedsByteSwap(AEDataFormat in, AEDataFormat out) {
 }
 
 uint64_t CAEUtil::GetAVChannelLayout(const CAEChannelInfo &info) {
+    // This is a presence conversion: duplicate recognized entries collapse
+    // to one AV bit and every unrecognized AE channel is ignored.
     uint64_t channelLayout = 0;
     if(info.HasChannel(AE_CH_FL))
         channelLayout |= AV_CH_FRONT_LEFT;
@@ -511,6 +521,11 @@ uint64_t CAEUtil::GetAVChannelLayout(const CAEChannelInfo &info) {
 CAEChannelInfo CAEUtil::GetAEChannelLayout(uint64_t layout) {
     CAEChannelInfo channelLayout;
     channelLayout.Reset();
+
+    // Keep the historical asymmetric mapping below.  The three top-back AV
+    // bits append ordinary BL/BC/BR, and operator+= preserves duplicates when
+    // the corresponding ordinary back bit is also present.  Bits outside the
+    // 18 recognized low bits are ignored.
 
     if(layout & AV_CH_FRONT_LEFT)
         channelLayout += AE_CH_FL;

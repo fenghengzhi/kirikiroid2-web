@@ -4,6 +4,8 @@ NS_KRMOVIE_BEGIN
 bool CDVDVideoCodec::IsSettingVisible(const std::string &condition,
                                       const std::string &value,
                                       const CSetting *setting, void *data) {
+    // Android retains this zero-caller helper; iOS dead-strips it.  condition
+    // and data are unused in the emitted Android bodies.
     if(setting == nullptr || value.empty())
         return false;
 #if 0
@@ -42,6 +44,9 @@ bool CDVDVideoCodec::IsSettingVisible(const std::string &condition,
 
 bool CDVDVideoCodec::IsCodecDisabled(
     const std::map<AVCodecID, std::string> &map, AVCodecID id) {
+    // Both branches return false, but the Android references still execute the
+    // ordered-map traversal; malformed map/node state can therefore fault.
+    // This zero-caller helper is dead-stripped on iOS.
     auto codec = map.find(id);
     if(codec != map.end()) {
         return false;

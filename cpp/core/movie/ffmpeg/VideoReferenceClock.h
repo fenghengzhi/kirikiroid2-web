@@ -4,6 +4,10 @@
 NS_KRMOVIE_BEGIN
 class CVideoSync;
 
+// The four reference builds retain the dormant vblank calculations below, but
+// emit no thread/Process/Wait producer and initialize m_UseVblank only to false.
+// During an ordinary object lifetime this class is therefore a recursively
+// locked wrapper around the 32-bit millisecond rough tick.
 class CVideoReferenceClock /*: public CThread*/
 {
 public:
@@ -39,8 +43,7 @@ private:
                            // is stopped
     int64_t m_SystemFrequency; // frequency of the systemclock
 
-    bool m_UseVblank; // set to true when vblank is used as clock
-                      // source
+    bool m_UseVblank; // initialized false; no emitted normal path sets it true
     double m_RefreshRate; // current refreshrate
     int m_MissedVblanks; // number of clock updates missed by the
                          // vblank clock

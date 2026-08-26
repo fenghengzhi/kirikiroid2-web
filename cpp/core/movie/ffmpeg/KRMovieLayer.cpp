@@ -17,12 +17,18 @@ VideoPresentLayer::~VideoPresentLayer() {
 
 tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
     BitmapPicture pic;
+    // This fast path deliberately reads the plain count without the picture
+    // mutex.  There is no locked recheck: a concurrent Flush after this test
+    // can leave the following path consuming a cleared slot and decrementing
+    // the count below zero.
     if(!m_usedPicture) {
         return nullptr;
     }
     {
         std::lock_guard<std::mutex> lk(m_mtxPicture);
         BitmapPicture &picbuf = m_picture[m_curPicture];
+        // swap transfers the four owned pointers plus width/height only.  The
+        // format and pts fields are intentionally not part of the transfer.
         picbuf.swap(pic);
         m_curPicture = (m_curPicture + 1) & (MAX_BUFFER_COUNT - 1);
         --m_usedPicture;
@@ -32,6 +38,8 @@ tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
     FrameMove();
     int n = m_nCurBmpBuff;
     m_nCurBmpBuff = !m_nCurBmpBuff;
+    // Both texture pointers are borrowed and unchecked.  The slot is already
+    // consumed, waiters notified and the selector flipped if Update throws.
     m_BmpBits[n]->Update(pic.data[0], pic.width * 4, 0, 0, pic.width,
                          pic.height);
     return m_BmpBits[n];
@@ -39,6 +47,9 @@ tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
 
 void VideoPresentLayer::SetVideoBuffer(tTVPBaseTexture *buff1,
                                        tTVPBaseTexture *buff2, long size) {
+    // The two pointers are borrowed raw storage; there is no AddRef.  The size
+    // argument is intentionally ignored, and every call resets the front/back
+    // selector to buffer zero.
     m_BmpBits[0] = buff1;
     m_BmpBits[1] = buff2;
     m_nCurBmpBuff = 0;
@@ -46,6 +57,11 @@ void VideoPresentLayer::SetVideoBuffer(tTVPBaseTexture *buff1,
 }
 
 void VideoPresentLayer::OnContinuousCallback(tjs_uint64 tick) {
+    // tick is intentionally unused.  At most one due Update is synchronously
+    // forwarded through the derived OnPlayEvent; GetFrontBuffer later consumes
+    // the picture when layerExMovie handles the queued event.
+    // Like GetFrontBuffer, the initial plain-count read is intentionally
+    // unlocked and is not repeated after taking m_mtxPicture.
     if(!m_usedPicture)
         return;
     double m_curpts = m_pPlayer->GetClock() / DVD_TIME_BASE;
@@ -76,6 +92,9 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     if(pic.pts == DVD_NOPTS_VALUE)
         return 0;
 
+    // The full check is unlocked, then performs exactly one unconditional
+    // wait.  Spurious wakeup or another producer can therefore reach the
+    // second check still full and return -1.
     if(m_usedPicture >= MAX_BUFFER_COUNT) {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
         m_condPicture.wait(lk);
@@ -85,14 +104,21 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
 
     int width = pic.iWidth, height = pic.iHeight;
 
+    // Allocation and conversion happen outside the ring mutex.  A null
+    // allocation is not checked, and publication is not transactional.
     uint8_t *data = (uint8_t *)TJSAlignedAlloc(width * height * 4, 4);
     int datasize = width * 4;
 
+    // All four references pass numeric value 28.  Their bundled descriptor
+    // table maps 28 to RGBA (ARGB/RGBA/ABGR/BGRA are 27..30); the Web port's
+    // libavutil-55 headers retain that same layout.  Keep the source symbol
+    // instead of baking the ABI-specific enum value into this call.
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx, width, height, AV_PIX_FMT_YUV420P, width, height,
         AV_PIX_FMT_RGBA, /*sws_flags*/ SWS_FAST_BILINEAR, nullptr, nullptr,
         nullptr);
     assert(img_convert_ctx);
+    // The processed-line result is computed but never gates publication.
     int processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
                               pic.iHeight, &data, &datasize);
 
@@ -115,10 +141,11 @@ void MoviePlayerLayer::BuildGraph(tTJSNI_VideoOverlay *callbackwin,
                                   IStream *stream, const tjs_char *streamname,
                                   const tjs_char *type, uint64_t size) {
     m_pCallbackWin = callbackwin;
-    m_pPlayer->SetCallback([this](auto &&PH1, auto &&PH2) {
-        OnPlayEvent(std::forward<decltype(PH1)>(PH1),
-                    std::forward<decltype(PH2)>(PH2));
-    });
+    // Keep the native std::bind topology: the erased target stores a virtual
+    // member-function representation and a borrowed raw this pointer.
+    m_pPlayer->SetCallback(std::bind(&MoviePlayerLayer::OnPlayEvent, this,
+                                     std::placeholders::_1,
+                                     std::placeholders::_2));
     m_pPlayer->OpenFromStream(stream, streamname, type, size);
 }
 

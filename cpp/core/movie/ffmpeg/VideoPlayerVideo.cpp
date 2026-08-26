@@ -22,6 +22,8 @@ public:
                             CDVDVideoCodec *codec) :
         CDVDMsg(GENERAL_STREAMCHANGE), m_codec(codec), m_hints(hints) {}
 
+    // Pending queue ownership ends only after the worker installs the codec
+    // and nulls this field; a flushed/unprocessed message deletes it here.
     ~CDVDMsgVideoCodecChange() override { delete m_codec; }
 
     CDVDVideoCodec *m_codec;
@@ -66,11 +68,15 @@ CVideoPlayerVideo::CVideoPlayerVideo(
 }
 
 CVideoPlayerVideo::~CVideoPlayerVideo() {
+    // As in the reference objects, this is not CloseStream: it stops the
+    // worker but does not delete the installed codec or temporary overlay.
     m_bAbortOutput = true;
     StopThread();
 }
 
 double CVideoPlayerVideo::GetOutputDelay() {
+    // Four-end reference formula. It intentionally accepts negative/NaN fps
+    // and does not special-case INT_MIN before the integer abs operation.
     double time = m_messageQueue.GetPacketCount(CDVDMsg::DEMUXER_PACKET);
     if(m_fFrameRate)
         time = (time * DVD_TIME_BASE) / m_fFrameRate;
@@ -84,6 +90,9 @@ double CVideoPlayerVideo::GetOutputDelay() {
 }
 
 bool CVideoPlayerVideo::OpenStream(CDVDStreamInfo &hint) {
+    // Process-info reset and render-info construction precede the attached-pic
+    // rejection and codec factory, so either failure can coexist with the old
+    // decoder still running.
     m_processInfo.ResetVideoCodecInfo();
 
     CRenderInfo info;
@@ -102,9 +111,14 @@ bool CVideoPlayerVideo::OpenStream(CDVDStreamInfo &hint) {
         return false;
     }
 
+    // A running child receives a normal-priority owning change message.  Put's
+    // return is ignored, and construction/copy failure has no owner for the
+    // raw codec already returned by the factory.
     if(m_messageQueue.IsInited())
         m_messageQueue.Put(new CDVDMsgVideoCodecChange(hint, codec), 0);
     else {
+        // Initial installation precedes Init/Create and is not rolled back if
+        // thread creation subsequently throws.
         OpenStream(hint, codec);
         //		CLog::Log(LOGNOTICE, "Creating video thread");
         m_messageQueue.Init();
@@ -159,6 +173,8 @@ void CVideoPlayerVideo::OpenStream(CDVDStreamInfo &hint,
     else
         m_fForcedAspectRatio = 0.0;
 
+    // ClearPicture/delete the old raw owner before adopting the candidate.
+    // Later m_hints/list operations may throw after that ownership transfer.
     if(m_pVideoCodec) {
         m_pVideoCodec->ClearPicture(&m_picture);
         delete m_pVideoCodec;
@@ -172,6 +188,8 @@ void CVideoPlayerVideo::OpenStream(CDVDStreamInfo &hint,
 }
 
 void CVideoPlayerVideo::CloseStream(bool bWaitForBuffers) {
+    // CloseStream, not the destructor, is the sole cleanup path for the raw
+    // installed codec and m_pTempOverlayPicture.
     // wait until buffers are empty
     if(bWaitForBuffers && m_speed > 0) {
         m_messageQueue.Put(new CDVDMsg(CDVDMsg::VIDEO_DRAIN), 0);
@@ -202,6 +220,7 @@ void CVideoPlayerVideo::CloseStream(bool bWaitForBuffers) {
 }
 
 bool CVideoPlayerVideo::AcceptsData() {
+    // IsFull is exactly GetLevel()==100; it is not a packet-count or >= check.
     bool full = m_messageQueue.IsFull();
     return !full;
 }
@@ -282,6 +301,9 @@ void CVideoPlayerVideo::Process() {
                 //	CLog::Log(LOGDEBUG, "CVideoPlayerVideo -
                 // CDVDMsg::GENERAL_SYNCHRONIZE");
             } else
+                // A slice timeout retains the shared barrier through a new
+                // priority-list reference; the current reference is released
+                // at the bottom of this worker iteration.
                 m_messageQueue.Put(pMsg->AddRef(),
                                    1); /* push back as prio message, to process
                                           other prio messages */
@@ -330,6 +352,9 @@ void CVideoPlayerVideo::Process() {
                 m_syncState = IDVDStreamPlayer::SYNC_STARTING;
 
             m_renderManager.DiscardBuffer();
+        // GENERAL_EOF intentionally has no dedicated branch in the four
+        // references.  It falls through the chain and is released without an
+        // EOS-state mutation; HasData counts only queued packet bytes.
         } else if(pMsg->IsType(CDVDMsg::PLAYER_SETSPEED)) {
             m_speed = static_cast<CDVDMsgInt *>(pMsg)->m_value;
             if(m_pVideoCodec)
@@ -339,6 +364,8 @@ void CVideoPlayerVideo::Process() {
             CDVDMsgVideoCodecChange *msg(
                 static_cast<CDVDMsgVideoCodecChange *>(pMsg));
 
+            // Drain the old decoder in place; queued normal packets before the
+            // change were already consumed in FIFO order and are not flushed.
             while(!m_bStop && m_pVideoCodec) {
                 m_pVideoCodec->SetCodecControl(DVD_CODEC_CTRL_DRAIN);
                 int decoderState = m_pVideoCodec->Decode(
@@ -353,6 +380,10 @@ void CVideoPlayerVideo::Process() {
                     break;
             }
 
+            // pts and frametime are worker locals and deliberately survive the
+            // switch.  The new m_fFrameRate updates frametime only after the
+            // next picture; a zero-duration first picture initially uses the
+            // old value.  Successful install then transfers message ownership.
             OpenStream(msg->m_hints, msg->m_codec);
             msg->m_codec = nullptr;
             m_picture.iFlags &= ~DVP_FLAG_ALLOCATED;
@@ -586,6 +617,10 @@ bool CVideoPlayerVideo::ProcessDecoderOutput(int &decoderState,
             if(m_syncState == IDVDStreamPlayer::SYNC_STARTING &&
                !(iResult & EOS_DROPPED) &&
                !(m_picture.iFlags & DVP_FLAG_DROPPED)) {
+                // Child state changes before allocating the parent message;
+                // failure has no rollback.  Cache values are fixed 50/100 ms,
+                // and a pts synthesized from the predicted clock is NOPTS in
+                // the publication even though it was used for rendering.
                 m_syncState = IDVDStreamPlayer::SYNC_WAITSYNC;
                 SStartMsg msg;
                 msg.player = VideoPlayer_VIDEO;
@@ -627,10 +662,15 @@ bool CVideoPlayerVideo::ProcessDecoderOutput(int &decoderState,
 }
 
 void CVideoPlayerVideo::OnExit() {
+    // Exactly empty in all four vtables. CThread's entry code performs the
+    // post-Process running-state transition/notification; this hook owns no
+    // queue, codec, picture, or dropping-stat cleanup.
     //	CLog::Log(LOGNOTICE, "thread end: video_thread");
 }
 
 void CVideoPlayerVideo::SetSpeed(int speed) {
+    // Initialized children serialize every speed update as a priority message;
+    // there is no last-speed coalescing step.
     if(m_messageQueue.IsInited())
         m_messageQueue.Put(new CDVDMsgInt(CDVDMsg::PLAYER_SETSPEED, speed), 1);
     else
@@ -643,12 +683,18 @@ void CVideoPlayerVideo::Flush(bool sync) {
     /* and any demux packet that has been taken out of queue need to
      */
     /* be disposed of before we flush */
+    // The default filter removes demux packets only.  Older non-packet control
+    // messages remain: old priority controls keep FIFO precedence over this
+    // new priority GENERAL_FLUSH, which still preempts surviving normal items.
     m_messageQueue.Flush();
     m_messageQueue.Put(new CDVDMsgBool(CDVDMsg::GENERAL_FLUSH, sync), 1);
     m_bAbortOutput = true;
 }
 
 #ifdef HAS_VIDEO_PLAYBACK
+// This entire legacy surface is absent from all four reference objects. It is
+// retained only as disabled provenance and is not part of their layout or
+// OutputPicture call chain.
 void CVideoPlayerVideo::ProcessOverlays(DVDVideoPicture *pSource, double pts) {
     // remove any overlays that are out of time
     if(m_syncState == IDVDStreamPlayer::SYNC_INSYNC)
@@ -696,6 +742,8 @@ void CVideoPlayerVideo::ProcessOverlays(DVDVideoPicture *pSource, double pts) {
 #endif
 
 std::string CVideoPlayerVideo::GetStereoMode() {
+    // All four references return a default empty string. The disabled block
+    // below contributes neither metadata lookup nor inversion at runtime.
     std::string stereo_mode;
 #if 0
         switch (CMediaSettings::GetInstance().GetCurrentVideoSettings().m_StereoMode)
@@ -715,6 +763,8 @@ int CVideoPlayerVideo::OutputPicture(const DVDVideoPicture *src, double pts) {
     m_bAbortOutput = false;
 
     /* picture buffer is not allowed to be modified in this call */
+    // DVDVideoPicture is copied shallowly; decoder planes remain borrowed
+    // until the concrete renderer synchronously copies/converts them below.
     DVDVideoPicture picture(*src);
     DVDVideoPicture *pPicture = &picture;
 #if 0
@@ -853,6 +903,9 @@ int CVideoPlayerVideo::OutputPicture(const DVDVideoPicture *src, double pts) {
     int index = m_renderManager.AddVideoPicture(*pPicture);
 
     // video device might not be done yet
+    // Every negative result is retried, including the concrete renderer's -2
+    // format rejection.  Conversely, NOPTS returns zero without publishing a
+    // ring slot and is still treated as success before manager FlipPage.
     while(index < 0 && !m_bAbortOutput &&
           m_pClock->GetAbsoluteClock(false) <
               iCurrentClock + DVD_MSEC_TO_TIME(500)) {
@@ -872,6 +925,8 @@ int CVideoPlayerVideo::OutputPicture(const DVDVideoPicture *src, double pts) {
 }
 
 std::string CVideoPlayerVideo::GetPlayerInfo() {
+    // The immediate empty return is the complete four-end implementation.
+    // In particular, the renderer skipped-frame accessor below is unreachable.
     return "";
 #if 0
         std::ostringstream s;
@@ -896,6 +951,8 @@ int CVideoPlayerVideo::GetVideoBitrate() {
 }
 
 void CVideoPlayerVideo::ResetFrameRateCalc() {
+    // Compiled empty: retained as a zero-xref Android body and dead-stripped
+    // on iOS. It does not enable frame dropping.
 #if 0
         m_fStableFrameRate = 0.0;
         m_iFrameRateCount = 0;
@@ -920,6 +977,7 @@ double CVideoPlayerVideo::GetCurrentPts() {
     else if(m_stalled)
         return DVD_NOPTS_VALUE;
     else if(m_speed == DVD_PLAYSPEED_NORMAL) {
+        // Negative PTS is clamped only at normal speed.  Trickplay retains it.
         if(renderPts < 0)
             renderPts = 0;
     }
@@ -930,6 +988,8 @@ double CVideoPlayerVideo::GetCurrentPts() {
 #define MAXFRAMESERR 1000
 
 void CVideoPlayerVideo::CalcFrameRate() {
+    // Compiled empty on the same four endpoints. OutputPicture's call has no
+    // side effects, so m_bAllowDrop remains at its ctor value (false).
 #if 0
         if (m_iFrameRateLength >= 128 || g_advancedSettings.m_videoFpsDetect == 0)
             return; //don't calculate the fps
@@ -1019,6 +1079,8 @@ int CVideoPlayerVideo::CalcDropRequirement(double pts) {
     int iBufferLevel;
     int queued, discard;
 
+    // This store precedes both virtual calls; an exception from either call
+    // therefore still leaves the new input PTS published.
     m_droppingStats.m_lastPts = pts;
 
     // get decoder stats
@@ -1042,6 +1104,12 @@ int CVideoPlayerVideo::CalcDropRequirement(double pts) {
         // iBufferLevel);
     }
 
+    // The two counters are independent: if both are positive they become two
+    // FIFO entries at the same PTS, in skipped-then-dropped order. A false
+    // GetCodecStats return replaces only decoderPts; any counter values that
+    // the codec wrote before returning false are not reset here. In the
+    // ordinary reference lifetime this gate remains false because both frame-
+    // rate helpers are empty; OutputPicture gains below remain active.
     if(m_bAllowDrop) {
         if(iSkippedPicture > 0) {
             CDroppingStats::CGain gain;
@@ -1073,14 +1141,18 @@ int CVideoPlayerVideo::CalcDropRequirement(double pts) {
         }
     }
 
-    // subtract gains
+    // Inclusive FIFO retirement. A NaN at the front blocks every later gain;
+    // a NaN render PTS retires none, while the positive NOPTS sentinel retires
+    // all ordinary finite/negative entries.
     while(!m_droppingStats.m_gain.empty() &&
           iRenderPts >= m_droppingStats.m_gain.front().pts) {
         m_droppingStats.m_totalGain -= m_droppingStats.m_gain.front().frames;
         m_droppingStats.m_gain.pop_front();
     }
 
-    // calculate lateness
+    // This is a double subtraction followed by conversion to int. Fractional
+    // values truncate toward zero; NaN/out-of-range conversion retains the
+    // reference C++/target-dependent boundary rather than being clamped.
     int lateness = lateframes - m_droppingStats.m_totalGain;
 
     if(lateness > 0 && m_speed) {
@@ -1090,6 +1162,8 @@ int CVideoPlayerVideo::CalcDropRequirement(double pts) {
 }
 
 void CDroppingStats::Reset() {
+    // Preserve m_lastPts exactly. STL clear also retains implementation-
+    // specific spare storage (one libstdc++ block; at most two libc++ blocks).
     m_gain.clear();
     m_totalGain = 0;
 }
@@ -1098,6 +1172,8 @@ void CDroppingStats::AddOutputDropGain(double pts, int frames) {
     CDroppingStats::CGain gain;
     gain.frames = frames;
     gain.pts = pts;
+    // Commit the total only after push_back succeeds. Allocation failure
+    // therefore leaves totalGain unchanged and propagates to the caller.
     m_gain.push_back(gain);
     m_totalGain += frames;
 }

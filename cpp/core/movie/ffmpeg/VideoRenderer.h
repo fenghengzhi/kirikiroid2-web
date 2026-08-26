@@ -49,7 +49,9 @@ public:
 
     ~CRenderManager();
 
-    // Functions called from render thread
+    // Functions originating in the render-thread side of the upstream class.
+    // V303: GetVideoRect/GetAspectRatio and FrameMove remain live in all four
+    // references; Render/Is* are Android remnants and are dead-stripped on iOS.
     void GetVideoRect(CRect &source, CRect &dest, CRect &view);
 
     float GetAspectRatio();
@@ -94,6 +96,8 @@ public:
     // 	bool Supports(ERENDERFEATURE feature);
     // 	bool Supports(ESCALINGMETHOD method);
 
+    // The only local source call is after an unconditional return in
+    // CVideoPlayerVideo::GetPlayerInfo, so no reference emits this accessor.
     int GetSkippedFrames() { return m_QueueSkip; }
 
     // Functions called from mplayer
@@ -158,6 +162,8 @@ public:
      */
     void DiscardBuffer();
 
+    // V303: these three inline accessors have no surviving call site or
+    // out-of-line symbol in any of the four reference targets.
     void SetDelay(int delay) { m_videoDelay = delay; };
 
     int GetDelay() { return m_videoDelay; };
@@ -232,7 +238,7 @@ protected:
         double pts;
         //		EFIELDSYNC     presentfield;
         EPRESENTMETHOD presentmethod;
-    } m_Queue[NUM_BUFFERS];
+    } m_Queue[NUM_BUFFERS]; // intentionally uninitialized by the manager ctor
 
     std::deque<int> m_free;
     std::deque<int> m_queued;
@@ -240,7 +246,7 @@ protected:
 
     ERenderFormat m_format;
     unsigned int m_width, m_height, m_dwidth, m_dheight;
-    unsigned int m_flags;
+    unsigned int m_flags; // first written by public Configure
     float m_fps;
     unsigned int m_extended_format;
     unsigned int m_orientation;
@@ -252,6 +258,8 @@ protected:
     bool m_forceNext;
     int m_presentsource;
     std::condition_variable_any m_presentevent;
+    // Pulse-only event with no latch/predicate and no destructor wakeup.
+    // CRenderManager's lifetime protocol must exclude active waiters.
     CEvent m_flushEvent;
     CDVDClock &m_dvdClock;
     IRenderMsg *m_playerPort;
@@ -259,6 +267,8 @@ protected:
     struct CClockSync {
         void Reset();
 
+        // Intentionally uninitialized until the first successful internal
+        // Configure.  Do not add member initializers or call Reset in the ctor.
         double m_error;
         int m_errCount;
         double m_syncOffset;

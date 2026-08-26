@@ -85,8 +85,10 @@ public:
 
     std::string codecName;
 
-    int changes; // increment on change which player may need to know
-                 // about
+    // Secondary change gate consumed independently of pointer identity by the
+    // player.  FFmpeg-demux streams leave it at zero and publish dynamic
+    // changes by replacing the owned stream object instead.
+    int changes;
 
     enum EFlags {
         FLAG_NONE = 0x0000,
@@ -163,6 +165,9 @@ struct DemuxPacket;
 
 class IDemux {
 public:
+    // NewGuid is a process-lifetime, non-atomic post-increment.  The first
+    // instance receives zero; destroying, disposing or resetting a demuxer
+    // never returns an id to the counter.
     IDemux() : m_demuxerId(NewGuid()) {}
 
     virtual ~IDemux() {}
@@ -187,6 +192,8 @@ public:
     virtual int GetStreamLength() = 0;
 
     virtual CDemuxStream *GetStream(int64_t demuxerId, int iStreamId) const {
+        // The demuxer id is deliberately ignored.  This wrapper performs a
+        // second virtual dispatch to the exact-id overload at slot 16.
         return GetStream(iStreamId);
     };
 
@@ -195,24 +202,39 @@ public:
     virtual int GetNrOfStreams() const = 0;
 
     virtual std::string GetStreamCodecName(int64_t demuxerId, int iStreamId) {
+        // As with GetStream, demuxerId is not an identity gate.  The returned
+        // string is an owning value from the derived slot-17 implementation.
         return GetStreamCodecName(iStreamId);
     };
 
     virtual void EnableStream(int64_t demuxerId, int id, bool enable) {
+        // The demuxer id is deliberately ignored.  This overload performs a
+        // second virtual dispatch so a derived demuxer may override only the
+        // id/bool overload below.
         EnableStream(id, enable);
     };
 
+    // The base implementation is intentionally an empty virtual slot.
     virtual void SetVideoResolution(int width, int height) {};
 
     int64_t GetDemuxerId() { return m_demuxerId; };
 
 protected:
+    // CDVDDemuxFFmpeg inherits this no-op.  Selecting or closing one of its
+    // streams therefore does not mutate AVStream::discard or the stream map.
     virtual void EnableStream(int id, bool enable) {};
 
+    // Calling the public wrapper while an object's vptr is the abstract base
+    // vtable reaches the pure-virtual slot.  Normal derived calls return a
+    // demux-owned borrowed pointer.
     virtual CDemuxStream *GetStream(int iStreamId) const = 0;
 
+    // The base implementation returns an owning empty string value.
     virtual std::string GetStreamCodecName(int iStreamId) { return ""; };
 
+    // No standalone body or call survives in any reference artifact.  That
+    // cannot distinguish an unused/dead-stripped definition from a declaration
+    // that was never defined, so do not invent counting semantics here.
     int GetNrOfStreams(StreamType streamType);
 
     int64_t m_demuxerId;

@@ -374,7 +374,11 @@ namespace TJS {
     //---------------------------------------------------------------------------
     void tTJSCustomObject::_Finalize() {
         if(IsInvalidating)
-            return; // to avoid re-entrance
+            return; // suppress only recursive invalidation
+        // IsInvalidated remains false throughout the virtual Finalize call.
+        // Native-instance callbacks can therefore still dispatch ordinary
+        // methods on this object; only a nested _Finalize is absorbed.  The
+        // catch path must clear this guard before propagating the exception.
         IsInvalidating = true;
         try {
             if(!IsInvalidated) {
@@ -403,6 +407,9 @@ namespace TJS {
                     ClassInstances[i]->Invalidate();
             }
         }
+        // Member deletion is deliberately after every native Invalidate, so
+        // script dispatches retained by native code remain present throughout
+        // native destructor callbacks.
         DeleteAllMembers();
     }
 

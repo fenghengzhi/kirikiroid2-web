@@ -20,6 +20,9 @@ public:
     static bool FreeStream(IAEStream *stream);
 
 private:
+    // Declaration-only compatibility surface in the four current products:
+    // no storage/body is emitted, and the live factory methods never read an
+    // IAE backend.  Do not add a definition, initialization, or fallback path.
     static IAE *AE;
 
     static void SettingOptionsAudioDevicesFillerGeneral(

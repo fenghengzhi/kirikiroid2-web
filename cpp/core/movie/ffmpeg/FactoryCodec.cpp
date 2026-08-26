@@ -12,6 +12,9 @@ NS_KRMOVIE_BEGIN
 CDVDVideoCodec *CDVDFactoryCodec::OpenCodec(CDVDVideoCodec *pCodec,
                                             CDVDStreamInfo &hints,
                                             CDVDCodecOptions &options) {
+    // Open(false) deletes the candidate, but an exception is caught without
+    // deleting it.  The candidate allocation/constructor also occurs outside
+    // this helper's try block at each call site.
     try {
         //    CLog::Log(LOGDEBUG, "FactoryCodec - Video: %s -
         //    Opening", pCodec->GetName());
@@ -34,6 +37,8 @@ CDVDVideoCodec *CDVDFactoryCodec::OpenCodec(CDVDVideoCodec *pCodec,
 CDVDAudioCodec *CDVDFactoryCodec::OpenCodec(CDVDAudioCodec *pCodec,
                                             CDVDStreamInfo &hints,
                                             CDVDCodecOptions &options) {
+    // Keep the same asymmetric failure ownership as the video overload:
+    // false deletes pCodec, whereas an exception leaves the raw pointer lost.
     try {
         //   CLog::Log(LOGDEBUG, "FactoryCodec - Audio: %s - Opening",
         //   pCodec->GetName());
@@ -117,19 +122,24 @@ CDVDVideoCodec *CDVDFactoryCodec::CreateVideoCodec(CDVDStreamInfo &hint,
 
     // try to decide if we want to try halfres decoding
 #if !defined(TARGET_POSIX) && !defined(TARGET_WINDOWS)
+    // There is deliberately no fpsscale guard and the comparison is strict.
+    // A nonzero numerator divided by zero reaches the lowres branch as +inf;
+    // zero divided by zero produces NaN and does not pass the comparison.
     float pixelrate =
         (float)hint.width * hint.height * hint.fpsrate / hint.fpsscale;
     if(pixelrate > 1400.0f * 720.0f * 30.0f) {
         //    CLog::Log(LOGINFO, "CDVDFactoryCodec - High video
         //    resolution detected %dx%d, trying half resolution
         //    decoding ", hint.width, hint.height);
-        options.m_keys.emplace_back("lowres", "1");
+        options.m_keys.push_back(CDVDCodecOption("lowres", "1"));
     }
 #endif
 
     char value[32];
     sprintf(value, "%d", info.max_buffer_size);
-    options.m_keys.emplace_back("surfaces", value);
+    options.m_keys.push_back(CDVDCodecOption("surfaces", value));
+    // FFmpeg is the sole video candidate on the paths present in the four
+    // reference builds; failure has no second software-codec fallback.
     pCodec = OpenCodec(new CDVDVideoCodecFFmpeg(processInfo), hint, options);
     if(pCodec)
         return pCodec;
@@ -146,7 +156,7 @@ CDVDAudioCodec *CDVDFactoryCodec::CreateAudioCodec(CDVDStreamInfo &hint,
     CDVDCodecOptions options;
 
     if(!allowdtshddecode)
-        options.m_keys.emplace_back("allowdtshddecode", "0");
+        options.m_keys.push_back(CDVDCodecOption("allowdtshddecode", "0"));
 
     // we don't use passthrough if "sync playback to display" is
     // enabled

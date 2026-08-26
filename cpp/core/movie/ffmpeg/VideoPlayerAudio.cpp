@@ -16,6 +16,8 @@ public:
                             CDVDAudioCodec *codec) :
         CDVDMsg(GENERAL_STREAMCHANGE), m_codec(codec), m_hints(hints) {}
 
+    // The queued message owns the new codec until the worker installs it and
+    // clears m_codec.  Queue flush/end therefore deletes a pending candidate.
     ~CDVDMsgAudioCodecChange() override { delete m_codec; }
 
     CDVDAudioCodec *m_codec;
@@ -46,6 +48,8 @@ CVideoPlayerAudio::CVideoPlayerAudio(CDVDClock *pClock,
 }
 
 CVideoPlayerAudio::~CVideoPlayerAudio() {
+    // Destruction stops the worker but does not delegate to CloseStream; an
+    // installed raw codec is cleaned only by an explicit CloseStream call.
     StopThread();
 
     // close the stream, and don't wait for the audio to be finished
@@ -53,6 +57,8 @@ CVideoPlayerAudio::~CVideoPlayerAudio() {
 }
 
 bool CVideoPlayerAudio::OpenStream(CDVDStreamInfo &hints) {
+    // Reset happens before codec creation, so a failed reopen leaves the old
+    // codec running while the public process-info fields have been cleared.
     m_processInfo.ResetAudioCodecInfo();
 
     //	CLog::Log(LOGNOTICE, "Finding audio codec for: %i",
@@ -69,9 +75,16 @@ bool CVideoPlayerAudio::OpenStream(CDVDStreamInfo &hints) {
         return false;
     }
 
+    // A running child switches asynchronously through a normal-priority
+    // owning message.  Put's result is intentionally ignored: a concurrent
+    // End may consume the message/candidate while this function still returns
+    // true.  A message allocation or hints-copy exception occurs after the raw
+    // codec was created and has no local cleanup owner.
     if(m_messageQueue.IsInited())
         m_messageQueue.Put(new CDVDMsgAudioCodecChange(hints, codec), 0);
     else {
+        // First open installs the raw codec before Init/Create.  A later Create
+        // exception leaves that partial installation for CloseStream alone.
         OpenStream(hints, codec);
         m_messageQueue.Init();
         //		CLog::Log(LOGNOTICE, "Creating audio thread");
@@ -82,6 +95,9 @@ bool CVideoPlayerAudio::OpenStream(CDVDStreamInfo &hints) {
 
 void CVideoPlayerAudio::OpenStream(CDVDStreamInfo &hints,
                                    CDVDAudioCodec *codec) {
+    // This is the ownership-transfer point.  The old codec is deleted without
+    // Dispose; from the assignment onward the child owns the supplied raw
+    // pointer even if a later hints copy or parent-message allocation throws.
     SAFE_DELETE(m_pAudioCodec);
     m_pAudioCodec = codec;
 
@@ -122,11 +138,15 @@ void CVideoPlayerAudio::OpenStream(CDVDStreamInfo &hints,
 
     m_maxspeedadjust = 5.0;
 
+    // PLAYER_AVCHANGE is posted before the final child sync-state assignment;
+    // allocation or queue insertion failure leaves a partially committed open.
     m_messageParent.Put(new CDVDMsg(CDVDMsg::PLAYER_AVCHANGE));
     m_syncState = IDVDStreamPlayer::SYNC_STARTING;
 }
 
 void CVideoPlayerAudio::CloseStream(bool bWaitForBuffers) {
+    // The final stream dereference has no explicit null guard.  CloseStream is
+    // also the only path which Disposes/deletes an installed audio codec.
     bool bWait = bWaitForBuffers && m_speed > 0 &&
         !m_dvdAudio.m_pAudioStream->IsSuspended();
 
@@ -165,6 +185,8 @@ void CVideoPlayerAudio::CloseStream(bool bWaitForBuffers) {
     }
 }
 
+// The Android/iOS references retain this CThread hook as an absolute no-op.
+// It does not initialize the codec, queue, output device or thread-local state.
 void CVideoPlayerAudio::OnStartup() {}
 
 void CVideoPlayerAudio::UpdatePlayerInfo() {
@@ -180,13 +202,20 @@ void CVideoPlayerAudio::UpdatePlayerInfo() {
 
         s << ", att:" << std::fixed << std::setprecision(1) << log(GetCurrentAttenuation()) * 20.0f << " dB";
 #endif
+    // The source string remains empty in this build, but the native path still
+    // constructs a complete owning SInfo value and later assigns that string.
     SInfo info;
     //	info.info = s.str();
+    // These two upstream samples are taken before m_info_section. They are not
+    // a transaction with each other or with the later destination publication.
     info.pts = m_dvdAudio.GetPlayingPts();
     info.passthrough = m_pAudioCodec && m_pAudioCodec->NeedPassthrough();
 
     {
         CSingleLock lock(m_info_section);
+        // Memberwise assignment reaches the owning string before either
+        // scalar. A string-assignment exception unlocks on unwind and leaves
+        // both old scalars; there is deliberately no snapshot rollback.
         m_info = info;
     }
 }
@@ -251,6 +280,9 @@ void CVideoPlayerAudio::Process() {
                 // CDVDMsg::GENERAL_SYNCHRONIZE")
                 ;
             else
+                // A slice timeout retains the shared barrier through a new
+                // priority-list reference; the current reference is released
+                // at the bottom of this worker iteration.
                 m_messageQueue.Put(pMsg->AddRef(),
                                    1); // push back as prio message, to process
                                        // other prio messages
@@ -287,6 +319,9 @@ void CVideoPlayerAudio::Process() {
             if(m_pAudioCodec)
                 m_pAudioCodec->Reset();
         } else if(pMsg->IsType(CDVDMsg::GENERAL_EOF)) {
+            // Deliberately no state transition: the marker is simply released
+            // at the bottom of this iteration.  Parent HasData observes only
+            // queued DEMUXER_PACKET bytes, not this control node.
             //	CLog::Log(LOGDEBUG, "CVideoPlayerAudio -
             // CDVDMsg::GENERAL_EOF");
         } else if(pMsg->IsType(CDVDMsg::PLAYER_SETSPEED)) {
@@ -309,6 +344,9 @@ void CVideoPlayerAudio::Process() {
         } else if(pMsg->IsType(CDVDMsg::GENERAL_STREAMCHANGE)) {
             CDVDMsgAudioCodecChange *msg(
                 static_cast<CDVDMsgAudioCodecChange *>(pMsg));
+            // Successful installation transfers the candidate from the
+            // message to m_pAudioCodec.  If installation throws first, the
+            // popped worker reference has no RAII release at this level.
             OpenStream(msg->m_hints, msg->m_codec);
             msg->m_codec = nullptr;
         } else if(pMsg->IsType(CDVDMsg::GENERAL_PAUSE)) {
@@ -425,6 +463,9 @@ void CVideoPlayerAudio::Process() {
                 // Zero out the frame data if we are supposed to
                 // silence the audio
                 if(m_silence) {
+                    // This intentionally uses the top-level framesize.  The
+                    // passthrough producer never writes that field, so its
+                    // first/reused-frame state also reaches this calculation.
                     int size = audioframe.nb_frames * audioframe.framesize /
                         audioframe.planes;
                     for(unsigned int i = 0; i < audioframe.planes; i++)
@@ -444,6 +485,10 @@ void CVideoPlayerAudio::Process() {
                         //						if (cachetime
                         //>= cachetotal * 0.5)
                         {
+                            // The cache-threshold condition above is compiled
+                            // out.  State changes precede allocation/Put, with
+                            // no rollback if publication fails.  A synthesized
+                            // audioClock pts is deliberately published as NOPTS.
                             m_syncState = IDVDStreamPlayer::SYNC_WAITSYNC;
 
                             m_stalled = false;
@@ -497,12 +542,16 @@ void CVideoPlayerAudio::Process() {
 
 void CVideoPlayerAudio::SetSyncType(bool passthrough) {
     // set the synctype from the gui
+    // The effective type is published before the clock-side lock is entered.
+    // A lock failure therefore leaves this field committed while the clock,
+    // previous-type latch and audio stream retain their earlier state.
     m_synctype = m_setsynctype;
     if(passthrough && m_synctype == SYNC_RESAMPLE)
         m_synctype = SYNC_DISCON;
 
-    // if SetMaxSpeedAdjust returns false, it means no video is played
-    // and we need to use clock feedback
+    // This call is unconditional, including the unchanged-type path. Only the
+    // exact resample mode forwards the stored maximum; every other integer
+    // mode publishes a raw 0.0 to the clock's separately locked field.
     double maxspeedadjust = 0.0;
     if(m_synctype == SYNC_RESAMPLE)
         maxspeedadjust = m_maxspeedadjust;
@@ -514,6 +563,8 @@ void CVideoPlayerAudio::SetSyncType(bool passthrough) {
         int synctype = (m_synctype >= 0 && m_synctype <= 1) ? m_synctype : 2;
         //	CLog::Log(LOGDEBUG, "CVideoPlayerAudio:: synctype set to
         //%i: %s", m_synctype, synctypes[synctype]);
+        // Publish the latch before entering CDVDAudio's lock/virtual stream
+        // call. An exception there deliberately retains this partial commit.
         m_prevsynctype = m_synctype;
         if(m_synctype == SYNC_RESAMPLE)
             m_dvdAudio.SetResampleMode(1);
@@ -542,11 +593,15 @@ void CVideoPlayerAudio::OnExit() {
     CoUninitialize();
 #endif
 
+    // This hook is empty in all four Android/iOS references. In particular it
+    // does not substitute for CloseStream or release any child owner.
     //	CLog::Log(LOGNOTICE, "thread end:
     // CVideoPlayerAudio::OnExit()");
 }
 
 void CVideoPlayerAudio::SetSpeed(int speed) {
+    // Initialized children serialize every speed update as a priority message;
+    // there is no last-speed coalescing step.
     if(m_messageQueue.IsInited())
         m_messageQueue.Put(new CDVDMsgInt(CDVDMsg::PLAYER_SETSPEED, speed), 1);
     else
@@ -554,6 +609,9 @@ void CVideoPlayerAudio::SetSpeed(int speed) {
 }
 
 void CVideoPlayerAudio::Flush(bool sync) {
+    // The default filter removes demux packets only.  Older non-packet control
+    // messages remain: old priority controls keep FIFO precedence over this
+    // new priority GENERAL_FLUSH, which still preempts surviving normal items.
     m_messageQueue.Flush();
     m_messageQueue.Put(new CDVDMsgBool(CDVDMsg::GENERAL_FLUSH, sync), 1);
 
@@ -561,6 +619,7 @@ void CVideoPlayerAudio::Flush(bool sync) {
 }
 
 bool CVideoPlayerAudio::AcceptsData() {
+    // IsFull is exactly GetLevel()==100; it is not a packet-count or >= check.
     bool full = m_messageQueue.IsFull();
     return !full;
 }
@@ -589,6 +648,8 @@ bool CVideoPlayerAudio::SwitchCodecIfNeeded() {
 }
 
 std::string CVideoPlayerAudio::GetPlayerInfo() {
+    // Return an independent string owner. The copy is made while the snapshot
+    // lock is held; its lifetime continues after the lock is released.
     CSingleLock lock(m_info_section);
     return m_info.info;
 }
@@ -597,9 +658,15 @@ int CVideoPlayerAudio::GetAudioBitrate() {
     return (int)m_audioStats.GetBitrate();
 }
 
-int CVideoPlayerAudio::GetAudioChannels() { return m_streaminfo.channels; }
+int CVideoPlayerAudio::GetAudioChannels() {
+    // Deliberately bypasses m_info_section and reads the live stream hint. It
+    // therefore need not belong to the generation seen by the SInfo getters.
+    return m_streaminfo.channels;
+}
 
 bool CVideoPlayerAudio::IsPassthrough() {
+    // Each scalar getter owns a separate lock transaction; a producer can run
+    // between this call and GetCurrentPts/GetPlayerInfo.
     CSingleLock lock(m_info_section);
     return m_info.passthrough;
 }

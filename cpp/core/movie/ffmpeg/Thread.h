@@ -44,22 +44,32 @@ protected:
 
 class CEvent {
 public:
+    // Pulse-only event: there is no persistent signaled flag.  A notification
+    // that precedes a waiter's condition-variable handshake is not remembered.
     void Set() { m_cond.notify_all(); }
 
+    // Deliberately empty; this event has no latched state to clear.
     void Reset() {}
 
     bool WaitMSec(unsigned int milliSeconds) {
         CSingleLock lock(mutex);
+        // There is intentionally no predicate loop.  Any non-timeout wake,
+        // including a spurious wake, is reported as success.
         return m_cond.wait_for(lock, std::chrono::milliseconds(milliSeconds)) !=
             std::cv_status::timeout;
     }
 
     void Wait() {
         CSingleLock lock(mutex);
+        // The indefinite form is predicate-free for the same reason.
         m_cond.wait(lock);
     }
 
 protected:
+    // condition_variable_any additionally owns a shared internal std::mutex
+    // used for its unlock/wait transition.  It does not own this CEvent: the
+    // containing object must outlive every waiter, and destruction does not
+    // notify or join them.
     CCriticalSection mutex;
     std::condition_variable_any m_cond;
 };

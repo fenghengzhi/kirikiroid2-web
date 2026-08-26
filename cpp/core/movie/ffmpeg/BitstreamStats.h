@@ -26,6 +26,8 @@ public:
 
     void AddSampleBits(unsigned int nBits);
 
+    // These are plain cached-value reads.  The reference audio/video wrappers
+    // do not lock, normalize, or clamp before converting GetBitrate() to int.
     [[nodiscard]] inline double GetBitrate() const { return m_dBitrate; }
 
     [[nodiscard]] inline double GetMaxBitrate() const { return m_dMaxBitrate; }
@@ -44,6 +46,7 @@ private:
     unsigned int m_nEstimatedBitrate; // when we reach this amount of bits we
                                       // check current bitrate.
     int64_t m_tmStart;
+    // Process-wide, BSS-zeroed, and lazily initialized without synchronization.
     static int64_t m_tmFreq;
 };
 NS_KRMOVIE_END

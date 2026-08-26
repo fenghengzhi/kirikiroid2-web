@@ -79,8 +79,8 @@ TVPBaseFileSelectorForm::~TVPBaseFileSelectorForm() {
     CC_SAFE_RELEASE_NULL(CellTemplateForSize);
 }
 
-void TVPBaseFileSelectorForm::bindHeaderController(const Node *allNodes) {
-    _title = allNodes->getChildByName<Button *>("title");
+void TVPBaseFileSelectorForm::bindHeaderController(const NodeMap &allNodes) {
+    _title = allNodes.findController<Button>("title");
     if(_title) {
         _title->setEnabled(true);
         _title->addClickEventListener([this](auto &&PH1) {
@@ -89,8 +89,8 @@ void TVPBaseFileSelectorForm::bindHeaderController(const Node *allNodes) {
     }
 }
 
-void TVPBaseFileSelectorForm::bindBodyController(const Node *allNodes) {
-    Node *TableNode = allNodes->getChildByName("table");
+void TVPBaseFileSelectorForm::bindBodyController(const NodeMap &allNodes) {
+    Node *TableNode = allNodes.findController("table");
     const auto &size = TableNode->getContentSize();
     CCASSERT(size.width > 0 && size.height > 0,
              "TableNode content size is invalid");
@@ -971,10 +971,10 @@ void TVPFileSelectorForm::initFromPath(const std::string &initfilename,
     ListDir(initdir); // getCurrentDir()
 }
 
-void TVPFileSelectorForm::bindFooterController(const Node *allNodes) {
-    _buttonOK = static_cast<Button *>(allNodes->getChildByName("ok"));
-    _buttonCancel = static_cast<Button *>(allNodes->getChildByName("cancel"));
-    _input = static_cast<TextField *>(allNodes->getChildByName("input"));
+void TVPFileSelectorForm::bindFooterController(const NodeMap &allNodes) {
+    _buttonOK = static_cast<Button *>(allNodes.findController("ok"));
+    _buttonCancel = static_cast<Button *>(allNodes.findController("cancel"));
+    _input = static_cast<TextField *>(allNodes.findController("input"));
 
     LocaleConfigManager *localeMgr = LocaleConfigManager::GetInstance();
     localeMgr->initText(_buttonOK, "ok");

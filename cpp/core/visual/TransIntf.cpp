@@ -128,6 +128,9 @@ tjs_error tTVPSimpleImageProvider::LoadImage(
     if(bpp != 8 && bpp != 32)
         return TJS_E_FAIL; // invalid bitmap color depth
 
+    // The provider is not a holder owner.  Its sole native publication is by
+    // a live BaseLayer::StartTransition, whose constructor-held reference is
+    // the normal outer lifetime precondition for this initial-texture borrow.
     tTVPBaseTexture *bitmap = new tTVPBaseTexture(TVPGetInitialBitmap());
 
     try {
@@ -138,6 +141,8 @@ tjs_error tTVPSimpleImageProvider::LoadImage(
         return TJS_E_FAIL;
     }
 
+    // Deliberately outside the catch above: allocation failure propagates and
+    // leaks bitmap.  A null output pointer also returns success and leaks it.
     if(scpro)
         *scpro = new tTVPScanLineProviderForBaseBitmap(bitmap, true);
 

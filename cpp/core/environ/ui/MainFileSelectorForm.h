@@ -19,7 +19,7 @@ class TVPMainFileSelectorForm : public TVPBaseFileSelectorForm {
 public:
     inline static std::string filePath = "";
 
-    void bindBodyController(const Node *allNodes) override;
+    void bindBodyController(const NodeMap &allNodes) override;
 
     void show();
 

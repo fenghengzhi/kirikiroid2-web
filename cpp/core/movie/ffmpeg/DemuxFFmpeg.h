@@ -20,6 +20,8 @@ class CDVDDemuxFFmpeg;
 class InputStream;
 
 class CDemuxStreamVideoFFmpeg : public CDemuxStreamVideo {
+    // Both pointers are borrowed.  The demuxer's stream map owns this object;
+    // neither pointer participates in its destruction.
     CDVDDemuxFFmpeg *m_parent;
     AVStream *m_stream;
 
@@ -33,6 +35,8 @@ public:
 };
 
 class CDemuxStreamAudioFFmpeg : public CDemuxStreamAudio {
+    // Both pointers are borrowed.  The demuxer's stream map owns this object;
+    // neither pointer participates in its destruction.
     CDVDDemuxFFmpeg *m_parent;
     AVStream *m_stream;
 
@@ -96,6 +100,10 @@ protected:
 
     friend class CDemuxStreamSubtitleFFmpeg;
 
+    // No standalone body survives in the reference artifacts: Read emits a
+    // direct/inlined av_read_frame edge.  That cannot distinguish a fully
+    // inlined source helper from a direct source call, so this otherwise
+    // unused declaration is intentionally not given a speculative body.
     int ReadFrame(AVPacket *packet);
 
     CDemuxStream *AddStream(int streamIdx);
@@ -129,6 +137,8 @@ protected:
     double SelectAspect(AVStream *st, bool &forced);
 
     CCriticalSection m_critSection;
+    // The map owns its pointer values.  GetStream/GetStreams return borrowed
+    // pointers, and the reference implementation does not lock this map.
     std::map<int, CDemuxStream *> m_streams;
 
     AVIOContext *m_ioContext;

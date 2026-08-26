@@ -15,7 +15,10 @@
 #include <memory>
 #include "VideoRenderer.h"
 
-// dummy class to avoid ifdefs where calls are made
+// Compile-time dummy used by non-OMX builds.  The four reference products
+// emit neither these inline bodies nor a caller: every possible call site is
+// itself removed by HAS_OMXPLAYER.  Keep the false/zero/no-op tokens as header
+// scaffolding rather than turning them into a live clock implementation.
 class OMXClock {
 public:
     bool OMXInitialize(KRMovie::CDVDClock *clock) { return false; }
@@ -57,6 +60,11 @@ public:
     void OMXSetSpeedAdjust(double adjust, bool lock = true) {}
 };
 
+// Deliberately has no constructor or member initializers.  In all four
+// references the containing BasePlayer initializes the two surrounding
+// m_Has* flags and the later mode byte, but never writes or reads this scalar
+// payload.  Brace-initializing it would change the native construction data
+// flow even though the current products compile out every OMX consumer.
 struct SOmxPlayerState {
     OMXClock av_clock; // openmax clock component
     //	EINTERLACEMETHOD interlace_method; // current deinterlace
@@ -118,6 +126,10 @@ struct CCurrentStream {
     CCurrentStream(StreamType t, int i) : type(t), player(i) { Clear(); }
 
     void Clear() {
+        // The four references reset the active identity/timing handshake below,
+        // but deliberately leave dispTime, cachetime and cachetotal untouched.
+        // Their first-construction zeroes therefore become retained values on a
+        // later Clear until a packet/PLAYER_STARTED publication replaces them.
         id = -1;
         demuxerId = -1;
         source = STREAM_SOURCE_NONE;
@@ -184,6 +196,8 @@ struct SPlayerState {
     bool recording{}; // are we currently recording
     bool canpause{}; // pvr: can pause the current playing item
     bool canseek{}; // pvr: can seek in the current playing item
+    // Published true for FULL/INIT only.  PLAY has already resumed the stream
+    // players even though it still waits for them to become non-stalled.
     bool caching{};
 
     int64_t cache_bytes{}; // number of bytes current's cached
@@ -224,6 +238,8 @@ class BasePlayer;
 class InputStream;
 
 class CSelectionStreams {
+    // Mutable first-member fallback.  Get(type,index) returns this by
+    // non-const reference after releasing the lock when no element matches.
     SelectionStream m_invalid;
 
 public:
@@ -233,6 +249,9 @@ public:
         m_invalid.type = STREAM_NONE;
     }
 
+    // The references use this value-owning vector topology on every ABI; it
+    // stores no CDemuxStream owner/pointer.  The mutex is deliberately
+    // recursive because Update re-enters IndexOf, Count and Get.
     std::vector<SelectionStream> m_Streams;
     std::recursive_mutex m_section;
 
@@ -245,14 +264,18 @@ public:
 
     int CountSource(StreamType type, StreamSource source) const;
 
+    // The lock protects only the search, not the returned reference lifetime.
     SelectionStream &Get(StreamType type, int index);
 
     bool Get(StreamType type, CDemuxStream::EFlags flag, SelectionStream &out);
 
+    // This by-value snapshot intentionally does not take m_section.
     SelectionStreams Get(StreamType type);
 
     template <typename Compare>
     SelectionStreams Get(StreamType type, Compare compare) {
+        // Sorting affects only the unlocked copy.  stable_sort preserves the
+        // vector's insertion order for comparator ties.
         SelectionStreams streams = Get(type);
         std::stable_sort(streams.begin(), streams.end(), compare);
         return streams;
@@ -290,6 +313,8 @@ public:
 
     void UpdateRenderInfo(CRenderInfo &info) override;
 
+    // Borrowed constructor-supplied back-pointer: no lock, allocation,
+    // ownership transfer or lifetime extension.
     CBaseRenderer *CreateRenderer() override { return m_pRenderer; }
 
 public:
@@ -346,8 +371,8 @@ public:
                          // stream
         CACHESTATE_PLAY, // player is waiting for players to not be
                          // stalled
-        CACHESTATE_FLUSH, // temporary state player will choose
-                          // startup between init or full
+        CACHESTATE_FLUSH, // temporary request; GetCachingTimes is disabled in
+                          // this build, so SetCaching always selects INIT
     };
 
     void SetCaching(ECacheState state);
@@ -428,11 +453,17 @@ public:
     bool IsStop() { return m_bStopStatus; }
 
     double GetFPS() {
+        // These two signed fields are sampled without a CurrentVideo lock.
+        // Zero scale deliberately produces IEEE Inf/NaN; there is no fallback.
         return (double)m_CurrentVideo.hint.fpsrate /
             m_CurrentVideo.hint.fpsscale;
     }
 
-    int64_t GetTotalTime() { return llrint(m_State.time_total); }
+    int64_t GetTotalTime() {
+        // Intentionally unlocked.  llrint obeys the current FP rounding mode;
+        // NaN, infinity and int64 overflow are not prefiltered.
+        return llrint(m_State.time_total);
+    }
 
     void GetVideoSize(long *width, long *height);
 
@@ -486,6 +517,9 @@ private:
 
     CDVDMessageQueue m_messenger; // thread messenger
 
+    // Raw owning handles whose values point at secondary interface
+    // subobjects, not at the allocation starts.  Virtual deleting-destructor
+    // thunks adjust them back to the complete audio/video child objects.
     IDVDStreamPlayerVideo *m_VideoPlayerVideo = nullptr;
     IDVDStreamPlayerAudio *m_VideoPlayerAudio = nullptr;
 
@@ -508,6 +542,8 @@ private:
     bool m_HasAudio = false;
 
     struct SOmxPlayerState m_OmxPlayerState;
+    // This is a distinct initialized member; it must not be implemented as a
+    // memset that also clears the preceding dormant SOmxPlayerState.
     bool m_omxplayer_mode = false; // using omxplayer acceleration
 
     Timer m_player_status_timer;

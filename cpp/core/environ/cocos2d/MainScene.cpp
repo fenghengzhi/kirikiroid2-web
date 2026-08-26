@@ -1841,12 +1841,12 @@ public:
         ui::Helper::doLayout(RootNode);
     }
 
-    void bindHeaderController(const Node *allNodes) override {}
+    void bindHeaderController(const NodeMap &allNodes) override {}
 
-    void bindBodyController(const Node *allNodes) override {
-        _left = allNodes->getChildByName<ui::Button *>("left");
-        _right = allNodes->getChildByName<ui::Button *>("right");
-        _ok = allNodes->getChildByName<ui::Button *>("ok");
+    void bindBodyController(const NodeMap &allNodes) override {
+        _left = allNodes.findController<ui::Button>("left");
+        _right = allNodes.findController<ui::Button>("right");
+        _ok = allNodes.findController<ui::Button>("ok");
 
         auto funcUpdate = [this] { updateButtons(); };
 
@@ -1895,7 +1895,7 @@ public:
         });
 
         ui::Button *fillscr =
-            (allNodes->getChildByName<cocos2d::ui::Button *>("fillscr"));
+            allNodes.findController<cocos2d::ui::Button>("fillscr");
         fillscr->addClickEventListener([](Ref *) {
             if(!_currentWindowLayer)
                 return;
@@ -1905,7 +1905,7 @@ public:
         updateButtons();
     }
 
-    void bindFooterController(const Node *allNodes) override {}
+    void bindFooterController(const NodeMap &allNodes) override {}
 
     void updateButtons() const {
         if(!_currentWindowLayer)

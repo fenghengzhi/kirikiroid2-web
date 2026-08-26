@@ -82,13 +82,17 @@ public:
 
     void GetEnableVideoStreamNum(long *num) override;
 
-    // TODO
+    // These stop-frame slots are true no-ops in the reference surface.  In
+    // particular, the getter does not initialize its output argument.
     void SetStopFrame(int frame) override {}
 
     void GetStopFrame(int *frame) override {}
 
     void SetDefaultStopFrame() override {}
 
+    // The base overlay hooks below are exact empty slots.  Derived overlay
+    // classes selectively override SetWindow; the remaining base calls do not
+    // retain their arguments or mutate the renderer.
     // function for overlay mode
     void SetWindow(class tTJSNI_Window *window) override {}
 
@@ -96,12 +100,17 @@ public:
 
     void SetRect(int l, int t, int r, int b) override {}
 
-    // function for layer mode
+    // function for layer mode.  GetFrontBuffer is the one non-void stub and
+    // returns null; SetVideoBuffer discards every argument.
     tTVPBaseTexture *GetFrontBuffer() override { return nullptr; }
 
     void SetVideoBuffer(tTVPBaseTexture *buff1, tTVPBaseTexture *buff2,
                         long size) override {}
 
+    // Mixer/control stubs preserve the asymmetric native contract: the alpha
+    // and background getters write fixed values, while all setters and the
+    // color-adjustment getters below are no-ops.  Those no-op getters leave
+    // caller-provided output storage untouched.
     // function for mixer mode
     void SetMixingBitmap(class tTVPBaseTexture *dest, float alpha) override {}
 
@@ -199,7 +208,7 @@ protected:
         };
         int width = 0; // pitch = width * 4
         int height = 0;
-        double pts;
+        double pts; // intentionally uninitialized by BitmapPicture()
 
         BitmapPicture() {
             fmt = RENDER_FMT_NONE;
@@ -215,6 +224,7 @@ protected:
     };
 
     BitmapPicture m_picture[MAX_BUFFER_COUNT];
+    // Flush resets usedPicture but deliberately retains curPicture.
     int m_curPicture = 0, m_usedPicture = 0;
     std::mutex m_mtxPicture;
     std::condition_variable m_condPicture;
@@ -226,6 +236,9 @@ class VideoPresentOverlay : public TVPMoviePlayer // cocos2d compatible video
                                                   // display overlay
 {
 protected:
+    // V330: borrowed scene pointers.  This overlay never retains them; after
+    // attachment the parent retains the root and the root retains the sprite.
+    // ClearNode only removes the root and clears both raw aliases together.
     cocos2d::Node *m_pRootNode = nullptr;
     TVPYUVSprite *m_pSprite = nullptr;
 
@@ -245,6 +258,8 @@ protected:
 };
 
 class MoviePlayerOverlay : public VideoPresentOverlay {
+    // V330: both pointers are borrowed without AddRef/retain.  BuildGraph and
+    // SetWindow publish them independently and do not provide rollback.
     tTJSNI_VideoOverlay *m_pCallbackWin = nullptr;
     tTJSNI_Window *m_pOwnerWindow = nullptr;
 
@@ -265,6 +280,9 @@ public:
 };
 
 class VideoPresentOverlay2 : public VideoPresentOverlay {
+    // V330: ABI is libstdc++ manager/invoker on Android and libc++
+    // inline-callable storage on iOS.  An empty function throws
+    // std::bad_function_call when GetBounds is dispatched.
     std::function<const tTVPRect &()> m_funcGetBounds;
 
 public:

@@ -21,6 +21,10 @@ class CDVDCodecOption;
 class CDVDCodecOptions;
 
 typedef struct stDVDAudioFrame {
+    // The implicit default constructor only constructs the two
+    // AEAudioFormat members below.  The pointer/scalar fields are deliberately
+    // left alone: Process keeps one frame for the whole worker loop and each
+    // codec publishes only the fields valid for its current output.
     uint8_t *data[16];
     double pts;
     bool hasTimestamp;
@@ -32,6 +36,10 @@ typedef struct stDVDAudioFrame {
     AEAudioFormat format;
     int bits_per_sample;
     bool passthrough;
+
+    // This second format is part of the reference ABI and is constructed and
+    // destroyed with the frame.  The observed FFmpeg/passthrough producers and
+    // active renderer path neither publish nor consume it.
     AEAudioFormat audioFormat;
     enum AVAudioServiceType audio_service_type;
     enum AVMatrixEncoding matrix_encoding;
@@ -68,6 +76,10 @@ public:
 
     /*
      * the data is valid until the next Decode call
+     *
+     * Implementations do not clear the whole frame.  A zero nb_frames is the
+     * publication gate; fields not written by the selected codec retain the
+     * caller's indeterminate or previous-iteration state.
      */
     virtual void GetData(DVDAudioFrame &frame) = 0;
 
@@ -82,6 +94,12 @@ public:
     virtual AEAudioFormat GetFormat() = 0;
 
     /*
+     * The inline defaults below remain real vtable entries when a concrete
+     * codec does not override them.  Passthrough inherits bit rate, matrix,
+     * service type and profile; FFmpeg inherits NeedPassthrough and buffer
+     * size.  Their emitted translation-unit clones are base methods, not
+     * concrete-codec overrides.
+     *
      * should return the average input bit rate
      */
     virtual int GetBitRate() { return 0; }
@@ -122,6 +140,8 @@ public:
     virtual int GetProfile() { return 0; }
 
 protected:
+    // Borrowed for the codec lifetime.  Construction stores its address and
+    // base destruction neither releases nor deletes it.
     CProcessInfo &m_processInfo;
 };
 NS_KRMOVIE_END

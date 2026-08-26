@@ -139,13 +139,13 @@ void TVPMessageBoxForm::init(const std::string &caption,
     _btnModel = nullptr;
 }
 
-void TVPMessageBoxForm::bindBodyController(const Node *allNodes) {
-    _title = allNodes->getChildByName<Text *>("title");
-    _textContent = allNodes->getChildByName<Text *>("content");
-    _textContainer = allNodes->getChildByName<ScrollView *>("text");
+void TVPMessageBoxForm::bindBodyController(const NodeMap &allNodes) {
+    _title = allNodes.findController<Text>("title");
+    _textContent = allNodes.findController<Text>("content");
+    _textContainer = allNodes.findController<ScrollView>("text");
 
-    _btnBody = allNodes->getChildByName<Button *>("btnBody");
-    _btnModel = allNodes->getChildByName<Widget *>("btn");
+    _btnBody = allNodes.findController<Button>("btnBody");
+    _btnModel = allNodes.findController<Widget>("btn");
     _btnList = _btnModel->getParent();
 }
 
@@ -235,15 +235,15 @@ void TVPSimpleProgressForm::setProgress2Visible(bool visible) {
     // TODO
 }
 
-void TVPSimpleProgressForm::bindBodyController(const Node *allNodes) {
-    _progressBar[0] = allNodes->getChildByName<LoadingBar *>("progrss_1");
-    _progressBar[1] = allNodes->getChildByName<LoadingBar *>("progrss_2");
-    _textProgress[0] = allNodes->getChildByName<Text *>("progress_text_1");
-    _textProgress[1] = allNodes->getChildByName<Text *>("progress_text_2");
-    _textContent = allNodes->getChildByName<Text *>("text");
-    _textTitle = allNodes->getChildByName<Text *>("title");
-    _btnContainer = allNodes->getChildByName("btnList");
-    _btnCell = allNodes->getChildByName<Widget *>("btnCell");
-    _btnButton = allNodes->getChildByName<Button *>("btn");
+void TVPSimpleProgressForm::bindBodyController(const NodeMap &allNodes) {
+    _progressBar[0] = allNodes.findController<LoadingBar>("progrss_1");
+    _progressBar[1] = allNodes.findController<LoadingBar>("progrss_2");
+    _textProgress[0] = allNodes.findController<Text>("progress_text_1");
+    _textProgress[1] = allNodes.findController<Text>("progress_text_2");
+    _textContent = allNodes.findController<Text>("text");
+    _textTitle = allNodes.findController<Text>("title");
+    _btnContainer = allNodes.findController("btnList");
+    _btnCell = allNodes.findController<Widget>("btnCell");
+    _btnButton = allNodes.findController<Button>("btn");
     _btnCell->removeFromParentAndCleanup(false);
 }

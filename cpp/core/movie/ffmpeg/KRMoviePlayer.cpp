@@ -21,6 +21,8 @@ NS_KRMOVIE_BEGIN
 TVPMoviePlayer::TVPMoviePlayer() { m_pPlayer = new BasePlayer(this); }
 
 TVPMoviePlayer::~TVPMoviePlayer() {
+    // BasePlayer teardown is asymmetric: a started worker runs OnExit and
+    // deletes the demuxer; a never-started player has no such cleanup callback.
     delete m_pPlayer;
     if(img_convert_ctx)
         sws_freeContext(img_convert_ctx), img_convert_ctx = nullptr;
@@ -53,23 +55,39 @@ void TVPMoviePlayer::GetStatus(tTVPVideoStatus *status) {
 void TVPMoviePlayer::Rewind() { SetPosition(0); }
 
 void TVPMoviePlayer::SetFrame(int f) {
-    // TODO seek accurately
+    // This is deliberately a time seek derived from the current FPS, not a
+    // frame-accurate decoder seek.  It has no zero/NaN/range guard before the
+    // floating-point result is converted to the signed int64_t SeekTime
+    // argument.
     m_pPlayer->SeekTime(f / m_pPlayer->GetFPS() * DVD_PLAYSPEED_NORMAL);
 }
 
-void TVPMoviePlayer::GetFrame(int *f) { *f = m_pPlayer->GetCurrentFrame(); }
+void TVPMoviePlayer::GetFrame(int *f) {
+    // The complete time/FPS query precedes this unguarded 4-byte output store.
+    *f = m_pPlayer->GetCurrentFrame();
+}
 
-void TVPMoviePlayer::GetFPS(double *f) { *f = m_pPlayer->GetFPS(); }
+void TVPMoviePlayer::GetFPS(double *f) {
+    // Preserve the raw signed rate/scale division and unguarded 8-byte store.
+    *f = m_pPlayer->GetFPS();
+}
 
 void TVPMoviePlayer::GetNumberOfFrame(int *f) {
+    // These are two textual m_pPlayer evaluations.  Android reloads the raw
+    // field after llrint while iOS common-subexpression-eliminates the load.
+    // Total time is rounded to int64 before multiplying by the live FPS.
     *f = m_pPlayer->GetTotalTime() * m_pPlayer->GetFPS() / DVD_PLAYSPEED_NORMAL;
 }
 
 void TVPMoviePlayer::GetTotalTime(int64_t *t) {
+    // llrint and its floating-environment effects occur before the unguarded
+    // 8-byte output publication.
     *t = m_pPlayer->GetTotalTime();
 }
 
 void TVPMoviePlayer::GetVideoSize(long *width, long *height) {
+    // Exact raw tail-style forwarding: BasePlayer owns all locking, output
+    // order and partial publication; this layer adds no defaults or guards.
     m_pPlayer->GetVideoSize(width, height);
 }
 
@@ -116,6 +134,8 @@ void TVPMoviePlayer::GetAudioVolume(long *volume) {
 }
 
 void TVPMoviePlayer::GetNumberOfAudioStream(unsigned long *streamCount) {
+    // Query first, then perform the unguarded ABI-width output store.  A null
+    // output therefore faults only after the selection traversal completes.
     *streamCount = m_pPlayer->GetAudioStreamCount();
 }
 
@@ -125,14 +145,18 @@ void TVPMoviePlayer::SelectAudioStream(unsigned long iStream) {
 }
 
 void TVPMoviePlayer::GetEnableAudioStreamNum(long *num) {
+    // This publishes GetAudioStream verbatim: after current.Clear(), a
+    // nonempty selection table can therefore report its last audio index.
     *num = m_pPlayer->GetAudioStream();
 }
 
 void TVPMoviePlayer::DisableAudioStream() {
-    // TODO
+    // Exact no-op: the corresponding iTVPVideoOverlay virtual slot does not
+    // enqueue a stream-selection message or modify BasePlayer state.
 }
 
 void TVPMoviePlayer::GetNumberOfVideoStream(unsigned long *streamCount) {
+    // As for audio, the player query precedes the unguarded output store.
     *streamCount = m_pPlayer->GetVideoStreamCount();
 }
 
@@ -142,11 +166,16 @@ void TVPMoviePlayer::SelectVideoStream(unsigned long iStream) {
 }
 
 void TVPMoviePlayer::GetEnableVideoStreamNum(long *num) {
+    // Preserve the raw GetVideoStream result and query-before-output-store
+    // order; there is no separate disabled-state or null-output guard.
     *num = m_pPlayer->GetVideoStream();
 }
 
 int TVPMoviePlayer::WaitForBuffer(volatile std::atomic_bool &bStop,
                                   int timeout) {
+    // The unlocked fast path reports the exact remaining slots.  Once the
+    // full path takes the mutex, the native return deliberately has an extra
+    // -1: a wake to used==3 returns zero rather than one.
     int remainBuf = MAX_BUFFER_COUNT - m_usedPicture;
     if(remainBuf > 0)
         return remainBuf;
@@ -163,6 +192,8 @@ void TVPMoviePlayer::Flush() {
     for(int i = 0; i < MAX_BUFFER_COUNT; ++i) {
         m_picture[i].Clear();
     }
+    // Keep the read index and do not notify the condition variable.  A waiter
+    // wakes only through a consumer notify, timeout, spurious wake or teardown.
     m_curpts = 0.0;
     m_usedPicture = 0;
 }
@@ -180,6 +211,8 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     if(pic.pts == DVD_NOPTS_VALUE)
         return 0;
 
+    // As in the layer converter, this is a single unconditional wait followed
+    // by one full check, not a predicate loop.
     if(m_usedPicture >= MAX_BUFFER_COUNT) {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
         m_condPicture.wait(lk);
@@ -188,7 +221,9 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         return -1;
 
     int width = pic.iWidth, height = pic.iHeight;
-    // YUV data passthrough
+    // YUV data passthrough.  These three allocations have no temporary owner:
+    // an allocation/copy failure before ring publication leaks the completed
+    // prefix exactly as in the four references.
     int yuvwidth[3] = { width, width / 2, width / 2 };
     int yuvheight[3] = { height, height / 2, height / 2 };
     uint8_t *yuvdata[3] = { nullptr };
@@ -230,6 +265,10 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
 VideoPresentOverlay::~VideoPresentOverlay() { ClearNode(); }
 
 void VideoPresentOverlay::ClearNode() {
+    // V330: removeFromParent releases the parent-held root (and therefore its
+    // child/scheduler state).  A null root deliberately leaves m_pSprite
+    // untouched; SetRootNode also deliberately does not special-case the same
+    // pointer.
     if(m_pRootNode) {
         m_pRootNode->removeFromParent(), m_pRootNode = nullptr;
         m_pSprite = nullptr;
@@ -238,6 +277,8 @@ void VideoPresentOverlay::ClearNode() {
 
 void VideoPresentOverlay::PresentPicture(float dt) {
     BitmapPicture pic;
+    // V330: the fast empty check is intentionally outside m_mtxPicture.  The
+    // four references preserve this race window with producer Flush/AddPicture.
     if(!m_usedPicture) {
         return;
     } else {
@@ -252,6 +293,9 @@ void VideoPresentOverlay::PresentPicture(float dt) {
                 return;
             }
         }
+        // Keep only the newest frame whose PTS is already due.  swap transfers
+        // the four owning pointers and dimensions; pic.Clear frees each older
+        // skipped frame before the next transfer.
         do { // skip frame
             pic.Clear();
             m_picture[m_curPicture].swap(pic);
@@ -259,8 +303,10 @@ void VideoPresentOverlay::PresentPicture(float dt) {
             --m_usedPicture;
         } while(m_usedPicture > 0 && m_curpts >= m_picture[m_curPicture].pts);
         assert(m_usedPicture >= 0);
+        // The reference calls notify_all before releasing the picture mutex.
         m_condPicture.notify_all();
     }
+    // Rendering-manager advancement and all scene calls happen after unlock.
     FrameMove();
     if(!pic.rgba) {
         return;
@@ -308,6 +354,8 @@ void KRMovie::VideoPresentOverlay::Stop() {
 
 MoviePlayerOverlay::~MoviePlayerOverlay() {
     assert(std::this_thread::get_id() == TVPMainThreadID);
+    // Destroy the player-held raw-this callback before the base removes the
+    // scheduled scene callback; nulling also suppresses TVPMoviePlayer's delete.
     delete m_pPlayer;
     m_pPlayer = nullptr;
 }
@@ -319,9 +367,14 @@ void MoviePlayerOverlay::SetWindow(tTJSNI_Window *window) {
     parent->addChild((m_pRootNode = cocos2d::Node::create()));
     m_pRootNode->setContentSize(cocos2d::Size::ZERO);
     const static std::string sckey("update video");
+    // The scheduled std::function owns only a raw this.  ClearNode ends its
+    // lifetime indirectly by removing the root; there is no weak/ref guard.
     m_pRootNode->schedule(
         [this](float dt) {
             PresentPicture(dt);
+            // V302: intentionally disabled in the native player call chain.
+            // Android retains Render with zero xrefs; both iOS slices
+            // dead-strip Render and its Present* helpers.
             //		m_renderManager.Render();
         },
         sckey);
@@ -330,11 +383,14 @@ void MoviePlayerOverlay::SetWindow(tTJSNI_Window *window) {
 void MoviePlayerOverlay::BuildGraph(tTJSNI_VideoOverlay *callbackwin,
                                     IStream *stream, const tjs_char *streamname,
                                     const tjs_char *type, uint64_t size) {
+    // V330/V331: publish the borrowed callback first, then copy the native
+    // std::bind target (non-virtual member pointer plus borrowed raw this) into
+    // BasePlayer.  OpenFromStream's bool is ignored and failures do not roll
+    // either publication back.
     m_pCallbackWin = callbackwin;
-    m_pPlayer->SetCallback([this](auto &&PH1, auto &&PH2) {
-        OnPlayEvent(std::forward<decltype(PH1)>(PH1),
-                    std::forward<decltype(PH2)>(PH2));
-    });
+    m_pPlayer->SetCallback(std::bind(&MoviePlayerOverlay::OnPlayEvent, this,
+                                     std::placeholders::_1,
+                                     std::placeholders::_2));
     m_pPlayer->OpenFromStream(stream, streamname, type, size);
 }
 
@@ -359,23 +415,29 @@ void MoviePlayerOverlay::OnPlayEvent(KRMovieEvent msg, void *p) {
 }
 
 void VideoPresentOverlay::BitmapPicture::swap(BitmapPicture &r) {
+    // fmt and pts intentionally stay with their original objects.
     std::swap(data, r.data);
     std::swap(width, r.width);
     std::swap(height, r.height);
 }
 
 void TVPMoviePlayer::BitmapPicture::Clear() {
+    // Clear owns all four pointer slots but intentionally preserves every
+    // scalar field; later users gate ownership on the pointers themselves.
     for(int i = 0; i < sizeof(data) / sizeof(data[0]); ++i)
         if(data[i])
             TJSAlignedDealloc(data[i]), data[i] = nullptr;
 }
 
 void VideoPresentOverlay2::SetRootNode(cocos2d::Node *node) {
+    // Borrow only: no retain/addChild/schedule/visibility operation.  Clearing
+    // first is observable even when node is the current root.
     ClearNode();
     m_pRootNode = node;
 }
 
 VideoPresentOverlay2 *VideoPresentOverlay2::create() {
+    // RefCount starts at one; this is not a cocos autorelease factory.
     return new VideoPresentOverlay2;
 }
 

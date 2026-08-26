@@ -33,8 +33,8 @@ void TVPPreferenceForm::initPref(const tPreferenceScreen *config) {
     PrefList->pushBackCustomItem(nullcell);
 }
 
-void TVPPreferenceForm::bindBodyController(const Node *allNodes) {
-    PrefList = static_cast<ListView *>(allNodes->getChildByName("list"));
+void TVPPreferenceForm::bindBodyController(const NodeMap &allNodes) {
+    PrefList = static_cast<ListView *>(allNodes.findController("list"));
     if(NaviBar.Left) {
         NaviBar.Left->addClickEventListener([this](cocos2d::Ref *) {
             TVPMainScene::GetInstance()->popUIForm(this);
@@ -42,8 +42,8 @@ void TVPPreferenceForm::bindBodyController(const Node *allNodes) {
     }
 }
 
-void TVPPreferenceForm::bindHeaderController(const Node *allNodes) {
-    _title = static_cast<Button *>(allNodes->getChildByName("title"));
+void TVPPreferenceForm::bindHeaderController(const NodeMap &allNodes) {
+    _title = static_cast<Button *>(allNodes.findController("title"));
     if(_title)
         _title->setEnabled(false);
 }
@@ -290,8 +290,8 @@ TVPCustomPreferenceForm *TVPCustomPreferenceForm::create(
     return ret;
 }
 
-void TVPCustomPreferenceForm::bindBodyController(const Node *allNodes) {
-    _listview = static_cast<ListView *>(allNodes->getChildByName("list"));
+void TVPCustomPreferenceForm::bindBodyController(const NodeMap &allNodes) {
+    _listview = static_cast<ListView *>(allNodes.findController("list"));
     if(NaviBar.Left) {
         NaviBar.Left->addClickEventListener([this](cocos2d::Ref *) {
             TVPMainScene::GetInstance()->popUIForm(this);
@@ -299,8 +299,8 @@ void TVPCustomPreferenceForm::bindBodyController(const Node *allNodes) {
     }
 }
 
-void TVPCustomPreferenceForm::bindHeaderController(const Node *allNodes) {
-    _title = static_cast<Button *>(allNodes->getChildByName("title"));
+void TVPCustomPreferenceForm::bindHeaderController(const NodeMap &allNodes) {
+    _title = static_cast<Button *>(allNodes.findController("title"));
     if(_title)
         _title->setEnabled(false);
 }

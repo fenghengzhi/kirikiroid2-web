@@ -84,14 +84,17 @@ protected:
     CProcessInfo();
 
     // player video info
-    bool m_videoIsHWDecoder{};
+    // These scalar fields deliberately have no default member initializers.
+    // The reference constructor builds only the strings, mutexes and
+    // CRenderInfo; Reset*/Set* establish the scalar values later.
+    bool m_videoIsHWDecoder;
     std::string m_videoDecoderName;
     std::string m_videoDeintMethod;
     std::string m_videoPixelFormat;
-    int m_videoWidth{};
-    int m_videoHeight{};
-    float m_videoFPS{};
-    float m_videoDAR{};
+    int m_videoWidth;
+    int m_videoHeight;
+    float m_videoFPS;
+    float m_videoDAR;
     // 	std::list<EINTERLACEMETHOD> m_deintMethods;
     // 	EINTERLACEMETHOD m_deintMethodDefault;
     CCriticalSection m_videoCodecSection;
@@ -99,17 +102,17 @@ protected:
     // player audio info
     std::string m_audioDecoderName;
     std::string m_audioChannels;
-    int m_audioSampleRate{};
-    int m_audioBitsPerSample{};
+    int m_audioSampleRate;
+    int m_audioBitsPerSample;
     CCriticalSection m_audioCodecSection;
 
     // render info
     CCriticalSection m_renderSection;
-    bool m_isClockSync{};
+    bool m_isClockSync;
     CRenderInfo m_renderInfo;
 
     // player states
     CCriticalSection m_stateSection;
-    bool m_stateSeeking{};
+    bool m_stateSeeking;
 };
 NS_KRMOVIE_END

@@ -56,6 +56,9 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints,
         return false;
     }
 
+    // There is no pre-open Dispose. Reopening the same object publishes the
+    // candidate directly; a null allocation therefore loses any old context
+    // pointer while leaving the old frame pointer in place.
     m_pCodecContext = avcodec_alloc_context3(pCodec);
     if(!m_pCodecContext)
         return false;
@@ -100,6 +103,8 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints,
         return false;
     }
 
+    // This is another direct replacement. On a repeated Open the old frame is
+    // lost whether allocation succeeds or returns null.
     m_pFrame1 = av_frame_alloc();
     if(!m_pFrame1) {
         Dispose();
@@ -109,6 +114,8 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints,
     m_iSampleFormat = AV_SAMPLE_FMT_NONE;
     m_matrixEncoding = AV_MATRIX_ENCODING_NONE;
 
+    // m_gotFrame, m_layout and m_format are intentionally not reset here.
+
     m_processInfo.SetAudioDecoderName(m_pCodecContext->codec->name);
     return true;
 }
@@ -116,6 +123,8 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints,
 void CDVDAudioCodecFFmpeg::Dispose() {
     av_frame_free(&m_pFrame1);
     avcodec_free_context(&m_pCodecContext);
+    // Format, sample-format residue, matrix state, got-frame flag and channel
+    // cache scalars all survive Dispose.
 }
 
 int CDVDAudioCodecFFmpeg::Decode(uint8_t *pData, int iSize, double dts,
@@ -153,6 +162,8 @@ int CDVDAudioCodecFFmpeg::Decode(uint8_t *pData, int iSize, double dts,
             AVFrameSideData *sd = m_pFrame1->side_data[i];
             if(sd->data) {
                 if(sd->type == AV_FRAME_DATA_MATRIXENCODING) {
+                    // No per-frame reset: the last matching side-data entry
+                    // wins, while frames with no match retain the prior value.
                     m_matrixEncoding = *(enum AVMatrixEncoding *)sd->data;
                 }
             }
@@ -176,6 +187,7 @@ void CDVDAudioCodecFFmpeg::GetData(DVDAudioFrame &frame) {
     frame.framesize =
         (CAEUtil::DataFormatToBits(frame.format.m_dataFormat) >> 3) *
         frame.format.m_channelLayout.Count();
+    // The remaining output fields intentionally retain caller state here.
     if(frame.framesize == 0)
         return;
     frame.nb_frames = GetData(frame.data) / frame.framesize;
@@ -207,6 +219,7 @@ int CDVDAudioCodecFFmpeg::GetData(uint8_t **dst) {
         int planes = av_sample_fmt_is_planar(m_pCodecContext->sample_fmt)
             ? m_pFrame1->channels
             : 1;
+        // The caller-provided destination capacity is not checked.
         for(int i = 0; i < planes; i++)
             dst[i] = m_pFrame1->extended_data[i];
         m_gotFrame = 0;
@@ -296,6 +309,7 @@ void CDVDAudioCodecFFmpeg::BuildChannelMap() {
        m_layout == m_pCodecContext->channel_layout)
         return; // nothing to do here
 
+    // Cache the reported pair before validating or selecting a fallback layout.
     m_channels = m_pCodecContext->channels;
     m_layout = m_pCodecContext->channel_layout;
 

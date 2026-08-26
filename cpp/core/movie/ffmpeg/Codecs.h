@@ -16,7 +16,10 @@ NS_KRMOVIE_BEGIN
 class CDVDCodecOption {
 public:
     CDVDCodecOption(std::string name, std::string value) :
-        m_name(std::move(name)), m_value(std::move(value)) {}
+        // The two by-value parameters are deliberately copied into the
+        // members.  Factory code then moves this completed temporary option
+        // into the vector; do not collapse the copy/temporary lifetime.
+        m_name(name), m_value(value) {}
 
     std::string m_name;
     std::string m_value;

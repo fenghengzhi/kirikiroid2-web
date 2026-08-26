@@ -41,6 +41,10 @@ struct AEAudioFormat {
      */
     CAEStreamInfo m_streamInfo;
 
+    // Member construction happens before this body: channelLayout resets its
+    // full fixed array, while streamInfo deliberately leaves its sample-rate,
+    // channel-count and padding bytes indeterminate.  The four references then
+    // write only these four outer scalars; this is not whole-object zeroing.
     AEAudioFormat() {
         m_dataFormat = AE_FMT_INVALID;
         m_sampleRate = 0;
@@ -56,6 +60,12 @@ struct AEAudioFormat {
             m_streamInfo == fmt.m_streamInfo;
     }
 
+    // Keep the copy constructor implicit and this assignment defaulted.  The
+    // native implicit copy construction bit-copies all 388 bytes, including
+    // inactive channel slots.  Assignment instead reaches
+    // CAEChannelInfo::operator= and copies only count active slots, leaving the
+    // destination tail stale, before copying frames and streamInfo.  A shared
+    // memcpy helper would erase this source-level distinction.
     AEAudioFormat &operator=(const AEAudioFormat &fmt) = default;
 };
 
