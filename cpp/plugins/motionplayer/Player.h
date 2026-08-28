@@ -22,6 +22,7 @@
 #include "internal/player_containers.h"
 
 class iTVPTexture2D;
+class tTJSNI_BaseLayer;
 struct ncbPropAccessor;
 
 namespace motion {
@@ -43,6 +44,13 @@ namespace motion {
         void buildNodeTree(motion::Player &player,
                            ncbPropAccessor &motionContent);
     }
+
+    using D3DTargetTexturePair_guess =
+        std::pair<iTVPTexture2D *, iTVPTexture2D *>;
+    using D3DTargetTextureGetter_guess = std::function<
+        D3DTargetTexturePair_guess(bool, const tTVPRect &)>;
+    using D3DSourceTextureGetter_guess =
+        std::function<iTVPTexture2D *(detail::PreparedRenderItem &)>;
 
     // Motion class enums
     enum LayerType {
@@ -91,8 +99,8 @@ namespace motion {
         // literal zero as the first std::min operand is observable for NaN and
         // equal signed zeros on targets that retain the ordered comparison.
         double initialNonChainEvaluationTime_guess(double totalFrames);
-        detail::MotionParameterEntry *
-        resolveNodeParameterEntry(Player &, const detail::MotionNode &);
+        detail::MotionParameterEntry *selectParameterEntry_guess(
+            Player &, const tTJSVariant &);
         bool evaluateTimeline_guess(
             detail::MotionNode &, double, bool);
         void initializeNodeTimelineSlots_guess(
@@ -169,8 +177,11 @@ namespace motion {
         // VariableLabelScope::cascadeKey values on every call. It preserves
         // deque order, duplicate keys and empty strings without normalization.
 
-        // Local per-frame count plus every reachable type-3/type-4 child count.
-        // Both accumulation levels intentionally use uint32 wraparound.
+        // Local per-frame count plus the children reached by the shared
+        // type-4/type-3 visitor. Its native particle-index-zero repetition is
+        // preserved, so a type-4 count may add the first child more than once
+        // rather than visiting every numeric element. Both accumulation
+        // levels intentionally use uint32 wraparound.
         std::uint32_t getProcessedMeshVerticesNum() const;
 
         void setQueuing(bool v) { _queuing = v; }
@@ -430,12 +441,13 @@ namespace motion {
         // result slot and accepts surplus arguments before this body writes
         // only the Player-level playing byte.
         void stop();
-        // The current four raw bridges take (player,currentDispatch,frameDt),
+        // The four progress bridges take (player,currentDispatch,frameDt),
         // store the raw dispatch pointer for the call, and run frameProgress ->
-        // updateLayers -> calcBounds -> dispatchPendingEvents before clearing the
-        // pointer. Engine progress passes nullptr and frame units; the script
-        // wrapper passes objthis after converting milliseconds to frame units.
-        // Neither bridge consumes the event vector.
+        // updateLayers -> calcBounds -> dispatchPendingEvents before clearing
+        // the pointer. Engine progress passes nullptr and frame units; the raw
+        // script callback converts milliseconds before entering the bridge.
+        // Neither bridge consumes the event vector, and an exceptional phase
+        // leaves the raw pointer installed.
         void progressFrames_guess(iTJSDispatch2 *currentDispatch,
                                   double frameDt);
         static tjs_error playCompat(tTJSVariant *result, tjs_int numparams,
@@ -447,7 +459,7 @@ namespace motion {
         static tjs_error setVariableCompatMethod(tTJSVariant *result,
                                                  tjs_int numparams,
                                                  tTJSVariant **param,
-                                                 iTJSDispatch2 *objthis);
+                                                 Player *nativeInstance);
         // Script member "clear" binds this as a typed two-Variant method. It
         // supports D3DAdaptor and SeparateLayerAdaptor targets in addition to
         // an ordinary Layer. Values are owned per recursive call, matching the
@@ -492,14 +504,14 @@ namespace motion {
         // Class-level RW properties backed by process-global state rather than
         // per-instance fields. All four references use a one-byte false default
         // for syncActive and the integer order {0,3,2,1}.
-        [[nodiscard]] bool getDefaultSyncActive() const {
+        [[nodiscard]] static bool getDefaultSyncActive() {
             return s_defaultSyncActive;
         }
-        void setDefaultSyncActive(bool v) { s_defaultSyncActive = v; }
+        static void setDefaultSyncActive(bool v) { s_defaultSyncActive = v; }
         // The getter returns a new Array. The setter reads a four-element
         // permutation with required indexed lookups and writes incrementally.
-        [[nodiscard]] tTJSVariant getDefaultTransformOrder() const;
-        void setDefaultTransformOrder(tTJSVariant arr);
+        [[nodiscard]] static tTJSVariant getDefaultTransformOrder();
+        static void setDefaultTransformOrder(tTJSVariant arr);
 
         // Root-node position. left aliases x and top aliases y in every
         // registrar; setters compare with ordinary `!=` and dirty on change.
@@ -605,7 +617,7 @@ namespace motion {
             const tTJSVariant &target,
             detail::PreparedRenderItemList &mainList);
         int buildPrivateMotionGLLCommands_guess(
-            iTJSDispatch2 *renderTargetObject,
+            tTJSNI_BaseLayer *renderLayer,
             tjs_int canvasWidth,
             tjs_int canvasHeight,
             detail::PreparedRenderItemList &mainList,
@@ -646,8 +658,7 @@ namespace motion {
         // map, size it to the clip, and copy the resolved source. This belongs
         // to command building; the later execute pass only submits it.
         void emitPreparedLeafLayerCopy_guess(
-            detail::PreparedRenderItem &item,
-            const std::string &motionPath);
+            detail::PreparedRenderItem &item);
         // For each group item, union visible child paint boxes, intersect the
         // result with the caller's four-edge target clip, create/reuse the
         // composed layer when non-empty, then apply every visible leaf as an
@@ -668,19 +679,17 @@ namespace motion {
         void updateLayerAfterDrawRecovered_guess(
             const tTJSVariant &target);
         void updateAccurateSLAAfterDraw(const tTJSVariant &target);
-        using D3DSourceTextureGetter_guess =
-            std::function<iTVPTexture2D *(detail::PreparedRenderItem &)>;
         void renderPreparedItemsToD3DTexture_guess(
             D3DAdaptor *adaptor,
             detail::PreparedRenderItemList &mainList);
         void renderPreparedItemsToD3DTexture_guess(
             iTVPTexture2D *targetTexture,
-            tjs_int width,
-            tjs_int height,
-            float xOffset,
-            float yOffset,
+            const D3DTargetTextureGetter_guess &targetTextureGetter,
+            const tTVPRect &targetRect,
+            const D3DSourceTextureGetter_guess &sourceTextureGetter,
             detail::PreparedRenderItemList &mainList,
-            const D3DSourceTextureGetter_guess &sourceTextureGetter);
+            float xOffset,
+            float yOffset);
         // Extracted node phase of the progress-pass cursor machine. The native
         // forward/reverse incremental functions inline this phase after the
         // layer, root and variable streams. It fills each node's two parsed
@@ -818,6 +827,13 @@ namespace motion {
         // registered as a Motion.Player script property.
         [[nodiscard]] double evaluationFrameForDifferentialTest_guess() const {
             return _clampedEvalTime;
+        }
+        // Test-only observation of the scaled frame delta committed at the
+        // beginning of frameProgress. It distinguishes the raw progress
+        // callback's native multiply-then-divide millisecond conversion from a
+        // pre-folded 0.06 multiplication.
+        [[nodiscard]] double deltaTimeForDifferentialTest_guess() const {
+            return _deltaTime;
         }
         // Test-only injection for skipToSync's pre-loop snapshot, re-entrant
         // tag traversal, and IEEE-754 boundary tests. It is not registered as
@@ -1183,6 +1199,13 @@ namespace motion {
             _parameterEntries.emplace_back();
             return _parameterEntries.back();
         }
+        void selectParameterEntryForDifferentialTest_guess(
+                std::size_t index) {
+            _selectedParameterEntry = &_parameterEntries[index];
+        }
+        void updateMotionSubNodesForDifferentialTest_guess() {
+            updateLayersPhase3_MotionSubNode();
+        }
         void appendParameterVariantForDifferentialTest_guess(
                 const tTJSVariant &parameter) {
             appendParameterEntry_guess(parameter);
@@ -1241,11 +1264,21 @@ namespace motion {
         void resetAndReleaseOldNodeTreeForDifferentialTest_guess() {
             resetAndReleaseOldNodeTree_guess();
         }
+        [[nodiscard]] double evalCascadeWeightForDifferentialTest_guess(
+                const ttstr &key) const {
+            const auto found = _evalCascadeMap.find(key);
+            return found == _evalCascadeMap.end()
+                ? 0.0 : found->second.weight;
+        }
         // Test-only re-entrant owner mutation. Other constructor-owned
         // ResourceManager aliases are deliberately untouched; the reset probe
         // uses this to verify that its captured dispatch receiver stays fixed.
         void clearCanonicalResourceManagerForDifferentialTest_guess() {
             _resourceManager.Clear();
+        }
+        void setCanonicalResourceManagerForDifferentialTest_guess(
+                const tTJSVariant &value) {
+            _resourceManager = value;
         }
     public:
         // Reach the native ResourceManager through the first of the three
@@ -1603,10 +1636,8 @@ namespace motion {
         // lookup; friendship permits that helper to read the persistent motion
         // context and unwrap the native ResourceManager.
         friend class SourceCache;
-        // The node parameter resolver maps an integer PSB index into the
-        // Player-owned parameter vector while the node tree is being built.
-        friend detail::MotionParameterEntry *internal::resolveNodeParameterEntry(
-            Player &, const detail::MotionNode &);
+        friend detail::MotionParameterEntry *internal::selectParameterEntry_guess(
+            Player &, const tTJSVariant &);
         friend void internal::initializeNodeTimelineSlots_guess(
             Player &, detail::MotionNode &);
         friend void internal::seekParameterizedNodeFrames_guess(

@@ -17,6 +17,26 @@
 void TVPConsoleLog(const ttstr &message, bool important);
 
 namespace motion::render_backend_guess {
+
+    namespace {
+        iTVPRenderManager *privateOpenGLRenderManagerTestOverride_guess =
+            nullptr;
+    }
+
+    iTVPRenderManager *getPrivateOpenGLRenderManager_guess() {
+        if(privateOpenGLRenderManagerTestOverride_guess) {
+            return privateOpenGLRenderManagerTestOverride_guess;
+        }
+        static iTVPRenderManager *manager =
+            TVPGetRenderManager(TJS_W("opengl"));
+        return manager;
+    }
+
+    void setPrivateOpenGLRenderManagerForDifferentialTest_guess(
+        iTVPRenderManager *manager) {
+        privateOpenGLRenderManagerTestOverride_guess = manager;
+    }
+
     namespace {
         std::uint8_t stencilTestEnabledCache_guess = 0;
 
@@ -24,22 +44,6 @@ namespace motion::render_backend_guess {
             return lhs.left == rhs.left && lhs.top == rhs.top &&
                 lhs.right == rhs.right && lhs.bottom == rhs.bottom;
         }
-
-        struct TextureReference_guess {
-            iTVPTexture2D *texture;
-            bool armed = true;
-
-            ~TextureReference_guess() {
-                if(armed) {
-                    texture->Release();
-                }
-            }
-
-            void releaseNow_guess() {
-                texture->Release();
-                armed = false;
-            }
-        };
 
         tTVPBitmap *makeRepeatedSoftwareBitmap_guess(
             iTVPTexture2D *sourceTexture,
@@ -208,7 +212,11 @@ namespace motion::render_backend_guess {
         }
 
         auto &table = cubicBezierBasisCache_guess[division];
-        table.resize(static_cast<std::size_t>(division) + 1u);
+        // The source expression performs the signed-int addition before the
+        // vector size conversion. At INT_MAX this is deliberately the native
+        // undefined-overflow boundary; the two arm64 compilers widen it
+        // differently, while both 32-bit targets retain the 0x80000000 word.
+        table.resize(division + 1);
         if(division < 0) {
             return table;
         }
@@ -288,7 +296,7 @@ namespace motion::render_backend_guess {
                 static iTVPRenderMethod *method = nullptr;
                 static int colorId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsAddBlend_color");
                     colorId = method->EnumParameterID("color");
                 }
@@ -300,7 +308,7 @@ namespace motion::render_backend_guess {
                 static iTVPRenderMethod *method = nullptr;
                 static int colorId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsSubBlend_color");
                     colorId = method->EnumParameterID("color");
                 }
@@ -311,7 +319,7 @@ namespace motion::render_backend_guess {
                 static iTVPRenderMethod *method = nullptr;
                 static int colorId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsMulBlend_color");
                     colorId = method->EnumParameterID("color");
                 }
@@ -322,7 +330,7 @@ namespace motion::render_backend_guess {
                 static iTVPRenderMethod *method = nullptr;
                 static int colorId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsScreenBlend_color");
                     colorId = method->EnumParameterID("color");
                 }
@@ -334,7 +342,7 @@ namespace motion::render_backend_guess {
                     static iTVPRenderMethod *method = nullptr;
                     static int colorId = 0;
                     if(!method) {
-                        method = TVPGetRenderManager()->GetRenderMethod(
+                        method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                             "AlphaBlend_color_a");
                         colorId = method->EnumParameterID("color");
                     }
@@ -344,7 +352,7 @@ namespace motion::render_backend_guess {
                     static iTVPRenderMethod *method = nullptr;
                     static int colorId = 0;
                     if(!method) {
-                        method = TVPGetRenderManager()->GetRenderMethod(
+                        method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                             "AlphaBlend_color");
                         colorId = method->EnumParameterID("color");
                     }
@@ -368,7 +376,7 @@ namespace motion::render_backend_guess {
                 static int colorId = 0;
                 static int thresholdId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsAddBlend_color_AlphaTest");
                     colorId = method->EnumParameterID("color");
                     thresholdId = method->EnumParameterID("alpha_threshold");
@@ -383,7 +391,7 @@ namespace motion::render_backend_guess {
                 static int colorId = 0;
                 static int thresholdId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsSubBlend_color_AlphaTest");
                     colorId = method->EnumParameterID("color");
                     thresholdId = method->EnumParameterID("alpha_threshold");
@@ -397,7 +405,7 @@ namespace motion::render_backend_guess {
                 static int colorId = 0;
                 static int thresholdId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsMulBlend_color_AlphaTest");
                     colorId = method->EnumParameterID("color");
                     thresholdId = method->EnumParameterID("alpha_threshold");
@@ -411,7 +419,7 @@ namespace motion::render_backend_guess {
                 static int colorId = 0;
                 static int thresholdId = 0;
                 if(!method) {
-                    method = TVPGetRenderManager()->GetRenderMethod(
+                    method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                         "PsScreenBlend_color_AlphaTest");
                     colorId = method->EnumParameterID("color");
                     thresholdId = method->EnumParameterID("alpha_threshold");
@@ -426,7 +434,7 @@ namespace motion::render_backend_guess {
                     static int colorId = 0;
                     static int thresholdId = 0;
                     if(!method) {
-                        method = TVPGetRenderManager()->GetRenderMethod(
+                        method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                             "AlphaBlend_color_a_AlphaTest");
                         colorId = method->EnumParameterID("color");
                         thresholdId =
@@ -440,7 +448,7 @@ namespace motion::render_backend_guess {
                     static int colorId = 0;
                     static int thresholdId = 0;
                     if(!method) {
-                        method = TVPGetRenderManager()->GetRenderMethod(
+                        method = getPrivateOpenGLRenderManager_guess()->GetRenderMethod(
                             "AlphaBlend_color_AlphaTest");
                         colorId = method->EnumParameterID("color");
                         thresholdId =
@@ -457,7 +465,7 @@ namespace motion::render_backend_guess {
         if(!enabled) {
             return;
         }
-        TVPGetRenderManager()->BeginStencil(target);
+        getPrivateOpenGLRenderManager_guess()->BeginStencil(target);
 #if !defined(KRKR2_WASMTIME_HEADLESS)
         glDisable(GL_DEPTH_TEST);
         glStencilMask(255);
@@ -505,7 +513,7 @@ namespace motion::render_backend_guess {
 
     void endStencil_guess(bool enabled) {
         if(enabled) {
-            TVPGetRenderManager()->EndStencil();
+            getPrivateOpenGLRenderManager_guess()->EndStencil();
         }
     }
 
@@ -518,8 +526,10 @@ namespace motion::render_backend_guess {
         int divisionX,
         int divisionY,
         const MeshSubmitCallback_guess &submit) {
+        // The reference keeps this as a manually balanced raw reference.
+        // Its normal false/success exits release explicitly, but exception
+        // unwinding only destroys the temporary vectors and leaks this AddRef.
         sourceTexture->AddRef();
-        TextureReference_guess sourceGuard{sourceTexture};
 
         const int sourceWidth = sourceRect.right - sourceRect.left;
         const int sourceHeight = sourceRect.bottom - sourceRect.top;
@@ -535,11 +545,10 @@ namespace motion::render_backend_guess {
                     sourceTexture, sourceTop, sourceLeft,
                     sourceWidth, sourceHeight);
                 if(repeatedBitmap) {
-                    sourceGuard.releaseNow_guess();
-                    sourceTexture = TVPGetRenderManager()->CreateTexture2D(
-                        repeatedBitmap);
-                    sourceGuard.texture = sourceTexture;
-                    sourceGuard.armed = true;
+                    sourceTexture->Release();
+                    sourceTexture =
+                        getPrivateOpenGLRenderManager_guess()->CreateTexture2D(
+                            repeatedBitmap);
                 }
             } else {
                 TVPConsoleLog(TJS_W(
@@ -594,7 +603,7 @@ namespace motion::render_backend_guess {
 
             if(computedBounds.left >= computedBounds.right ||
                computedBounds.top >= computedBounds.bottom) {
-                sourceGuard.releaseNow_guess();
+                sourceTexture->Release();
                 return false;
             }
             if(boundsLeft < boundsRight && boundsTop < boundsBottom &&
@@ -613,6 +622,7 @@ namespace motion::render_backend_guess {
                       boundsTop < computedBounds.bottom) {
                 // Partial overlap is resolved per cell below.
             } else {
+                sourceTexture->Release();
                 return false;
             }
         }
@@ -685,6 +695,7 @@ namespace motion::render_backend_guess {
         }
 
         if(selectedCells.empty()) {
+            sourceTexture->Release();
             return false;
         }
 
@@ -716,7 +727,7 @@ namespace motion::render_backend_guess {
         }
 
         submit(sourceTexture, sourceVertices, destinationVertices);
-        sourceGuard.releaseNow_guess();
+        sourceTexture->Release();
         computedBounds.left = boundsLeft;
         computedBounds.top = boundsTop;
         computedBounds.right = boundsRight;
@@ -728,8 +739,8 @@ namespace motion::render_backend_guess {
         : _manager(manager) {}
 
     void TriangleBatch_guess::setStencilState_guess(
-        std::uint8_t maskRef,
-        std::uint8_t writeRef) {
+        std::uint8_t writeRef,
+        std::uint8_t maskRef) {
         if(_maskRef == maskRef && _writeRef == writeRef) {
             return;
         }

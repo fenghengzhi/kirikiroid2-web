@@ -4,7 +4,6 @@
 #include "PlayerInternal.h"
 #include "D3DAdaptor.h"
 #include "MotionDispatch.h"
-#include "PlayerRenderInternal.h"
 #include "SeparateLayerAdaptor.h"
 #include "LayerIntf.h"
 #include "impl/LayerImpl.h"
@@ -21,14 +20,6 @@ namespace motion {
                 if(dispatch) dispatch->Release();
             }
         };
-
-        bool shouldEmitPlaybackDiag(std::uint32_t seq) {
-            return seq <= 200 || (seq % 100) == 0;
-        }
-
-        const char *boolText(bool v) {
-            return v ? "true" : "false";
-        }
 
     }
 
@@ -102,31 +93,6 @@ namespace motion {
     }
 
     void Player::playMotionImpl_guess(const ttstr &label, tjs_int flags) {
-        static std::uint32_t s_diagSeq = 0;
-        std::uint32_t diagSeq = 0;
-        bool emitDiag = false;
-        if(detail::logoChainTraceEnabled() && LOGGER) {
-            diagSeq = ++s_diagSeq;
-            emitDiag = shouldEmitPlaybackDiag(diagSeq);
-        }
-
-        // Path conversion, sequence mutation and formatting are Web diagnostic
-        // sidecars. None belongs to the four-reference playback body, so keep
-        // the ordinary load/commit path free of those extra failure points.
-        std::string entryMotionPath;
-        if(emitDiag && LOGGER) {
-            entryMotionPath = matchedMotionPath();
-            LOGGER->info(
-                "PRTDIAG Player::playMotionLike enter seq={} this={} label='{}' flags=0x{:x} chara='{}' motionKey='{}' stealth='{}' active={} activePath='{}' allplaying={}",
-                diagSeq, static_cast<const void *>(this),
-                detail::narrow(label), static_cast<unsigned int>(flags),
-                detail::narrow(_chara), detail::narrow(_motionKey),
-                detail::narrow(_stealthMotion), hasMotionContent(),
-                entryMotionPath.empty()
-                    ? std::string("<none>") : entryMotionPath,
-                boolText(_allplaying));
-        }
-
         // Select the stealth label for Stealth and the primary label otherwise.
         // Force/AsCan enter unconditionally; other calls enter only when the
         // requested UTF-16 string differs from the selected live slot.
@@ -153,10 +119,6 @@ namespace motion {
         // The load helper always receives the live stealth-chara slot and the
         // current request, regardless of which motion-name slot will later be
         // committed. It has no loaded-state guard.
-        std::string motionPathBeforeLoad;
-        if(emitDiag && LOGGER) {
-            motionPathBeforeLoad = matchedMotionPath();
-        }
         const tTJSVariant loadResult =
             loadMotionResult_guess(_stealthChara, label);
         const bool loadSucceeded = loadResult.Type() != tvtVoid;
@@ -197,27 +159,6 @@ namespace motion {
                 0, 1, &value, loadResultObject.dispatch);
             _findMotionContextVariant = value;
         }
-
-        std::string motionPathAfterLoad;
-        if(emitDiag && LOGGER) {
-            motionPathAfterLoad = matchedMotionPath();
-            LOGGER->info(
-                "PRTDIAG Player::playMotionLike after-ensure seq={} this={} ok={} activeChanged={} activePath='{}' motionKey='{}'",
-                diagSeq, static_cast<const void *>(this),
-                boolText(loadSucceeded),
-                boolText(motionPathBeforeLoad != motionPathAfterLoad),
-                motionPathAfterLoad.empty()
-                    ? std::string("<none>") : motionPathAfterLoad,
-                detail::narrow(_motionKey));
-        }
-        if(emitDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG Player::playMotionLike call-init seq={} this={} label='{}' flags=0x{:x} motionKey='{}' active={} sameLabelAfterCommit={}",
-                diagSeq, static_cast<const void *>(this),
-                detail::narrow(label), static_cast<unsigned int>(flags),
-                detail::narrow(_motionKey), hasMotionContent(),
-                boolText(_motionKey == label));
-        }
         // Retain the just-committed motion Object across type/property reads
         // and the selected initializer. Re-entrant getters cannot redirect the
         // remainder of this branch by replacing the canonical field.
@@ -257,30 +198,24 @@ namespace motion {
             initNonEmoteMotion_guess(
                 static_cast<std::uint32_t>(flags));
         }
-        if(emitDiag && LOGGER) {
-            const auto exitMotionPath = matchedMotionPath();
-            LOGGER->info(
-                "PRTDIAG Player::playMotionLike exit seq={} this={} activePath='{}' motionKey='{}' allplaying={}",
-                diagSeq, static_cast<const void *>(this),
-                exitMotionPath.empty()
-                    ? std::string("<none>") : exitMotionPath,
-                detail::narrow(_motionKey), boolText(_allplaying));
-        }
     }
 
     tjs_error Player::playCompat(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
-        // The native void wrapper never writes the TJS result slot.
+        // The raw callback itself never writes the TJS result slot. The
+        // legacy tTJSNativeClassMethod object clears a non-null result before
+        // it invokes this callback.
         (void)result;
 
-        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        auto *self =
+            ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, false);
         if(!self) {
-            return TJS_E_INVALIDOBJECT;
+            return TJS_E_NATIVECLASSCRASH;
         }
 
         // The native wrapper rejects fewer than two arguments, converts
         // param[1] to flags, and forwards param[0] to Player::play.
-        if(numparams < 2 || !param || !param[0] || !param[1]) {
+        if(numparams < 2) {
             return TJS_E_BADPARAMCOUNT;
         }
         // The native wrapper exposes objthis to loadMotion/onFindMotion through
@@ -338,12 +273,12 @@ namespace motion {
             return;
         }
 
-        tTJSVariant layerClass;
-        if(!render_detail::getLayerClassDispatchVariant_guess(
-               layerClass)) {
-            return;
-        }
-        iTJSDispatch2 *layerClassObject = layerClass.AsObjectNoAddRef();
+        // The original constructs the name-based ncbind accessor even when the
+        // fill argument is itself callable. Its constructor ignores PropGet
+        // status, strictly converts the result to Object, retains only that
+        // dispatch, and preserves ncbind's historical global-reference leak.
+        ncbPropAccessor layerClass(TJS_W("Layer"));
+        iTJSDispatch2 *layerClassObject = layerClass.GetDispatch();
 
         const tTVPRect &bound = _drawRegion.GetBound();
         tTJSVariant left(bound.left);
@@ -370,10 +305,13 @@ namespace motion {
         for(size_t ni = 1; ni < _nodes.size(); ++ni) {
             auto &node = _nodes[ni];
             if(node.nodeType == 3) {
-                if(auto *child = node.getChildPlayer()) {
-                    child->drawToLayerRecursive_guess(
-                        tTJSVariant(targetLayer), tTJSVariant(fillValue));
-                }
+                // Failed native lookup yields nullptr in all four products,
+                // but the recursive call is still unconditional. A malformed
+                // type-3 child is therefore a native null-dereference boundary,
+                // not a silently skipped node.
+                auto *child = node.getChildPlayer();
+                child->drawToLayerRecursive_guess(
+                    tTJSVariant(targetLayer), tTJSVariant(fillValue));
             }
         }
     }

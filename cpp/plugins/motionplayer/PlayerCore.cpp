@@ -41,17 +41,12 @@ namespace {
             ((packedColor & 0xFFu) << 16);
     }
 
-    bool shouldEmitCoreDiag(std::uint32_t seq) {
-        return seq <= 200 || (seq % 100) == 0;
-    }
-
-    const char *coreDiagBool(bool v) {
-        return v ? "true" : "false";
-    }
-
     // Exact binary64 constants shared by all four current reference images.
-    constexpr double kDegreesToRadians = 0x1.1df46a2529d39p-6;
-    constexpr double kRadiansToDegrees = 0x1.ca5dc1a63c1f8p+5;
+    // Four-reference source literals are deliberately shorter than the
+    // full-precision pi ratios. Their exact binary64 values are observable
+    // through Player.angleRad in both conversion directions.
+    constexpr double kDegreesToRadians = 0x1.1df46a2529e00p-6;
+    constexpr double kRadiansToDegrees = 0x1.ca5dc1a63c000p+5;
 
     bool boundsScalarIsValid_guess(double value) {
         // The native classifier accepts only non-negative finite binary64
@@ -117,10 +112,6 @@ namespace motion {
         _findSourceResourceManager(rmDispatch),
         _sourceCacheObject(rmDispatch),
         _resourceManager(rmDispatch) {
-        LOGGER->info("Motion.Player constructor called");
-        LOGGER->info("PRTDIAG Player::ctor this={} rmType={}",
-                     static_cast<const void *>(this),
-                     static_cast<int>(_resourceManager.Type()));
         // All four current constructors copy the same ResourceManager dispatch
         // into three independent owners. ResourceManager construction includes
         // its SourceCache base; render-side native helpers unwrap that stable
@@ -189,9 +180,15 @@ namespace motion {
         // and ordinary member destruction occur in later lifetime phases.
         _parameterEntries.clear();
 
+        // The variable-track deque is also explicitly emptied before any
+        // child invalidation or layer-id release. Its final member destructor
+        // later sees an empty container and only releases retained storage.
+        _variableLabelScopes.clear();
+
         // Destruction reuses the complete old-tree teardown, including the
-        // explicit child-object invalidation pre-pass. The synthetic root is
-        // destroyed later by the deque member destructor.
+        // explicit child-object invalidation pre-pass. Successful teardown
+        // erases only the non-root suffix and leaves the synthetic root alive
+        // through the SeparateLayerAdaptor raw-owner cleanup below.
         resetAndReleaseOldNodeTree_guess();
 
         // Keep the raw-owner ordering: destroy/free first and clear the member
@@ -199,6 +196,12 @@ namespace motion {
         // body, before automatic member destruction begins.
         delete _renderSeparateLayerAdaptor;
         _renderSeparateLayerAdaptor = nullptr;
+
+        // All four native destructor bodies then explicitly clear the node
+        // deque. This is the root node's destruction point, including its
+        // persistent PreparedRenderItem. The later deque member destructor
+        // sees an empty container and releases only retained block/map storage.
+        _nodes.clear();
     }
 
     std::string Player::matchedMotionPath() const {
@@ -211,15 +214,6 @@ namespace motion {
     bool Player::getPlaying() const {
         // The script-visible `playing` property is only this Player's local
         // playback byte. It does not inspect retained child Players.
-        if(detail::logoChainTraceEnabled() && LOGGER) {
-            const auto motionPath = matchedMotionPath();
-            const auto path = motionPath.empty()
-                ? std::string("<none>") : motionPath;
-            LOGGER->info(
-                "PRTDIAG Player::getPlaying this={} path='{}' value={}",
-                static_cast<const void *>(this), path,
-                _allplaying ? 1 : 0);
-        }
         return _allplaying;
     }
 
@@ -242,27 +236,8 @@ namespace motion {
             // the same malformed-tree crash boundary.
             Player *const child = node.getChildPlayer();
             if(child->getAllplaying()) {
-                if(detail::logoChainTraceEnabled() && LOGGER) {
-                    const auto motionPath = matchedMotionPath();
-                    const auto path = motionPath.empty()
-                        ? std::string("<none>") : motionPath;
-                    LOGGER->info(
-                        "PRTDIAG Player::getAllplaying this={} path='{}' value=1 reason=child nodeIndex={} localPlaying={}",
-                        static_cast<const void *>(this),
-                        path, node.index,
-                        _allplaying ? 1 : 0);
-                }
                 return true;
             }
-        }
-        if(detail::logoChainTraceEnabled() && LOGGER) {
-            const auto motionPath = matchedMotionPath();
-            const auto path = motionPath.empty()
-                ? std::string("<none>") : motionPath;
-            LOGGER->info(
-                "PRTDIAG Player::getAllplaying this={} path='{}' value={} reason=local",
-                static_cast<const void *>(this), path,
-                _allplaying ? 1 : 0);
         }
         return _allplaying;
     }
@@ -666,26 +641,6 @@ namespace motion {
     }
 
     void Player::initNonEmoteMotion_guess(std::uint32_t playFlags) {
-        static std::uint32_t s_initDiagSeq = 0;
-        std::uint32_t diagSeq = 0;
-        bool emitDiag = false;
-        if(detail::logoChainTraceEnabled() && LOGGER) {
-            diagSeq = ++s_initDiagSeq;
-            emitDiag = shouldEmitCoreDiag(diagSeq);
-        }
-        if(emitDiag && LOGGER) {
-            const auto motionPath = matchedMotionPath();
-            LOGGER->info(
-                "PRTDIAG Player::initNonEmoteMotion enter seq={} this={} flags=0x{:x} active={} isEmote={} motionKey='{}' chara='{}' activePath='{}' nodes={} allplaying={} queuing={} firstFrame={}",
-                diagSeq, static_cast<const void *>(this), playFlags,
-                hasMotionContent(), coreDiagBool(_preview),
-                detail::narrow(_motionKey), detail::narrow(_chara),
-                motionPath.empty()
-                    ? std::string("<none>") : motionPath,
-                _nodes.size(),
-                coreDiagBool(_allplaying), coreDiagBool(_queuing),
-                coreDiagBool(_firstFrame));
-        }
         // Keep the copied motion receiver alive across every property read,
         // parameter build, node build and variable initialization.
         ncbPropAccessor motionContent{tTJSVariant(_motionContentVariant)};
@@ -731,26 +686,8 @@ namespace motion {
                 TJS_W("parameter"), ncbTypedefs::Tag<tTJSVariant>(), 0,
                 &detail::parameterMemberHint_guess);
             (void)parseParameterList_guess(parameters);
-            if(parameterize.Type() == tvtInteger) {
-                const tjs_int index = parameterize.AsInteger();
-                if(index < 0 || static_cast<size_t>(index) >=
-                                    _parameterEntries.size()) {
-                    throw std::out_of_range("parameter id out of range.");
-                }
-                _selectedParameterEntry =
-                    &_parameterEntries[static_cast<size_t>(index)];
-            } else {
-                _selectedParameterEntry = nullptr;
-            }
-        }
-
-        if(emitDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG Player::initNonEmoteMotion before-build seq={} this={} selectedParam={} paramEntries={} loopTime={} totalFrames={}",
-                diagSeq, static_cast<const void *>(this),
-                static_cast<const void *>(_selectedParameterEntry),
-                _parameterEntries.size(),
-                _loopTime, _cachedTotalFrames);
+            _selectedParameterEntry =
+                internal::selectParameterEntry_guess(*this, parameterize);
         }
 
         // All four references commit this adjacent state pair before either
@@ -759,12 +696,6 @@ namespace motion {
         _syncWaiting = false;
         _allplaying = true;
         buildNodeTree_guess();
-        if(emitDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG Player::initNonEmoteMotion after-build seq={} this={} nodeCount={} labelMap={}",
-                diagSeq, static_cast<const void *>(this), _nodes.size(),
-                _nodeLabelMap.size());
-        }
         initVariables();
 
         // Non-chain play resets the frame clock, clamps the initial evaluation
@@ -777,14 +708,6 @@ namespace motion {
             _queuing = true;
         }
         _firstFrame = true;
-        if(emitDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG Player::initNonEmoteMotion exit seq={} this={} nodeCount={} variables={} loopTime={} totalFrames={} clampedEvalTime={} allplaying={} queuing={} firstFrame={}",
-                diagSeq, static_cast<const void *>(this), _nodes.size(),
-                _variableLabelScopes.size(), _loopTime, _cachedTotalFrames,
-                _clampedEvalTime, coreDiagBool(_allplaying),
-                coreDiagBool(_queuing), coreDiagBool(_firstFrame));
-        }
     }
 
     tTJSVariant Player::getVariableKeys() {
@@ -852,7 +775,7 @@ namespace motion {
     // All four references build a fresh 4-element TJS Array by pushing each
     // process-global order value as an integer Variant into its native Items
     // container.
-    tTJSVariant Player::getDefaultTransformOrder() const {
+    tTJSVariant Player::getDefaultTransformOrder() {
         auto result = detail::createTJSArrayWithItems_guess();
         for(const int value : s_defaultTransformOrder) {
             result.items->emplace_back(static_cast<tjs_int>(value));

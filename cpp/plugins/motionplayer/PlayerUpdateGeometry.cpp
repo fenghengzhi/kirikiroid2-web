@@ -154,14 +154,6 @@ namespace motion {
         auto &nodes = _nodes;
         // Four-reference vertex computation. Current per-target entry points,
         // layouts and count sites live in analysis/ rather than source comments.
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
         std::vector<detail::MeshPoint> combinedPatch;
         for (size_t vi = 1; vi < nodes.size(); ++vi) {
             auto &vn = nodes[vi];
@@ -170,7 +162,7 @@ namespace motion {
 
             // The property callback runs before the parent mesh-state bytes are
             // consumed. It receives an independently retained Variant copy.
-            if (vn.forceVisible) {
+            if (vn.hasEmoteEdit_guess()) {
                 const tTJSVariant emoteEdit = vn.emoteEditVariant;
                 vn.priorDraw = detail::motionPropGetBool(
                     emoteEdit, TJS_W("priorDraw"), 0,
@@ -246,7 +238,7 @@ namespace motion {
                 // earlier draw-item selection mask.
                 // Normal: 7233 = 0x1C41, preview: 7241 = 0x1C49
                 const int vbm = _preview ? 7241 : 7233;
-                const bool vertexEligible = vn.forceVisible
+                const bool vertexEligible = vn.hasEmoteEdit_guess()
                     || ((vbm & (1 << vn.nodeType)) != 0);
 
                 if (vertexEligible && vn.source.valid) {
@@ -280,8 +272,8 @@ namespace motion {
                         effectivePatch = &combinedPatch;
                     }
 
-                    const double m11 = vn.accumulated.m11, m12 = vn.accumulated.m12;
-                    const double m21 = vn.accumulated.m21, m22 = vn.accumulated.m22;
+                    const double m11 = vn.matrix.m11, m12 = vn.matrix.m12;
+                    const double m21 = vn.matrix.m21, m22 = vn.matrix.m22;
                     const double posX = vn.accumulated.posX;
                     const double posY = vn.accumulated.posY
                         + vn.accumulated.posZ * _zFactor;
@@ -342,7 +334,7 @@ namespace motion {
                     // source-valid gate.  Four-corner and inherited-grid
                     // materialization have their own narrower type/blank gate.
                     if(selectVertexQuadMaterialization_guess(
-                            vn.forceVisible, vn.nodeType,
+                            vn.hasEmoteEdit_guess(), vn.nodeType,
                             _preview, vn.source.blank)) {
                         // Affine four-corner quad, ordered TL/TR/BR/BL.
                         {
@@ -356,48 +348,6 @@ namespace motion {
                             vn.vertices[5] = static_cast<float>(fy + m21*cw + m22*ch);
                             vn.vertices[6] = static_cast<float>(fx + m12*ch);
                             vn.vertices[7] = static_cast<float>(fy + m22*ch);
-                            if(traceForPath) {
-                                const std::array<float, 8> expectedVertices = {
-                                    static_cast<float>(fx),
-                                    static_cast<float>(fy),
-                                    static_cast<float>(fx + m11 * cw),
-                                    static_cast<float>(fy + m21 * cw),
-                                    static_cast<float>(fx + m11 * cw + m12 * ch),
-                                    static_cast<float>(fy + m21 * cw + m22 * ch),
-                                    static_cast<float>(fx + m12 * ch),
-                                    static_cast<float>(fy + m22 * ch)
-                                };
-                                bool ok = true;
-                                for(size_t vi = 0; vi < expectedVertices.size(); ++vi) {
-                                    if(std::fabs(vn.vertices[vi] - expectedVertices[vi]) >
-                                       0.01f) {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-                                detail::logoChainTraceCheck(
-                                    motionPath, "updateLayers.phase3.vertices",
-                                    "vertex-computation", _clampedEvalTime,
-                                    fmt::format(
-                                        "pos=({:.3f},{:.3f}) clip=({:.3f},{:.3f}) m=({:.6f},{:.6f},{:.6f},{:.6f}) exp=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                        fx, fy, cw, ch, m11, m12, m21, m22,
-                                        expectedVertices[0], expectedVertices[1],
-                                        expectedVertices[2], expectedVertices[3],
-                                        expectedVertices[4], expectedVertices[5],
-                                        expectedVertices[6], expectedVertices[7]),
-                                    fmt::format(
-                                        "src={} act=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                        vn.activeSlot().srcValue.IsEmpty()
-                                            ? std::string("<none>")
-                                            : detail::narrow(
-                                                  vn.activeSlot().srcValue),
-                                        vn.vertices[0], vn.vertices[1],
-                                        vn.vertices[2], vn.vertices[3],
-                                        vn.vertices[4], vn.vertices[5],
-                                        vn.vertices[6], vn.vertices[7]),
-                                    ok,
-                                    "vertex-pass output diverged from expected corners");
-                            }
                         }
 
                         if(vn.meshAncestor != nullptr) {
@@ -542,7 +492,7 @@ namespace motion {
                         // A forced-visible node mirrors evaluated geometry into
                         // its retained emoteEdit object. Conversion/property
                         // exceptions unwind through the retained dispatches.
-                        if(vn.forceVisible) {
+                        if(vn.hasEmoteEdit_guess()) {
                             mirrorForceVisibleGeometry_guess(
                                 vn.emoteEditVariant,
                                 meshPositionX, meshPositionY,
@@ -560,22 +510,6 @@ namespace motion {
             }
         }
 
-        // Preserve the final accumulated position for the next frame's delta.
-        // Queuing suppresses the delta; otherwise compare current and previous
-        // accumulated positions.
-        {
-            for (size_t di = 1; di < nodes.size(); ++di) {
-                auto &dn = nodes[di];
-                if (_queuing) {
-                    dn.deltaPosX = 0; dn.deltaPosY = 0; dn.deltaPosZ = 0;
-                } else {
-                    dn.deltaPosX = dn.accumulated.posX - dn.prevPosX;
-                    dn.deltaPosY = dn.accumulated.posY - dn.prevPosY;
-                    dn.deltaPosZ = dn.accumulated.posZ - dn.prevPosZ;
-                }
-            }
-        }
-
     }
 
     void Player::updateLayersPhase3_Visibility() {
@@ -587,16 +521,14 @@ namespace motion {
 
             // Native parent indices are consumed without a bounds guard.
             const int parentIndex = node.parentIndex;
-            const auto &parent = nodes[static_cast<size_t>(parentIndex)];
-            node.visibleAncestorIndex = selectVisibleAncestorIndex_guess(
-                parentIndex, parent.drawFlag,
-                parent.visibleAncestorIndex);
+            auto &parent = nodes[static_cast<size_t>(parentIndex)];
+            node.visibleAncestor = selectVisibleAncestor_guess(parent);
 
             node.drawFlag = selectNodeDrawFlag_guess(
                 node.activeSlot().done,
                 node.stencilType,
                 node.accumulated.active,
-                node.forceVisible,
+                node.hasEmoteEdit_guess(),
                 node.nodeType,
                 _preview,
                 node.source.valid);
@@ -667,17 +599,6 @@ namespace motion {
 
     void Player::updateLayersPhase3_ShapeAABB() {
         auto &nodes = _nodes;
-        const bool logoSnapshotEnabled =
-            detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        if(logoSnapshotEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool snapshotWindow =
-            logoSnapshotEnabled &&
-            detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-            motionPath.find("m2logo.mtn") != std::string::npos &&
-            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0;
         for (size_t si = 1; si < nodes.size(); ++si) {
             auto &sn = nodes[si];
             // Native parent indices are consumed without a bounds guard.
@@ -687,8 +608,8 @@ namespace motion {
                 continue;
             }
 
-            const double m11 = sn.accumulated.m11, m12 = sn.accumulated.m12;
-            const double m21 = sn.accumulated.m21, m22 = sn.accumulated.m22;
+            const double m11 = sn.matrix.m11, m12 = sn.matrix.m12;
+            const double m21 = sn.matrix.m21, m22 = sn.matrix.m22;
             const double px = sn.accumulated.posX, py = sn.accumulated.posY;
             const auto &slot = sn.activeSlot();
             const double originX = slot.oy * m12 + slot.ox * m11;
@@ -721,25 +642,6 @@ namespace motion {
                     sn.shapeAABB[3], parentClip[3]);
             }
             sn.clipAABB = sn.shapeAABB;
-
-            if(snapshotWindow && sn.index == 18) {
-                const std::string label = detail::narrow(sn.layerName);
-                std::fprintf(
-                    stderr,
-                    "SNAPSHAPE frame=%.3f nodeIndex=%d label=%s slotOxOy=(%.3f,%.3f) interpOxOy=(%.3f,%.3f) clipOrigin=(%.3f,%.3f) accumPos=(%.3f,%.3f,%.3f) m=(%.6f,%.6f,%.6f,%.6f) shapeAABB=[%.3f,%.3f,%.3f,%.3f] clipAABB=%p\n",
-                    _clampedEvalTime,
-                    sn.index,
-                    sn.layerName.IsEmpty() ? "<none>" : label.c_str(),
-                    sn.activeSlot().ox, sn.activeSlot().oy,
-                    sn.activeSlot().ox, sn.activeSlot().oy,
-                    slot.ox, slot.oy,
-                    sn.accumulated.posX, sn.accumulated.posY, sn.accumulated.posZ,
-                    sn.accumulated.m11, sn.accumulated.m12,
-                    sn.accumulated.m21, sn.accumulated.m22,
-                    sn.shapeAABB[0], sn.shapeAABB[1],
-                    sn.shapeAABB[2], sn.shapeAABB[3],
-                    static_cast<const void *>(sn.clipAABB));
-            }
         }
 
     }
@@ -759,10 +661,10 @@ namespace motion {
                 sn.vertexPosY,
                 sn.accumulated.scaleX,
                 sn.accumulated.scaleY,
-                sn.accumulated.m11,
-                sn.accumulated.m12,
-                sn.accumulated.m21,
-                sn.accumulated.m22,
+                sn.matrix.m11,
+                sn.matrix.m12,
+                sn.matrix.m21,
+                sn.matrix.m22,
                 slot.ox,
                 slot.oy);
         }

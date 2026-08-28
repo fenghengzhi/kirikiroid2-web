@@ -53,7 +53,7 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/bezier_curve_wasm.cpp
         -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_bezier_curve','_get_curve_x_ptr','_get_curve_y_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_bezier_curve','_get_curve_x_ptr','_get_curve_y_ptr','_get_bezier_result','_run_bezier_curve_direct']
         --no-entry
         -o ${BEZIER_CURVE_WASM}
     DEPENDS
@@ -89,7 +89,7 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/position_interp_wasm.cpp
         -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_position_interp','_get_easing_x_ptr','_get_easing_y_ptr','_get_cp_x_ptr','_get_cp_y_ptr','_get_cp_t_ptr','_get_cp_seg_data_ptr','_get_cp_seg_sizes_ptr','_get_src_pos_ptr','_get_dst_pos_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_position_interp','_get_easing_x_ptr','_get_easing_y_ptr','_get_cp_x_ptr','_get_cp_y_ptr','_get_cp_t_ptr','_get_cp_seg_data_ptr','_get_cp_seg_sizes_ptr','_get_src_pos_ptr','_get_dst_pos_ptr','_get_out_pos_ptr','_run_position_interp_direct']
         --no-entry
         -o ${POSITION_INTERP_WASM}
     DEPENDS

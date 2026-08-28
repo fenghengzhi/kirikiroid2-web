@@ -508,7 +508,8 @@ namespace motion {
     // owns this by-value arg0, rejects an ordinary zero-argument call, accepts
     // and ignores surplus arguments, and reserves exactly one Void for its
     // empty-adaptor sentinel before this function is reached.
-    EmotePlayer *EmotePlayer::factory(tTJSVariant rmDispatch) {
+    EmotePlayer *EmotePlayer::factory(iTJSDispatch2 *,
+                                      tTJSVariant rmDispatch) {
         return new EmotePlayer(rmDispatch);
     }
 

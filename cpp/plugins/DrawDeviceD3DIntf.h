@@ -6,9 +6,15 @@
 #include "tjs.h"
 
 class DrawDeviceObjectBase;
+class iTVPRenderManager;
 class iTVPTexture2D;
 class D3DLayerObject;
 class D3DLayer;
+
+// Unregistered headless-test seam for DrawDeviceD3D's private OpenGL manager.
+// A null value restores the four-reference process-lifetime named lookup.
+void SetDrawDeviceD3DRenderManagerForDifferentialTest_guess(
+    iTVPRenderManager *manager);
 
 // The stripped references pass this eight-byte value by const reference to
 // D3DLayerObject::Draw.  Every producer copies two root float fields into it

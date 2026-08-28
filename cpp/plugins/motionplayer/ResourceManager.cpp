@@ -391,7 +391,6 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
 // a by-name forward to ResourceManager::load.
 
 void motion::ResourceManager::unload(ttstr path) const {
-    LOGGER->debug("ResourceManager::unload({})", path.AsStdString());
     // Every current unload callback normalizes before performing the same
     // case-sensitive map lookup used by load.
     path = TVPGetPlacedPath(path);
@@ -518,10 +517,8 @@ tjs_int motion::ResourceManager::requireLayerId() {
     while(_usedLayerIds.find(_nextLayerId) != _usedLayerIds.end()) {
         ++_nextLayerId;
     }
-    const auto id = _nextLayerId;
-    _usedLayerIds.insert(id);
-    ++_nextLayerId;
-    return static_cast<tjs_int>(id);
+    _usedLayerIds.insert(_nextLayerId);
+    return static_cast<tjs_int>(_nextLayerId++);
 }
 
 tjs_int motion::ResourceManager::releaseLayerId(tjs_int id) {
@@ -541,7 +538,6 @@ tjs_int motion::ResourceManager::releaseLayerId(tjs_int id) {
 
 void motion::ResourceManager::unloadAll() const {
     // Every current callback clears only the module map.
-    LOGGER->debug("ResourceManager::unloadAll()");
     _loadedModules.clear();
 }
 

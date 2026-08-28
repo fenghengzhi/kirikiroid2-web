@@ -124,6 +124,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-build", action="store_true",
                         help="skip em++ compilation")
+    parser.add_argument("--build-only", action="store_true",
+                        help="build selected wasm families without running them")
     parser.add_argument("--family", action="append",
                         help="restrict to specific family (repeatable)")
     args = parser.parse_args()
@@ -139,6 +141,9 @@ def main() -> int:
     if not args.no_build:
         for f in families:
             build(f)
+
+    if args.build_only:
+        return 0
 
     failed = 0
     for f in families:

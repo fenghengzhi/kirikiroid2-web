@@ -131,21 +131,16 @@ namespace motion::detail {
         int renderLayerId;
     };
 
-    // Web rendering needs extra cache and diagnostic state not present in the
-    // Android object. Keeping it in the derived layer makes all platform
-    // owners die before the uninterrupted native RAII chain above.
+    // Web rendering needs extra portable observation/cache state not present
+    // in the Android object. Keeping it in the derived layer makes all
+    // platform owners die before the uninterrupted native RAII chain above.
     struct PreparedRenderItem final : NativePreparedRenderItemState {
         int nodeIndex = 0;
-        // Web render paths retain only the snapshots they consume. The
-        // reference-backed descriptor owner remains sourceState.
-        std::string sourceKey;
         bool hasOwnSource = false;
         bool hasViewport = false;
-        // Explicit Web observation/cache sidecars. The native item has no
-        // integer dirty-rectangle snapshot or portable ancestor index; native
-        // code keeps only clipRect and the borrowed parentItem pointer.
+        // Explicit Web observation/cache sidecar. Native code keeps only
+        // clipRect and the borrowed parentItem pointer.
         std::array<int, 4> dirtyRect{0, 0, 0, 0};
-        int visibleAncestorIndex = -1;
 
         // User-provided on purpose: every call site uses `new T()`, and an
         // implicitly/defaulted constructor would make that value-initialize

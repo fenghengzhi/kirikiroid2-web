@@ -680,7 +680,6 @@ namespace motion {
         const bool sourceHasBacking =
             sourceValue.AsVariantStringNoAddRef() != nullptr;
         int sourceSpec = 0;
-        std::string tracePath;
 
         // Native tests the backing pointer, not Length. An allocated-empty src
         // therefore enters spec routing, unlike a null-backed src. Context is
@@ -696,7 +695,6 @@ namespace motion {
                 dst.object.Clear();
                 const ttstr motionContext =
                     static_cast<ttstr>(motionContextArgument);
-                tracePath = motionContext.AsStdString();
                 const auto loadedIt =
                     resourceManager->_loadedModules.find(motionContext);
                 if(loadedIt == resourceManager->_loadedModules.end()) {
@@ -758,21 +756,6 @@ namespace motion {
                             static_cast<int>(
                                 dst.height + static_cast<double>(top))
                         };
-                        std::string traceSource;
-                        std::string traceIcon;
-                        if(detail::logoChainTraceEnabledForPath(tracePath)) {
-                            traceSource = detail::narrow(sourceValue);
-                            traceIcon = detail::narrow(iconValue);
-                        }
-                        detail::logoChainTraceLogf(
-                            tracePath, "player.findSource", "four-ref",
-                            _clampedEvalTime,
-                            "spec=win group={} icon={} valid=1 atlas={} "
-                            "size={}x{} rect=[{},{},{},{}]",
-                            traceSource, traceIcon,
-                            static_cast<const void *>(dst.texture), dst.width,
-                            dst.height, dst.textureRect[0], dst.textureRect[1],
-                            dst.textureRect[2], dst.textureRect[3]);
                         return;
                     }
                 }
@@ -786,26 +769,11 @@ namespace motion {
                 if(_d3dDrawMode) {
                     const ttstr motionContext =
                         static_cast<ttstr>(motionContextArgument);
-                    tracePath = motionContext.AsStdString();
                     if(loadKrkrAtlasSource_guess(
                            dst, resourceManager, motionContext)) {
                         // The caller repeats the success byte written by the
                         // atlas resolver.
                         dst.valid = true;
-                        std::string traceSource;
-                        if(detail::logoChainTraceEnabledForPath(tracePath)) {
-                            traceSource = detail::narrow(dst.path);
-                        }
-                        detail::logoChainTraceLogf(
-                            tracePath, "player.findSource", "four-ref",
-                            _clampedEvalTime,
-                            "spec=krkr-atlas path={} valid=1 atlas={} "
-                            "size={}x{} rect=[{},{},{},{}]",
-                            traceSource,
-                            static_cast<const void *>(dst.texture),
-                            dst.width, dst.height, dst.textureRect[0],
-                            dst.textureRect[1], dst.textureRect[2],
-                            dst.textureRect[3]);
                         return;
                     }
                 }
@@ -897,12 +865,6 @@ namespace motion {
         // instruction behavior remains an explicit portability boundary.
         dst.textureRect = { 0, 0, static_cast<int>(dst.width),
                             static_cast<int>(dst.height) };
-        detail::logoChainTraceLogf(
-            tracePath, "player.findSource", "four-ref",
-            _clampedEvalTime, "spec={} path={} valid=1 blank={} size={}x{}",
-            sourceSpec, detail::narrow(fallbackPath),
-            dst.blank ? 1 : 0, dst.width,
-            dst.height);
     }
 
     bool Player::isExistMotion(ttstr name) {

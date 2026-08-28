@@ -43,7 +43,11 @@ class D3DPicture;
 
 namespace {
 
+iTVPRenderManager *D3DRenderManagerTestOverride_guess = nullptr;
+
 iTVPRenderManager *GetD3DRenderManager() {
+    if(D3DRenderManagerTestOverride_guess)
+        return D3DRenderManagerTestOverride_guess;
     // All four references cache the render manager named "opengl".
     // The process-wide renderer may still be "software": that setting selects
     // the CPU layer path, while DrawDeviceD3D uses this private manager for
@@ -182,10 +186,15 @@ bool GetVisibleProperty(iTJSDispatch2 *object) {
         return true;
     // Every other status, including failures whose dispatch wrote a value,
     // follows the returned Variant's ordinary truth conversion.
-    return static_cast<bool>(value);
+    return value.operator bool();
 }
 
 } // namespace
+
+void SetDrawDeviceD3DRenderManagerForDifferentialTest_guess(
+    iTVPRenderManager *manager) {
+    D3DRenderManagerTestOverride_guess = manager;
+}
 
 class DrawDeviceObjectBasePrimary_guess {
     friend class DrawDeviceObjectBase;

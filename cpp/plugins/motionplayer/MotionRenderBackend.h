@@ -14,6 +14,14 @@ class iTVPTexture2D;
 
 namespace motion::render_backend_guess {
 
+    // Motion's GPU path owns a private, process-lifetime OpenGL manager even
+    // when the process-default renderer is software.
+    iTVPRenderManager *getPrivateOpenGLRenderManager_guess();
+    // Unregistered test seam for headless verification of the software-repeat
+    // bitmap handoff. A null value restores the native process-lifetime path.
+    void setPrivateOpenGLRenderManagerForDifferentialTest_guess(
+        iTVPRenderManager *manager);
+
     using CubicBezierBasisTable_guess =
         std::vector<std::vector<double>>;
 
@@ -69,8 +77,8 @@ namespace motion::render_backend_guess {
         TriangleBatch_guess(const TriangleBatch_guess &) = delete;
         TriangleBatch_guess &operator=(const TriangleBatch_guess &) = delete;
 
-        void setStencilState_guess(std::uint8_t maskRef,
-                                   std::uint8_t writeRef);
+        void setStencilState_guess(std::uint8_t writeRef,
+                                   std::uint8_t maskRef);
         iTVPRenderMethod *selectMethod_guess(
             int blendLowNibble,
             std::uint32_t packedColor,
@@ -95,7 +103,10 @@ namespace motion::render_backend_guess {
         iTVPTexture2D *_referenceTexture = nullptr;
         std::vector<tTVPPointD> _destinationVertices;
         std::vector<tTVPPointD> _sourceVertices;
-        tTVPRect _clipRect{0, 0, 0, 0};
+        // The native constructor leaves this trivial key uninitialized. Every
+        // admitted first append changes another key component first, flushes an
+        // empty batch, and publishes the clip before it can be compared.
+        tTVPRect _clipRect;
         iTVPRenderManager *_manager = nullptr;
         std::uint8_t _maskRef = 0;
         std::uint8_t _writeRef = 0;

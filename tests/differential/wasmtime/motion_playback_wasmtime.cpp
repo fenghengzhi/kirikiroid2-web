@@ -22,9 +22,11 @@
 #include <emscripten/emscripten.h>
 
 #include "Application.h"
+#include "EventIntf.h"
 #include "LayerIntf.h"
 #include "MainScene.h"
 #include "RenderManager.h"
+#include "SystemControl.h"
 #include "WindowIntf.h"
 #include "tjsError.h"
 #include "motionplayer/MotionNode.h"
@@ -34,6 +36,21 @@
 #include "motionplayer/RuntimeSupport.h"
 
 void setError(const std::string &message);
+void TVPWebFrameTickUpdate();
+
+extern "C" {
+int TVPWasmtimeGetContinuousEventHookSlotCount();
+int TVPWasmtimeGetContinuousEventHookLiveCount();
+int TVPWasmtimeGetContinuousHandlerSlotCount();
+int TVPWasmtimeGetContinuousHandlerLiveCount();
+int TVPWasmtimeGetContinuousHandlerAddCount();
+int TVPWasmtimeGetContinuousHandlerRemoveCount();
+int TVPWasmtimeGetContinuousDeliverCount();
+int TVPWasmtimeGetContinuousHandlerInvokeCount();
+int TVPWasmtimeGetContinuousHandlerFailureCount();
+int TVPWasmtimeGetContinuousTickCount();
+int TVPWasmtimeGetContinuousTickAt(int index);
+}
 
 namespace {
 
@@ -46,6 +63,9 @@ int g_framebuffer_pitch = 0;
 int g_framebuffer_format = 0;
 int g_framebuffer_frame_no = 0;
 std::string g_render_probe_jsonl;
+std::string g_motion_trace_jsonl;
+std::string g_motion_trace_frame_json;
+bool g_motion_trace_first_layer = true;
 int g_render_probe_seq = 0;
 int g_render_draw_id = 0;
 bool g_record_layer_raw_probes = false;
@@ -56,6 +76,10 @@ int g_capture_frame_start = 0;
 int g_capture_frame_count = -1;
 int g_yuzulogo_frame_base = 0;
 int g_m2logo_frame_base = 63;
+int g_wasmtime_tick_count = 0;
+int g_wasmtime_tick_diag_mask = 0;
+int g_wasmtime_tick_diag_ever_mask = 0;
+int g_wasmtime_window_count_peak = 0;
 constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {
@@ -125,6 +149,16 @@ void appendJsonBoolOrNull(std::string &out, bool known, bool value) {
         return;
     }
     out += value ? "true" : "false";
+}
+
+void appendJsonDouble(std::string &out, double value) {
+    if(!std::isfinite(value)) {
+        out += "null";
+        return;
+    }
+    std::ostringstream os;
+    os << std::setprecision(17) << value;
+    out += os.str();
 }
 
 template <typename T, size_t N>
@@ -433,7 +467,14 @@ void appendPreparedItemJson(
     out += ",\"nodeIndex\":";
     out += std::to_string(item.nodeIndex);
     out += ",\"sourceKey\":";
-    appendJsonString(out, item.sourceKey);
+    // PreparedRenderItem now preserves the reference layout's borrowed
+    // SourceState pointer instead of duplicating its path into a Web-only
+    // std::string.  Keep the trace schema stable while sampling the actual
+    // render-time source owner.
+    appendJsonString(
+        out,
+        item.sourceState ? item.sourceState->path.AsStdString()
+                         : std::string{});
     out += ",\"flags\":{\"flag16\":";
     out += item.rawFlag16 ? "1" : "0";
     out += ",\"flag17\":";
@@ -1129,10 +1170,17 @@ void krkr2_lldb_motion_frame_begin(std::int32_t frameId,
                                    const void *objthis,
                                    const motion::Player *topPlayer,
                                    std::int32_t playerCount) {
-    (void)frameId;
-    (void)objthis;
-    (void)topPlayer;
-    (void)playerCount;
+    g_motion_trace_frame_json = "{\"frameId\":";
+    g_motion_trace_frame_json += std::to_string(frameId);
+    g_motion_trace_frame_json += ",\"objthis\":";
+    g_motion_trace_frame_json += ptrHex(objthis);
+    g_motion_trace_frame_json += ",\"topPlayer\":";
+    g_motion_trace_frame_json += ptrHex(topPlayer);
+    g_motion_trace_frame_json += ",\"playerCount\":";
+    g_motion_trace_frame_json += std::to_string(playerCount);
+    g_motion_trace_frame_json +=
+        ",\"layout\":\"wasmtime-direct-guest\",\"layers\":[";
+    g_motion_trace_first_layer = true;
 }
 
 extern "C" __attribute__((noinline, used))
@@ -1149,22 +1197,58 @@ void krkr2_lldb_motion_layer_sample(std::int32_t frameId,
                                     double slantX,
                                     double slantY) {
     (void)frameId;
-    (void)index;
-    (void)nodeFlags;
-    (void)opacityBlend;
-    (void)posX;
-    (void)posY;
-    (void)posZ;
-    (void)angleDeg;
-    (void)scaleX;
-    (void)scaleY;
-    (void)slantX;
-    (void)slantY;
+    if(g_motion_trace_frame_json.empty()) return;
+    if(!g_motion_trace_first_layer) {
+        g_motion_trace_frame_json.push_back(',');
+    }
+    g_motion_trace_first_layer = false;
+    const auto flags = static_cast<std::uint32_t>(nodeFlags);
+    const auto nodeType = static_cast<std::int32_t>(nodeFlags >> 32);
+    const auto opacity = static_cast<std::int32_t>(opacityBlend >> 32);
+    const auto blendMode = static_cast<std::int32_t>(opacityBlend);
+    auto &out = g_motion_trace_frame_json;
+    out += "{\"index\":";
+    out += std::to_string(index);
+    out += ",\"label\":\"\",\"currentImage\":\"\",\"nodeType\":";
+    out += std::to_string(nodeType);
+    out += ",\"opacity\":";
+    out += std::to_string(opacity);
+    out += ",\"blendMode\":";
+    out += std::to_string(blendMode);
+    out += ",\"visible\":";
+    out += (flags & (1u << 0)) ? "true" : "false";
+    out += ",\"active\":";
+    out += (flags & (1u << 1)) ? "true" : "false";
+    out += ",\"flipX\":";
+    out += (flags & (1u << 2)) ? "true" : "false";
+    out += ",\"flipY\":";
+    out += (flags & (1u << 3)) ? "true" : "false";
+    out += ",\"posX\":";
+    appendJsonDouble(out, posX);
+    out += ",\"posY\":";
+    appendJsonDouble(out, posY);
+    out += ",\"posZ\":";
+    appendJsonDouble(out, posZ);
+    out += ",\"angleDeg\":";
+    appendJsonDouble(out, angleDeg);
+    out += ",\"scaleX\":";
+    appendJsonDouble(out, scaleX);
+    out += ",\"scaleY\":";
+    appendJsonDouble(out, scaleY);
+    out += ",\"slantX\":";
+    appendJsonDouble(out, slantX);
+    out += ",\"slantY\":";
+    appendJsonDouble(out, slantY);
+    out.push_back('}');
 }
 
 extern "C" __attribute__((noinline, used))
 void krkr2_lldb_motion_frame_end(std::int32_t frameId) {
     (void)frameId;
+    if(g_motion_trace_frame_json.empty()) return;
+    g_motion_trace_frame_json += "]}\n";
+    g_motion_trace_jsonl += g_motion_trace_frame_json;
+    g_motion_trace_frame_json.clear();
 }
 
 void emitLayerSample(int frameId,
@@ -1277,6 +1361,13 @@ void resetState() {
     g_framebuffer_format = 0;
     g_framebuffer_frame_no = 0;
     g_render_probe_jsonl.clear();
+    g_motion_trace_jsonl.clear();
+    g_motion_trace_frame_json.clear();
+    g_motion_trace_first_layer = true;
+    g_wasmtime_tick_count = 0;
+    g_wasmtime_tick_diag_mask = 0;
+    g_wasmtime_tick_diag_ever_mask = 0;
+    g_wasmtime_window_count_peak = 0;
     g_render_probe_seq = 0;
     g_render_draw_id = 0;
     g_record_layer_raw_probes = false;
@@ -1317,11 +1408,63 @@ void setStageString(const std::string &stage) {
     g_stage = stage;
 }
 
-void TVPWasmtimeTickMainScene(float) {
-    auto *app = cocos2d::Application::getInstance();
-    if(app) {
-        app->mainLoop();
+void TVPWasmtimeTickMainScene(float deltaSeconds) {
+    ++g_wasmtime_tick_count;
+    // The browser calls this from TVPMainScene::update at every RAF boundary.
+    // A headless Director step does not guarantee that scheduled scene update
+    // runs on every host tick, so publish the host's deterministic timestamp
+    // explicitly.  A later scene-side call in the same tick sees the same RAF
+    // timestamp and the production PLL discards it as a duplicate.
+    TVPWebFrameTickUpdate();
+    // The Emscripten Application::mainLoop wrapper is registered as the
+    // browser callback by Application::run; invoking that wrapper manually in
+    // the headless Wasmtime host does not step the Director after run()
+    // returns.  The driver already owns the deterministic host loop, so enter
+    // the same Director frame boundary directly.
+    auto *director = cocos2d::Director::getInstance();
+    auto *scene = TVPMainScene::GetInstance();
+    int diag = 0;
+    if(director) diag |= 1 << 0;
+    if(scene) diag |= 1 << 1;
+    if(director && director->getRunningScene()) diag |= 1 << 2;
+    if(scene && scene->isRunning()) diag |= 1 << 3;
+    if(scene && scene->isScheduled("startup")) diag |= 1 << 4;
+    if(TVPSystemControlAlive && TVPSystemControl) diag |= 1 << 5;
+    if(TVPProcessContinuousHandlerEventFlag) diag |= 1 << 6;
+    if(::Application) diag |= 1 << 7;
+    g_wasmtime_tick_diag_ever_mask |= diag;
+    g_wasmtime_window_count_peak = std::max(
+        g_wasmtime_window_count_peak, static_cast<int>(TVPGetWindowCount()));
+    const int motionFramesBeforeTick = traceState().frameCounter;
+    if(director && director->getScheduler()) {
+        // runWithScene publishes a pending scene that Director::mainLoop must
+        // promote before its scheduled callbacks become live.  The explicit
+        // delta overload advances the Scheduler itself; a second update here
+        // would invoke SystemControl/continuous handlers twice at one tick.
+        director->mainLoop(deltaSeconds);
     }
+    if(scene && scene->isScheduled("startup")) diag |= 1 << 10;
+    if(TVPProcessContinuousHandlerEventFlag) diag |= 1 << 11;
+    g_wasmtime_tick_diag_ever_mask |= diag;
+    g_wasmtime_window_count_peak = std::max(
+        g_wasmtime_window_count_peak, static_cast<int>(TVPGetWindowCount()));
+    // EventIntf requires each platform's continuous-event implementation to
+    // call TVPDeliverContinuousEvent while handlers are live.  Browser RAF
+    // normally supplies that pump; the Wasmtime host has no RAF callback.  If
+    // the scene/SystemControl path already produced a progress sample, do not
+    // deliver again.  Otherwise provide exactly one host-tick delivery.
+    if(traceState().frameCounter == motionFramesBeforeTick) {
+        TVPDeliverContinuousEvent();
+    }
+    if(director && director->getRunningScene()) diag |= 1 << 8;
+    if(scene && scene->isRunning()) diag |= 1 << 9;
+    if(scene && scene->isScheduled("startup")) diag |= 1 << 10;
+    if(TVPProcessContinuousHandlerEventFlag) diag |= 1 << 11;
+    if(traceState().frameCounter > 0) diag |= 1 << 12;
+    g_wasmtime_tick_diag_mask = diag;
+    g_wasmtime_tick_diag_ever_mask |= diag;
+    g_wasmtime_window_count_peak = std::max(
+        g_wasmtime_window_count_peak, static_cast<int>(TVPGetWindowCount()));
 }
 
 namespace motion::detail {
@@ -2347,6 +2490,110 @@ void krkr2_wasm_set_render_case_frame_base(const char *case_id,
 EMSCRIPTEN_KEEPALIVE
 int krkr2_wasm_get_motion_trace_frame_count() {
     return traceState().frameCounter;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_motion_trace_ptr() {
+    if(g_motion_trace_jsonl.empty()) return 0;
+    return static_cast<int>(
+        reinterpret_cast<std::uintptr_t>(g_motion_trace_jsonl.data()));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_motion_trace_len() {
+    return static_cast<int>(g_motion_trace_jsonl.size());
+}
+
+EMSCRIPTEN_KEEPALIVE
+void krkr2_wasm_clear_motion_trace() {
+    g_motion_trace_jsonl.clear();
+    g_motion_trace_frame_json.clear();
+    g_motion_trace_first_layer = true;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_tick_count() {
+    return g_wasmtime_tick_count;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_tick_diag_mask() {
+    return g_wasmtime_tick_diag_mask;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_tick_diag_ever_mask() {
+    return g_wasmtime_tick_diag_ever_mask;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_window_count() {
+    return static_cast<int>(TVPGetWindowCount());
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_window_count_peak() {
+    return g_wasmtime_window_count_peak;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_event_hook_slot_count() {
+    return TVPWasmtimeGetContinuousEventHookSlotCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_event_hook_live_count() {
+    return TVPWasmtimeGetContinuousEventHookLiveCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_handler_slot_count() {
+    return TVPWasmtimeGetContinuousHandlerSlotCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_handler_live_count() {
+    return TVPWasmtimeGetContinuousHandlerLiveCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_handler_add_count() {
+    return TVPWasmtimeGetContinuousHandlerAddCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_handler_remove_count() {
+    return TVPWasmtimeGetContinuousHandlerRemoveCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_deliver_count() {
+    return TVPWasmtimeGetContinuousDeliverCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_handler_invoke_count() {
+    return TVPWasmtimeGetContinuousHandlerInvokeCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_handler_failure_count() {
+    return TVPWasmtimeGetContinuousHandlerFailureCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_tick_count() {
+    return TVPWasmtimeGetContinuousTickCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_continuous_tick_at(int index) {
+    return TVPWasmtimeGetContinuousTickAt(index);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_event_disabled() {
+    return TVPEventDisabled ? 1 : 0;
 }
 
 } // extern "C"

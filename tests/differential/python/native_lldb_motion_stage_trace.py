@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA = "motion-stage-oracle-v1"
 EVENT_SCHEMA = "motion-stage-oracle-v1-event"
 SOURCE = "native-lldb-macos"
+SIMULATION_FPS = 15.0
 
 STAGES: tuple[str, ...] = (
     "static_parse",
@@ -93,7 +94,7 @@ def _native_lldb_motion_stage_callback(frame, bp_loc, _internal_dict):
         return False
     breakpoint_id = bp_loc.GetBreakpoint().GetID()
     ACTIVE_TRACER.handle_breakpoint_callback(breakpoint_id, frame)
-    return False
+    return ACTIVE_TRACER.should_stop()
 
 
 def _load_lldb():
@@ -327,6 +328,8 @@ class NativeMotionStageTracer:
         self.callback_errors: list[str] = []
         self.node_layout: dict[str, int] | None = None
         self.start_monotonic = 0.0
+        self.timed_out = False
+        self.progress_call_counter = 0
 
         self.compat_bp_id: int | None = None
         self.phase3_bp_id: int | None = None
@@ -398,6 +401,13 @@ class NativeMotionStageTracer:
                 if self.callback_errors:
                     process.Kill()
                     raise RuntimeError("; ".join(self.callback_errors))
+                if self.timed_out:
+                    process.Kill()
+                    raise RuntimeError(
+                        f"native stage LLDB trace timed out after "
+                        f"{self.timeout:.1f}s with {self.frame_counter} "
+                        "trace_flatten frame(s)"
+                    )
                 if self.expected_frames and self.frame_counter >= self.expected_frames:
                     process.Kill()
                     break
@@ -493,7 +503,19 @@ class NativeMotionStageTracer:
             raise RuntimeError(
                 f"failed to install LLDB breakpoint callback: "
                 f"{error.GetCString()}")
-        breakpoint.SetAutoContinue(True)
+
+    def should_stop(self) -> bool:
+        """Return control from synchronous Launch on success or failure."""
+
+        if self.callback_errors:
+            return True
+        if self.expected_frames and self.frame_counter >= self.expected_frames:
+            return True
+        if (self.start_monotonic and
+                time.monotonic() - self.start_monotonic >= self.timeout):
+            self.timed_out = True
+            return True
+        return False
 
     def _set_return_breakpoint(self, frame, payload: dict[str, Any]) -> int:
         ret_addr = self._callee_return_address(frame)
@@ -626,7 +648,9 @@ class NativeMotionStageTracer:
     # ----------------------------------------------------------- progress/flat
 
     def _on_progress_enter(self, frame) -> None:
-        objthis = ptr_to_hex(sb_unsigned(frame.FindRegister("x3")))
+        self._virtualize_progress_delta(frame)
+        objthis = ptr_to_hex(self._pointer_argument(
+            frame, "objthis", ("x3", "rcx")))
         record: dict[str, Any] = {
             "frameId": self.frame_counter,
             "objthis": objthis,
@@ -640,6 +664,58 @@ class NativeMotionStageTracer:
         self.progress_return_records[ret_id] = self.return_records.pop(ret_id)
         self.record_stack.append(record)
         self.current_record = record
+
+    def _virtualize_progress_delta(self, frame) -> None:
+        call_index = self.progress_call_counter
+        if call_index == 0:
+            delta_ms = 0
+        else:
+            current_tick = int((call_index + 1) * 1000.0 / SIMULATION_FPS)
+            previous_tick = int(call_index * 1000.0 / SIMULATION_FPS)
+            delta_ms = current_tick - previous_tick
+
+        process = frame.GetThread().GetProcess()
+        target = process.GetTarget()
+        param_array = self._pointer_argument(
+            frame, "param", ("x2", "rdx"))
+        if not param_array:
+            raise RuntimeError("progressCompat breakpoint had no param array")
+        pointer_size = int(target.GetAddressByteSize())
+        if pointer_size not in (4, 8):
+            raise RuntimeError(f"unsupported target pointer size: {pointer_size}")
+        error = self.lldb.SBError()
+        pointer_blob = process.ReadMemory(param_array, pointer_size, error)
+        if not error.Success() or len(pointer_blob) != pointer_size:
+            raise RuntimeError(
+                "failed to read progress delta Variant pointer: "
+                f"{error.GetCString()}"
+            )
+        variant_addr = int.from_bytes(pointer_blob, "little")
+        if not variant_addr:
+            raise RuntimeError("progress delta Variant pointer is null")
+        error = self.lldb.SBError()
+        written = process.WriteMemory(
+            variant_addr, struct.pack("<q", delta_ms), error)
+        if not error.Success() or written != 8:
+            raise RuntimeError(
+                "failed to write virtual progress delta: "
+                f"{error.GetCString()}"
+            )
+        self.progress_call_counter += 1
+
+    @staticmethod
+    def _pointer_argument(frame, variable_name: str,
+                          register_names: tuple[str, ...]) -> int | None:
+        value = frame.FindVariable(variable_name)
+        if value and value.IsValid():
+            pointer = sb_unsigned(value)
+            if pointer:
+                return pointer
+        for register_name in register_names:
+            pointer = sb_unsigned(frame.FindRegister(register_name))
+            if pointer:
+                return pointer
+        return None
 
     def _on_phase3_last_enter(self, frame) -> None:
         if self.current_record is None:

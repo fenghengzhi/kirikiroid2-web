@@ -71,22 +71,22 @@ namespace internal {
         void normalizeParameterValue_guess(
             detail::MotionParameterEntry &entry, double rawValue) noexcept;
 
-        inline detail::MotionParameterEntry *
-        resolveNodeParameterEntry(Player &player,
-                                  const detail::MotionNode &node) {
-            if(node.parameterEntry != nullptr) {
-                return node.parameterEntry;
+        // Shared by ordinary-motion parameter selection and raw-node field
+        // initialization. The references narrow AsInteger to an unsigned
+        // machine index before the size check; negative values therefore take
+        // the same exact range-error path as oversized positive values.
+        inline detail::MotionParameterEntry *selectParameterEntry_guess(
+            Player &player, const tTJSVariant &parameterize) {
+            if(parameterize.Type() != tvtInteger) {
+                return nullptr;
             }
-            if(node.parameterizeIndex >= 0 &&
-               static_cast<size_t>(node.parameterizeIndex) <
-                   player._parameterEntries.size()) {
-                return &player._parameterEntries[static_cast<size_t>(
-                    node.parameterizeIndex)];
-            }
-            if(node.parameterizeIndex >= 0) {
+            const std::uint32_t index = static_cast<std::uint32_t>(
+                parameterize.AsInteger());
+            if(static_cast<std::size_t>(index) >=
+               player._parameterEntries.size()) {
                 throw std::out_of_range("parameter id out of range.");
             }
-            return nullptr;
+            return &player._parameterEntries[static_cast<std::size_t>(index)];
         }
 
         inline bool getObjectProperty(const tTJSVariant &object, const tjs_char *name,

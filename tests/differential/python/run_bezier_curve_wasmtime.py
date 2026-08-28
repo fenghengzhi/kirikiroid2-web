@@ -48,8 +48,10 @@ def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
     curve_x_ptr = exports["get_curve_x_ptr"](store)
     curve_y_ptr = exports["get_curve_y_ptr"](store)
     run_fn = exports["run_bezier_curve"]
+    get_result = exports["get_bezier_result"]
 
     cases = []
+    results = []
     for spec in load_specs(spec_dir):
         curve_x = spec["curve"]["x"]
         curve_y = spec["curve"]["y"]
@@ -58,11 +60,16 @@ def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
         write_doubles_at(base, curve_y_ptr, curve_y)
         run_fn(store, len(curve_x), spec["t"])
         cases.append(spec["id"])
+        results.append({
+            "case_id": spec["id"],
+            "result": get_result(store),
+        })
 
     output.write_text(json.dumps({
         "ok": True,
         "runner": "bezier-curve-wasmtime-python-driver",
         "cases": cases,
+        "results": results,
         "host_calls": len(cases),
     }, indent=2), encoding="utf-8")
     return 0

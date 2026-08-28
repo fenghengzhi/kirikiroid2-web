@@ -237,6 +237,11 @@ bool computeD3DClipForDifferentialTest_guess(
     int canvasWidth,
     int canvasHeight,
     std::array<float, 4> &out);
+bool computeAccurateSlaClipForDifferentialTest_guess(
+    const motion::detail::PreparedRenderItem &item,
+    int canvasWidth,
+    int canvasHeight,
+    std::array<float, 4> &out);
 
 bool computeRenderClipRect(
     const motion::detail::PreparedRenderItem &item,

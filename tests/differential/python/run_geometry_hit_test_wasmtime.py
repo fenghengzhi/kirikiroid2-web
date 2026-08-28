@@ -424,8 +424,20 @@ def load_wasmtime():
 
 def instantiate_module(wasmtime, wasm_path: Path):
     config = wasmtime.Config()
-    config.debug_info = True
+    direct_mode = os.environ.get("KRKR2_WASMTIME_DIRECT") == "1"
+    config.debug_info = not direct_mode
     config.cranelift_opt_level = "none"
+    if direct_mode:
+        for name, value in (
+            ("static_memory_maximum_size", 32 * 1024 * 1024),
+            ("dynamic_memory_guard_size", 0),
+            ("memory_reservation", 0),
+            ("memory_guard_size", 0),
+            ("memory_reservation_for_growth", 0),
+            ("memory_may_move", True),
+        ):
+            if hasattr(config, name):
+                setattr(config, name, value)
     engine = wasmtime.Engine(config)
     module = wasmtime.Module.from_file(engine, str(wasm_path))
     store = wasmtime.Store(engine)
@@ -497,14 +509,17 @@ def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
     wasmtime = load_wasmtime()
     store, run_fn = instantiate_module(wasmtime, wasm_path)
     cases = []
+    results = []
     for spec in load_specs(spec_dir):
-        run_fn(store, *flatten_case(spec))
+        hit = bool(run_fn(store, *flatten_case(spec)))
         cases.append(spec["id"])
+        results.append({"case_id": spec["id"], "hit": hit})
 
     report = {
         "ok": True,
         "runner": "geometry-hit-test-wasmtime-python-driver",
         "cases": cases,
+        "results": results,
         "host_calls": len(cases),
     }
     output.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -29,7 +29,7 @@ namespace motion {
         std::array<detail::MeshPoint, 3> affinePoints{};
     };
 
-    iTJSDispatch2 *ensurePrivateMotionGLL_guess(
+    tTJSNI_BaseLayer *ensurePrivateMotionGLL_guess(
         SeparateLayerAdaptor &sla);
 
     tTJSNI_BaseLayer *resolvePrivateMotionGLLNative_guess(
@@ -39,14 +39,22 @@ namespace motion {
 
     void clearPrivateMotionGLLRenderQueue_guess(
         iTJSDispatch2 *object);
+    void clearPrivateMotionGLLRenderQueue_guess(
+        tTJSNI_BaseLayer *layer);
     void setPrivateMotionGLLStencilCount_guess(
-        iTJSDispatch2 *object,
+        tTJSNI_BaseLayer *layer,
         tjs_int value);
     void appendPrivateMotionGLLRenderItem_guess(
         iTJSDispatch2 *object,
         const PrivateMotionGLLRenderItemInput_guess &item,
         std::vector<detail::MeshPoint> *pointsToSwap);
+    void appendPrivateMotionGLLRenderItem_guess(
+        tTJSNI_BaseLayer *layer,
+        const PrivateMotionGLLRenderItemInput_guess &item,
+        std::vector<detail::MeshPoint> *pointsToSwap);
     std::size_t privateMotionGLLRenderQueueSize_guess(
         iTJSDispatch2 *object);
+    std::size_t privateMotionGLLRenderQueueSize_guess(
+        tTJSNI_BaseLayer *layer);
 
 } // namespace motion

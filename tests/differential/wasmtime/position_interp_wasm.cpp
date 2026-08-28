@@ -4,7 +4,7 @@
 //   - evaluateControlPointCurve (lines 729-788), aligned to sub_698454
 //   - interpolatePosition69A4D4 (lines 792-830), aligned to sub_69A4D4
 //
-// @exports: _run_position_interp,_get_easing_x_ptr,_get_easing_y_ptr,_get_cp_x_ptr,_get_cp_y_ptr,_get_cp_t_ptr,_get_cp_seg_data_ptr,_get_cp_seg_sizes_ptr,_get_src_pos_ptr,_get_dst_pos_ptr
+// @exports: _run_position_interp,_get_easing_x_ptr,_get_easing_y_ptr,_get_cp_x_ptr,_get_cp_y_ptr,_get_cp_t_ptr,_get_cp_seg_data_ptr,_get_cp_seg_sizes_ptr,_get_src_pos_ptr,_get_dst_pos_ptr,_get_out_pos_ptr,_run_position_interp_direct
 // @requires-lldb
 
 #include <cstddef>
@@ -191,6 +191,32 @@ double *get_cp_seg_data_ptr() { return g_cp_seg_data; }
 std::int32_t *get_cp_seg_sizes_ptr() { return g_cp_seg_sizes; }
 double *get_src_pos_ptr() { return g_src_pos; }
 double *get_dst_pos_ptr() { return g_dst_pos; }
+double *get_out_pos_ptr() { return g_out_pos; }
+
+double run_position_interp_direct(
+    std::int32_t easing_n,
+    double ex0, double ex1, double ex2, double ex3,
+    double ey0, double ey1, double ey2, double ey3,
+    double src_x, double src_y, double src_z,
+    double dst_x, double dst_y, double dst_z,
+    std::int32_t coord_mode,
+    double t,
+    std::int32_t output_index) {
+    const double ex[4] = {ex0, ex1, ex2, ex3};
+    const double ey[4] = {ey0, ey1, ey2, ey3};
+    BezierCurve easing;
+    easing.x.assign(ex, ex + easing_n);
+    easing.y.assign(ey, ey + easing_n);
+    const double src[3] = {src_x, src_y, src_z};
+    const double dst[3] = {dst_x, dst_y, dst_z};
+    double out[3] = {0.0, 0.0, 0.0};
+    const ControlPointCurve empty_rotation;
+    interpolatePosition69A4D4(
+        easing, dst, src, out, coord_mode, empty_rotation, t);
+    return output_index >= 0 && output_index < 3
+        ? out[output_index]
+        : 0.0;
+}
 
 void run_position_interp(
     std::int32_t easing_n,

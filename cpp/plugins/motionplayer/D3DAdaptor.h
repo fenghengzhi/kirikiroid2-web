@@ -21,7 +21,6 @@ namespace motion {
 
     class D3DAdaptor {
     public:
-        D3DAdaptor() = default;
         D3DAdaptor(iTJSDispatch2 *windowObject,
                    int width,
                    int height,
@@ -95,18 +94,25 @@ namespace motion {
             return _softwareTextureCopies.size();
         }
 
-        void initialize_guess(const tTJSVariant &window,
-                              int width,
-                              int height,
-                              int centerX,
-                              int centerY);
+        // Unregistered native-test surface. The ordinary constructor's first
+        // observable action is a private OpenGL-manager target allocation,
+        // which requires the application's live graphics context. A headless
+        // unit process can still exercise the real software gate and cache-hit
+        // borrow/refcount path by creating an otherwise empty native shell and
+        // pre-seeding the holder map. Neither helper changes object layout or
+        // any script-visible constructor/method.
+        static D3DAdaptor *
+        createTextureCacheShellForDifferentialTest_guess();
+        void seedTextureCacheForDifferentialTest_guess(
+            iTVPTexture2D *source, iTVPTexture2D *copy);
+        void configureShellForDifferentialTest_guess(
+            iTJSDispatch2 *windowObject,
+            int width, int height, int centerX, int centerY,
+            iTVPTexture2D *adoptedTarget);
 
     private:
-        void initializeFromWindowObject_guess(iTJSDispatch2 *windowObject,
-                                               int width,
-                                               int height,
-                                               int centerX,
-                                               int centerY);
+        struct TextureCacheTestTag {};
+        explicit D3DAdaptor(TextureCacheTestTag);
         void releaseTargetTexture();
 
         int _width = 0;

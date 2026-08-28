@@ -38,8 +38,24 @@ def load_wasmtime():
 
 def make_debug_engine(wasmtime):
     config = wasmtime.Config()
-    config.debug_info = True
+    direct_mode = os.environ.get("KRKR2_WASMTIME_DIRECT") == "1"
+    config.debug_info = not direct_mode
     config.cranelift_opt_level = "none"
+    if direct_mode:
+        # Wasmtime's default static reservation can make a constrained macOS
+        # x86_64 host kill the process while instantiating even a 16 MiB
+        # standalone memory. The LLDB lane keeps its original configuration;
+        # the direct-export lane uses a movable, minimally-reserved memory.
+        for name, value in (
+            ("static_memory_maximum_size", 32 * 1024 * 1024),
+            ("dynamic_memory_guard_size", 0),
+            ("memory_reservation", 0),
+            ("memory_guard_size", 0),
+            ("memory_reservation_for_growth", 0),
+            ("memory_may_move", True),
+        ):
+            if hasattr(config, name):
+                setattr(config, name, value)
     return wasmtime.Engine(config)
 
 
@@ -216,19 +232,59 @@ def register_int_arg(frame, index: int) -> int:
     machine = platform.machine().lower()
     if machine in ("arm64", "aarch64"):
         reg = f"x{4 + index}"
+        value = sb_uint(frame.FindRegister(reg))
+        if value is None:
+            raise RuntimeError(
+                f"probe integer arg {index} missing register {reg}")
+        return value
+    if machine in ("x86_64", "amd64"):
+        # Wasmtime's x86_64 internal Wasm ABI reserves rdi/rsi for the callee
+        # and caller VMContext. Guest integer arguments then follow the SysV
+        # sequence rdx/rcx/r8/r9, with later arguments in caller stack slots.
+        # (AArch64 reserves four x-registers, hence its distinct mapping.)
+        guest_registers = ("rdx", "rcx", "r8", "r9")
+        if index < len(guest_registers):
+            reg = guest_registers[index]
+            value = sb_uint(frame.FindRegister(reg))
+            if value is None:
+                raise RuntimeError(
+                    f"probe integer arg {index} missing register {reg}")
+            return value
+        cfa = int(frame.GetCFA())
+        if not cfa or cfa == (1 << 64) - 1:
+            raise RuntimeError(
+                f"probe integer arg {index} has no valid CFA")
+        address = cfa + (index - len(guest_registers)) * 8
+        import lldb  # type: ignore
+        error = lldb.SBError()
+        data = frame.GetThread().GetProcess().ReadMemory(address, 8, error)
+        if not error.Success() or len(data) != 8:
+            raise RuntimeError(
+                f"probe integer arg {index} stack read failed at "
+                f"0x{address:x}: {error.GetCString()}")
+        return int.from_bytes(data, "little", signed=False)
     else:
         raise RuntimeError(f"unsupported LLDB probe architecture: {machine}")
-    value = sb_uint(frame.FindRegister(reg))
-    if value is None:
-        raise RuntimeError(f"probe integer arg {index} missing register {reg}")
-    return value
 
 
 def register_double_arg(frame, index: int) -> float:
-    reg = f"d{index}"
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        reg = f"d{index}"
+    elif machine in ("x86_64", "amd64"):
+        reg = f"xmm{index}"
+    else:
+        raise RuntimeError(f"unsupported LLDB probe architecture: {machine}")
     value = frame.FindRegister(reg)
     if not value or not value.IsValid():
         raise RuntimeError(f"probe double arg {index} missing register {reg}")
+    if machine in ("x86_64", "amd64"):
+        # LLDB renders XMM registers as vectors, so GetValue() is not a scalar
+        # float.  Read the low 64 bits through SBData in target byte order.
+        error = value.GetError()
+        parsed = value.GetData().GetDouble(error, 0)
+        if error.Success():
+            return float(parsed)
     raw = value.GetValue()
     if raw is not None:
         try:

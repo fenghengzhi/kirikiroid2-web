@@ -777,6 +777,71 @@ static std::vector<tTJSVariantClosure> TVPContinuousHandlerVector;
 // primitive.  A nested TVPDeliverContinuousEvent call is deliberately a no-op.
 static bool TVPContinuousEventProcessing = false;
 
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+// Read-only counters for the dedicated Wasmtime differential build.  They are
+// deliberately excluded from every production/native target and never feed
+// back into event control flow.
+static int TVPWasmtimeContinuousHandlerAddCount = 0;
+static int TVPWasmtimeContinuousHandlerRemoveCount = 0;
+static int TVPWasmtimeContinuousDeliverCount = 0;
+static int TVPWasmtimeContinuousHandlerInvokeCount = 0;
+static int TVPWasmtimeContinuousHandlerFailureCount = 0;
+static tjs_uint32 TVPWasmtimeContinuousTicks[512] = {};
+static int TVPWasmtimeContinuousTickCount = 0;
+
+extern "C" int TVPWasmtimeGetContinuousEventHookSlotCount() {
+    return static_cast<int>(TVPContinuousEventVector.size());
+}
+
+extern "C" int TVPWasmtimeGetContinuousEventHookLiveCount() {
+    return static_cast<int>(std::count_if(
+        TVPContinuousEventVector.begin(), TVPContinuousEventVector.end(),
+        [](const auto *hook) { return hook != nullptr; }));
+}
+
+extern "C" int TVPWasmtimeGetContinuousHandlerSlotCount() {
+    return static_cast<int>(TVPContinuousHandlerVector.size());
+}
+
+extern "C" int TVPWasmtimeGetContinuousHandlerLiveCount() {
+    return static_cast<int>(std::count_if(
+        TVPContinuousHandlerVector.begin(), TVPContinuousHandlerVector.end(),
+        [](const auto &closure) { return closure.Object != nullptr; }));
+}
+
+extern "C" int TVPWasmtimeGetContinuousHandlerAddCount() {
+    return TVPWasmtimeContinuousHandlerAddCount;
+}
+
+extern "C" int TVPWasmtimeGetContinuousHandlerRemoveCount() {
+    return TVPWasmtimeContinuousHandlerRemoveCount;
+}
+
+extern "C" int TVPWasmtimeGetContinuousDeliverCount() {
+    return TVPWasmtimeContinuousDeliverCount;
+}
+
+extern "C" int TVPWasmtimeGetContinuousHandlerInvokeCount() {
+    return TVPWasmtimeContinuousHandlerInvokeCount;
+}
+
+extern "C" int TVPWasmtimeGetContinuousHandlerFailureCount() {
+    return TVPWasmtimeContinuousHandlerFailureCount;
+}
+
+extern "C" int TVPWasmtimeGetContinuousTickCount() {
+    return TVPWasmtimeContinuousTickCount;
+}
+
+extern "C" int TVPWasmtimeGetContinuousTickAt(int index) {
+    if(index < 0 || index >= TVPWasmtimeContinuousTickCount ||
+       index >= static_cast<int>(std::size(TVPWasmtimeContinuousTicks))) {
+        return 0;
+    }
+    return static_cast<int>(TVPWasmtimeContinuousTicks[index]);
+}
+#endif
+
 #if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
 // This diagnostic block is intentionally absent from normal builds.  The four
 // reference binaries have no URL/JS query, stack capture, logger lookup or
@@ -905,8 +970,19 @@ void TVPRemoveContinuousEventHook(tTVPContinuousEventCallbackIntf *cb) {
 //---------------------------------------------------------------------------
 static void _TVPDeliverContinuousEvent() // internal
 {
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+    ++TVPWasmtimeContinuousDeliverCount;
+#endif
     TVPStartTickCount();
     tjs_uint64 tick = TVPGetTickCount();
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+    if(TVPWasmtimeContinuousTickCount <
+       static_cast<int>(std::size(TVPWasmtimeContinuousTicks))) {
+        TVPWasmtimeContinuousTicks[TVPWasmtimeContinuousTickCount] =
+            static_cast<tjs_uint32>(tick);
+    }
+    ++TVPWasmtimeContinuousTickCount;
+#endif
 
 #if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
     static tjs_uint64 deliverSeq = 0;
@@ -987,6 +1063,9 @@ static void _TVPDeliverContinuousEvent() // internal
             if(TVPContinuousHandlerVector[i].Object) {
                 tjs_error er;
                 try {
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+                    ++TVPWasmtimeContinuousHandlerInvokeCount;
+#endif
 #if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                     ++handlerCalls;
 #endif
@@ -994,6 +1073,9 @@ static void _TVPDeliverContinuousEvent() // internal
                         0, nullptr, nullptr, nullptr, 1, &pvtick, nullptr);
                 } catch(...) {
                     // failed
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+                    ++TVPWasmtimeContinuousHandlerFailureCount;
+#endif
                     TVPContinuousHandlerVector[i].Release();
                     TVPContinuousHandlerVector[i].Object =
                         TVPContinuousHandlerVector[i].ObjThis = nullptr;
@@ -1001,6 +1083,9 @@ static void _TVPDeliverContinuousEvent() // internal
                 }
                 if(TJS_FAILED(er)) {
                     // failed
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+                    ++TVPWasmtimeContinuousHandlerFailureCount;
+#endif
 #if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
                     ++handlerFailures;
 #endif
@@ -1097,6 +1182,9 @@ void TVPAddContinuousHandler(tTJSVariantClosure clo) {
         TVPBeginContinuousEvent();
         clo.AddRef();
         TVPContinuousHandlerVector.emplace_back(clo);
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+        ++TVPWasmtimeContinuousHandlerAddCount;
+#endif
 #if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
         TVPTraceContinuousRegistration("event.addContinuousHandler", &clo,
                                        nullptr);
@@ -1110,6 +1198,9 @@ void TVPRemoveContinuousHandler(tTJSVariantClosure clo) {
     i = std::find(TVPContinuousHandlerVector.begin(),
                   TVPContinuousHandlerVector.end(), clo);
     if(i != TVPContinuousHandlerVector.end()) {
+#if defined(KRKR2_WASMTIME_DIAGNOSTICS)
+        ++TVPWasmtimeContinuousHandlerRemoveCount;
+#endif
 #if TVP_HAS_WCHAIN_CONTINUOUS_EVENT_TRACE
         TVPTraceContinuousRegistration("event.removeContinuousHandler",
                                        &(*i), nullptr);

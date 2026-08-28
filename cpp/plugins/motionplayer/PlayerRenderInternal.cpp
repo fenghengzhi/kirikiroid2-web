@@ -872,15 +872,11 @@ namespace motion::internal::render_detail {
     }
 
     bool isAccurateSlaRenderEnabled() {
-        auto *renderManager = TVPGetRenderManager();
-        if(renderManager && renderManager->IsSoftware()) {
+        if(TVPIsSoftwareRenderManager()) {
             return true;
         }
-        auto *config = IndividualConfigManager::GetInstance();
-        if(!config) {
-            return false;
-        }
-        return config->GetValue<bool>("ogl_accurate_render", false);
+        return IndividualConfigManager::GetInstance()->GetValue<bool>(
+            "ogl_accurate_render", false);
     }
 
     void clearLayerAlphaOutsideRect(iTJSDispatch2 *layerObject,

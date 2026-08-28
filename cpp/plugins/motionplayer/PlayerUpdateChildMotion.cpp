@@ -14,26 +14,21 @@ namespace motion {
 
     void Player::updateLayersPhase3_MotionSubNode() {
         auto &nodes = _nodes;
-        const double currentTime = _clampedEvalTime;
         if (_preview) return;
-
-        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        bool logoSnapshotEnabledForPath = false;
-        if(logoSnapshotEnabled) {
-            motionPath = matchedMotionPath();
-            logoSnapshotEnabledForPath =
-                detail::logoSnapshotMarkEnabledForPath(motionPath);
-        }
 
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &mn = nodes[i];
             if (mn.nodeType != 3) continue;
 
-            // Parameterized nodes read mode from their parameter-table entry;
-            // non-parameterized nodes use mode 0.
-            auto *parameterEntry = resolveNodeParameterEntry(*this, mn);
-            const int parameterMode = parameterEntry ? parameterEntry->mode : 0;
+            // Replay mode prefers the node-bound parameter, then falls back to
+            // the Player-level selected parameter. This fallback is unique to
+            // the mode gate; later parent-time reads use only the node pointer.
+            auto *modeParameterEntry = mn.parameterEntry;
+            if(modeParameterEntry == nullptr) {
+                modeParameterEntry = _selectedParameterEntry;
+            }
+            const int parameterMode =
+                modeParameterEntry ? modeParameterEntry->mode : 0;
 
             // The native implementation resolves the retained child once and
             // immediately addresses root zero. It has no null/root-size guard.
@@ -103,26 +98,6 @@ namespace motion {
                         // setChara() also flushes the pending stealth character;
                         // that field is not a second motion request.
 
-                        if(logoSnapshotEnabledForPath &&
-                           motionPath.find("m2logo.mtn") != std::string::npos &&
-                           currentTime >= 0.0 && currentTime <= 50.0) {
-                            const auto childMotionPath =
-                                child.matchedMotionPath();
-                            std::fprintf(
-                                stderr,
-                                "SNAPPLAY frame=%.3f nodeIndex=%d src=%s childMotionKey=%s childActiveMotion=%s childNodesBuilt=%d childPlaying=%d\n",
-                                currentTime,
-                                mn.index,
-                                detail::narrow(src).c_str(),
-                                detail::narrow(child.getMotion()).c_str(),
-                                childMotionPath.empty()
-                                    ? "<none>"
-                                    : childMotionPath.c_str(),
-                                child._nodes.size() > 1 ? 1 : 0,
-                                child._allplaying ? 1 : 0);
-                        }
-
-
                         // Synchronize child time only while the child is both
                         // playing and queued.
                         if (child._allplaying && child._queuing) {
@@ -179,6 +154,7 @@ namespace motion {
                     // player's clamped evaluation time.
                     const double otherDofst = mn.otherSlot().motionDofst;
                     if (dofst != otherDofst) {
+                        const auto *parameterEntry = mn.parameterEntry;
                         const double parentTime = parameterEntry
                             ? parameterEntry->value : _clampedEvalTime;
                         blendedAngleOffset = motionSubNodeBlendAngleOffset_guess(
@@ -233,6 +209,7 @@ namespace motion {
                         }
                         // Prefer node parameter time; fall back to the player's
                         // clamped evaluation time.
+                        const auto *parameterEntry = mn.parameterEntry;
                         double parentTime = parameterEntry
                             ? parameterEntry->value : _clampedEvalTime;
                         double currentStart = mn.activeSlot().clipStartTime;
@@ -310,8 +287,8 @@ namespace motion {
                 motionSubNodeApplyOriginOffset_guess(
                     mn.coordinateMode,
                     mn.activeSlot().ox, mn.activeSlot().oy,
-                    mn.accumulated.m11, mn.accumulated.m12,
-                    mn.accumulated.m21, mn.accumulated.m22,
+                    mn.matrix.m11, mn.matrix.m12,
+                    mn.matrix.m21, mn.matrix.m22,
                     posX, posY, posZ);
 
                 childRoot.delta.posX = posX;
@@ -342,10 +319,10 @@ namespace motion {
 
                 if (hasAngle || computedAngle == mn.accumulated.angle ||
                     child._directEdit) {
-                    childRoot.accumulated.m11 = mn.accumulated.m11;
-                    childRoot.accumulated.m12 = mn.accumulated.m12;
-                    childRoot.accumulated.m21 = mn.accumulated.m21;
-                    childRoot.accumulated.m22 = mn.accumulated.m22;
+                    childRoot.matrix.m11 = mn.matrix.m11;
+                    childRoot.matrix.m12 = mn.matrix.m12;
+                    childRoot.matrix.m21 = mn.matrix.m21;
+                    childRoot.matrix.m22 = mn.matrix.m22;
                 } else {
                     const double angleDifference =
                         computedAngle - mn.accumulated.angle;
@@ -354,18 +331,18 @@ namespace motion {
                          angleDifference * 3.14159265) / 360.0;
                     if (mn.accumulated.flipX != mn.accumulated.flipY)
                         delta = -delta;
-                    childRoot.accumulated.m11 =
-                        std::cos(delta) * mn.accumulated.m11 +
-                        std::sin(delta) * mn.accumulated.m12;
-                    childRoot.accumulated.m12 =
-                        std::cos(delta) * mn.accumulated.m12 -
-                        mn.accumulated.m11 * std::sin(delta);
-                    childRoot.accumulated.m21 =
-                        std::cos(delta) * mn.accumulated.m21 +
-                        std::sin(delta) * mn.accumulated.m22;
-                    childRoot.accumulated.m22 =
-                        std::cos(delta) * mn.accumulated.m22 -
-                        mn.accumulated.m21 * std::sin(delta);
+                    childRoot.matrix.m11 =
+                        std::cos(delta) * mn.matrix.m11 +
+                        std::sin(delta) * mn.matrix.m12;
+                    childRoot.matrix.m12 =
+                        std::cos(delta) * mn.matrix.m12 -
+                        mn.matrix.m11 * std::sin(delta);
+                    childRoot.matrix.m21 =
+                        std::cos(delta) * mn.matrix.m21 +
+                        std::sin(delta) * mn.matrix.m22;
+                    childRoot.matrix.m22 =
+                        std::cos(delta) * mn.matrix.m22 -
+                        mn.matrix.m21 * std::sin(delta);
                 }
                 childRoot.delta.dirty = true;
 
@@ -373,36 +350,13 @@ namespace motion {
             }
 
         label_18:
-                if(logoSnapshotEnabledForPath &&
-                   motionPath.find("m2logo.mtn") != std::string::npos &&
-                   currentTime >= 30.0 && currentTime <= 50.0) {
-                    const auto childMotionPath = child.matchedMotionPath();
-                    std::fprintf(
-                        stderr,
-                        "SNAPCHILD phase=runtime frame=%.3f nodeIndex=%d src=%s parameterizeIndex=%d childActiveMotion=%s childMotionKey=%s childAllPlaying=%d childQueuing=%d childNodesBuilt=%d childNodeCount=%zu childNeedsAssignImages=%d\n",
-                        currentTime,
-                        mn.index,
-                        mn.activeSlot().srcValue.IsEmpty()
-                            ? "<none>"
-                            : detail::narrow(mn.activeSlot().srcValue).c_str(),
-                        mn.parameterizeIndex,
-                        childMotionPath.empty()
-                            ? "<none>"
-                            : childMotionPath.c_str(),
-                        detail::narrow(child.getMotion()).c_str(),
-                        child._allplaying ? 1 : 0,
-                        child._queuing ? 1 : 0,
-                        child._nodes.size() > 1 ? 1 : 0,
-                        true ? child._nodes.size() : 0,
-                        child._needsInternalAssignImages ? 1 : 0);
-                }
                 childRoot.clipAABB = mn.clipAABB;
                 if (mn.meshInheritanceSeparator_guess) {
                     childRoot.meshAncestor = &mn;
                 } else {
                     childRoot.meshAncestor = mn.meshAncestor;
                 }
-                childRoot.visibleAncestorIndex = mn.visibleAncestorIndex;
+                childRoot.visibleAncestor = mn.visibleAncestor;
 
                 child.frameProgress(_deltaTime);
                 child.updateLayers();

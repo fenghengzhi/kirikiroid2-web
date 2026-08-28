@@ -254,7 +254,21 @@ namespace motion {
             return result;
         }
 
-        std::array<tjs_real, 4> cubicBezierWeights_guess(tjs_real t) {
+        using CubicBezierWeights_guess = std::array<tjs_real, 4>;
+
+        CubicBezierWeights_guess
+        cubicBezierSingleHorizontalWeights_guess(tjs_real t) {
+            const tjs_real complement = 1.0 - t;
+            return {
+                complement * (complement * complement),
+                complement * complement * t * 3.0,
+                complement * t * t * 3.0,
+                t * t * t,
+            };
+        }
+
+        CubicBezierWeights_guess
+        cubicBezierSingleVerticalWeights_guess(tjs_real t) {
             const tjs_real complement = 1.0 - t;
             return {
                 complement * (complement * complement),
@@ -264,13 +278,32 @@ namespace motion {
             };
         }
 
+        CubicBezierWeights_guess
+        cubicBezierListHorizontalWeights_guess(tjs_real t) {
+            const tjs_real complement = 1.0 - t;
+            return {
+                complement * (complement * complement),
+                t * (complement * complement) * 3.0,
+                t * (t * complement) * 3.0,
+                t * (t * t),
+            };
+        }
+
+        CubicBezierWeights_guess
+        cubicBezierListVerticalWeights_guess(tjs_real t) {
+            const tjs_real complement = 1.0 - t;
+            return {
+                complement * (complement * complement),
+                t * (complement * complement) * 3.0,
+                t * (t * (complement * 3.0)),
+                t * (t * t),
+            };
+        }
+
         tTVPPointD calculateBezierPatchPoint_guess(
             const PointList_guess &controlPoints,
-            tjs_real u,
-            tjs_real v) {
-            const auto horizontal = cubicBezierWeights_guess(u);
-            const auto vertical = cubicBezierWeights_guess(v);
-
+            const CubicBezierWeights_guess &horizontal,
+            const CubicBezierWeights_guess &vertical) {
             // This is intentionally not value-initialized.  All four native
             // callbacks start both += accumulators from indeterminate local
             // state; the exact residue differs by ABI and optimization.  It
@@ -785,10 +818,14 @@ namespace motion {
         PointList_guess controlPoints;
         readBezierControlPoints_guess(points, controlPoints, true);
 
+        const auto horizontal =
+            cubicBezierSingleHorizontalWeights_guess(u);
+        const auto vertical =
+            cubicBezierSingleVerticalWeights_guess(v);
+        const auto point = calculateBezierPatchPoint_guess(
+            controlPoints, horizontal, vertical);
         auto result = detail::createTJSArrayWithItems_guess();
-        appendFlatPoint_guess(
-            result,
-            calculateBezierPatchPoint_guess(controlPoints, u, v));
+        appendFlatPoint_guess(result, point);
         return result.value;
     }
 
@@ -809,9 +846,14 @@ namespace motion {
                 parameters, signedInt32Bits_guess(index));
             const tjs_real v = readMeshCoordinate_guess(
                 parameters, signedInt32Bits_guess(index + 1u));
+            const auto horizontal =
+                cubicBezierListHorizontalWeights_guess(u);
+            const auto vertical =
+                cubicBezierListVerticalWeights_guess(v);
             appendFlatPoint_guess(
                 result,
-                calculateBezierPatchPoint_guess(controlPoints, u, v));
+                calculateBezierPatchPoint_guess(
+                    controlPoints, horizontal, vertical));
         }
         return result.value;
     }

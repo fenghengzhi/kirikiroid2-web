@@ -30,6 +30,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Number of guest ticks to drive")
     p.add_argument("--output", required=True, type=Path,
                    help="Path for bootstrap summary JSON")
+    p.add_argument("--trace-out", type=Path, default=None,
+                   help="Write direct guest motion trace JSON")
     p.add_argument("--record-framebuffer", action="store_true",
                    help="Write framebuffer PNGs")
     p.add_argument("--framebuffer-dir", type=Path, default=None,
@@ -118,6 +120,7 @@ def main(argv: list[str]) -> int:
             args.wasm,
             args.startup_xp3,
             int(args.frames),
+            motion_trace_out=args.trace_out,
             framebuffer_dir=args.framebuffer_dir if args.record_framebuffer else None,
             render_artifact_dir=(
                 args.render_artifact_dir if args.record_render_stages else None),

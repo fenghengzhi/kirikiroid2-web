@@ -193,7 +193,7 @@ namespace motion {
                 // Timer = parent time - frame time + model.timeOffset.
                 // Parameterized nodes read their bound value; ordinary nodes
                 // read frameTick.
-                auto *parameterEntry = resolveNodeParameterEntry(*this, en);
+                auto *parameterEntry = en.parameterEntry;
                 double parentTime =
                     parameterEntry ? parameterEntry->value : _frameTickCount;
                 double startTime = en.activeSlot().clipStartTime;
@@ -313,7 +313,7 @@ namespace motion {
             auto &root = child->_nodes[0];
             root.clipAABB = particleNode.clipAABB;
             root.meshAncestor = meshParent;
-            root.visibleAncestorIndex = particleNode.visibleAncestorIndex;
+            root.visibleAncestor = particleNode.visibleAncestor;
 
             child->frameProgress(_deltaTime);
             child->updateLayers();
@@ -355,10 +355,10 @@ namespace motion {
             if (pn.particleInheritVelocity == 2) {
                 bool addTranslationOnly = true;
                 if(!particleSlot.done && pn.particleInheritAngle) {
-                    const double curM11 = pn.accumulated.m11;
-                    const double curM21 = pn.accumulated.m21;
-                    const double curM12 = pn.accumulated.m12;
-                    const double curM22 = pn.accumulated.m22;
+                    const double curM11 = pn.matrix.m11;
+                    const double curM21 = pn.matrix.m21;
+                    const double curM12 = pn.matrix.m12;
+                    const double curM22 = pn.matrix.m22;
                     const bool matrixChanged =
                         curM11 != pn.prevM11 || curM21 != pn.prevM21 ||
                         curM12 != pn.prevM12 || curM22 != pn.prevM22;
@@ -419,69 +419,63 @@ namespace motion {
                                 auto *child = detail::
                                     particleArrayGetNativePlayerAt_guess(
                                         array, ci);
-                                auto &cr = child->_nodes[0];
+                                double childAngle =
+                                    child->getAngleDeg() + angleDelta;
+                                while(childAngle < 0.0) childAngle += 360.0;
+                                while(childAngle >= 360.0)
+                                    childAngle -= 360.0;
+                                child->setAngleDeg(childAngle);
 
-                                if(child->_directEdit) {
-                                    double childAngle =
-                                        child->_emoteAngle + angleDelta;
-                                    while(childAngle < 0.0) childAngle += 360.0;
-                                    while(childAngle >= 360.0)
-                                        childAngle -= 360.0;
-                                    child->_emoteAngle = childAngle;
-                                    child->initEmoteMotion_guess(2u);
-                                } else {
-                                    double childAngle =
-                                        cr.accumulated.angle + angleDelta;
-                                    while(childAngle < 0.0) childAngle += 360.0;
-                                    while(childAngle >= 360.0)
-                                        childAngle -= 360.0;
-                                    cr.accumulated.angle = childAngle;
-                                }
-
-                                auto *transformedRoot = &child->_nodes[0];
+                                // Particle inheritance operates on the child
+                                // root controller, not its evaluated state.
+                                // Unsupported coordinate modes still receive
+                                // the angle update above but leave position and
+                                // velocity untouched.
+                                auto &transformedRoot = child->_nodes[0].delta;
                                 const int coordinateMode = pn.coordinateMode;
                                 if(coordinateMode == 1) {
                                     const double x =
-                                        transformedRoot->accumulated.posX -
+                                        transformedRoot.posX -
                                         posXref + dPosX;
                                     const double z =
-                                        transformedRoot->accumulated.posZ -
+                                        transformedRoot.posZ -
                                         posZref + dPosZ;
-                                    transformedRoot->accumulated.posX =
+                                    transformedRoot.posX =
                                         posXref + t11 * x + t12 * z;
-                                    transformedRoot->accumulated.posZ =
+                                    transformedRoot.posZ =
                                         posZref + t21 * x + t22 * z;
-                                    transformedRoot->accumulated.posY += dPosY;
-                                } else {
+                                    transformedRoot.posY += dPosY;
+
+                                    const double velocityX =
+                                        child->_cameraVelocityX;
+                                    const double velocityZ =
+                                        child->_cameraVelocityZ;
+                                    child->_cameraVelocityX =
+                                        t11 * velocityX + t12 * velocityZ;
+                                    child->_cameraVelocityZ =
+                                        t21 * velocityX + t22 * velocityZ;
+                                } else if(coordinateMode == 0) {
                                     const double x =
-                                        transformedRoot->accumulated.posX -
+                                        transformedRoot.posX -
                                         posXref + dPosX;
                                     const double y =
-                                        transformedRoot->accumulated.posY -
+                                        transformedRoot.posY -
                                         posYref + dPosY;
-                                    transformedRoot->accumulated.posX =
-                                        transformedRoot->accumulated.posZ +
-                                        dPosZ;
-                                    transformedRoot->accumulated.posY =
+                                    transformedRoot.posX =
+                                        transformedRoot.posZ + dPosZ;
+                                    transformedRoot.posY =
                                         posYref + t21 * x + t22 * y;
-                                    transformedRoot->accumulated.posZ =
+                                    transformedRoot.posZ =
                                         posXref + t11 * x + t12 * y;
-                                }
 
-                                const double velocityX =
-                                    child->_cameraVelocityX;
-                                const double velocityOther =
-                                    coordinateMode == 1
-                                        ? child->_cameraVelocityZ
-                                        : child->_cameraVelocityY;
-                                child->_cameraVelocityX =
-                                    t11 * velocityX + t12 * velocityOther;
-                                const double transformedOther =
-                                    t21 * velocityX + t22 * velocityOther;
-                                if(coordinateMode == 1) {
-                                    child->_cameraVelocityZ = transformedOther;
-                                } else {
-                                    child->_cameraVelocityY = transformedOther;
+                                    const double velocityX =
+                                        child->_cameraVelocityX;
+                                    const double velocityY =
+                                        child->_cameraVelocityY;
+                                    child->_cameraVelocityX =
+                                        t11 * velocityX + t12 * velocityY;
+                                    child->_cameraVelocityY =
+                                        t21 * velocityX + t22 * velocityY;
                                 }
                             }
                         }
@@ -493,10 +487,10 @@ namespace motion {
                         auto *child = detail::
                             particleArrayGetNativePlayerAt_guess(
                                 array, ci);
-                        auto &root = child->_nodes[0];
-                        root.accumulated.posX += pn.deltaPosX;
-                        root.accumulated.posY += pn.deltaPosY;
-                        root.accumulated.posZ += pn.deltaPosZ;
+                        auto &rootDelta = child->_nodes[0].delta;
+                        rootDelta.posX += pn.deltaPosX;
+                        rootDelta.posY += pn.deltaPosY;
+                        rootDelta.posZ += pn.deltaPosZ;
                     }
                 }
             }
@@ -701,16 +695,16 @@ namespace motion {
                 // A nonzero Z component scales by sqrt(det(matrix)) without an
                 // absolute value or a determinant guard.
                 if (offZ != 0.0) {
-                    const double det = pn.accumulated.m11 * pn.accumulated.m22
-                                     - pn.accumulated.m12 * pn.accumulated.m21;
+                    const double det = pn.matrix.m11 * pn.matrix.m22
+                                     - pn.matrix.m12 * pn.matrix.m21;
                     offZ *= std::sqrt(det);
                 }
 
                 // Transform the sampled XY offset around ox/oy read directly
                 // from the selected slot. There is no separately propagated
                 // node-level clip-origin cache in any current reference.
-                const double m11 = pn.accumulated.m11, m21 = pn.accumulated.m21;
-                const double m12 = pn.accumulated.m12, m22 = pn.accumulated.m22;
+                const double m11 = pn.matrix.m11, m21 = pn.matrix.m21;
+                const double m12 = pn.matrix.m12, m22 = pn.matrix.m22;
                 const double clipOX = particleSlot.ox;
                 const double clipOY = particleSlot.oy;
                 const double txOff = m11 * (offX - clipOX) + m12 * (offY - clipOY);
@@ -747,7 +741,7 @@ namespace motion {
                     direction = std::atan2(tyOff, txOff) * 360.0 / (2.0 * PI) + 180.0;
                     direction = direction * PI / 180.0;
                 } else {
-                    direction = std::atan2(pn.accumulated.m12, pn.accumulated.m11) * 360.0 / (2.0 * PI);
+                    direction = std::atan2(pn.matrix.m12, pn.matrix.m11) * 360.0 / (2.0 * PI);
                     direction = direction * PI / 180.0;
                 }
 
@@ -776,29 +770,23 @@ namespace motion {
                 {
                     auto &cr = child->_nodes[0];
                     if (pn.coordinateMode == 1) {
-                        cr.accumulated.posX = txOff + pn.accumulated.posX;
-                        cr.accumulated.posY = offZ + pn.accumulated.posY;
-                        cr.accumulated.posZ = tyOff + pn.accumulated.posZ;
+                        cr.delta.posX = txOff + pn.accumulated.posX;
+                        cr.delta.posY = offZ + pn.accumulated.posY;
+                        cr.delta.posZ = tyOff + pn.accumulated.posZ;
                         velX = zoomScale * speed * std::cos(dirRad);
                         velY = speed * 0.0;
                         velZ = zoomScale * speed * std::sin(dirRad);
                     } else if (pn.coordinateMode == 0) {
-                        cr.accumulated.posX = txOff + pn.accumulated.posX;
-                        cr.accumulated.posY = tyOff + pn.accumulated.posY;
-                        cr.accumulated.posZ = offZ + pn.accumulated.posZ;
+                        cr.delta.posX = txOff + pn.accumulated.posX;
+                        cr.delta.posY = tyOff + pn.accumulated.posY;
+                        cr.delta.posZ = offZ + pn.accumulated.posZ;
                         velX = zoomScale * speed * std::cos(dirRad);
                         velY = zoomScale * speed * std::sin(dirRad);
                         velZ = speed * 0.0;
                     }
 
-                    // Flip and ordinary root transform writes dirty only on a
-                    // changed value.
-                    if (cr.accumulated.flipX != pn.accumulated.flipX ||
-                        cr.accumulated.flipY != pn.accumulated.flipY) {
-                        cr.accumulated.flipX = pn.accumulated.flipX;
-                        cr.accumulated.flipY = pn.accumulated.flipY;
-                        cr.accumulated.dirty = true;
-                    }
+                    child->setFlip(
+                        pn.accumulated.flipX, pn.accumulated.flipY);
 
                     // Particle-angle sampling precedes zoom sampling, which is
                     // observable in the shared RNG sequence.
@@ -821,29 +809,12 @@ namespace motion {
                     while (childAngle < 0.0) childAngle += 360.0;
                     while (childAngle >= 360.0) childAngle -= 360.0;
 
-                    if (child->_directEdit) {
-                        double k = childAngle;
-                        while (k < 0.0) k += 360.0;
-                        while (k >= 360.0) k -= 360.0;
-                        child->_emoteAngle = k;
-                        child->initEmoteMotion_guess(2u);
-                    } else {
-                        if (cr.accumulated.angle != childAngle) {
-                            cr.accumulated.dirty = true;
-                            cr.accumulated.angle = childAngle;
-                        }
-                    }
-                    auto *postAngleRoot = &child->_nodes[0];
+                    child->setAngleDeg(childAngle);
 
                     double zoom = pn.particleInterp[6];
                     if (zoom != pn.particleInterp[7])
                         zoom = zoom + (pn.particleInterp[7] - zoom) * random();
-                    if(postAngleRoot->accumulated.scaleX != zoom ||
-                       postAngleRoot->accumulated.scaleY != zoom) {
-                        postAngleRoot->accumulated.dirty = true;
-                        postAngleRoot->accumulated.scaleX = zoom;
-                        postAngleRoot->accumulated.scaleY = zoom;
-                    }
+                    child->setZoom(zoom, zoom);
 
                     // Distance-fitted fly mode 2 bypasses this later zoom
                     // adjustment. Mode 2 divides unconditionally, including

@@ -2,7 +2,7 @@
 // Function copied from motionplayer/PlayerInternal.h (lines 708-725).
 // Aligned to libkrkr2.so sub_69A754 (0x69A754).
 //
-// @exports: _run_bezier_curve,_get_curve_x_ptr,_get_curve_y_ptr
+// @exports: _run_bezier_curve,_get_curve_x_ptr,_get_curve_y_ptr,_get_bezier_result,_run_bezier_curve_direct
 // @requires-lldb
 
 #include <cstddef>
@@ -62,6 +62,22 @@ extern "C" {
 
 double *get_curve_x_ptr() { return g_curve_x; }
 double *get_curve_y_ptr() { return g_curve_y; }
+double get_bezier_result() { return g_result; }
+
+double run_bezier_curve_direct(
+    std::int32_t n,
+    double t,
+    double x0, double x1, double x2, double x3,
+    double x4, double x5, double x6,
+    double y0, double y1, double y2, double y3,
+    double y4, double y5, double y6) {
+    const double xs[7] = {x0, x1, x2, x3, x4, x5, x6};
+    const double ys[7] = {y0, y1, y2, y3, y4, y5, y6};
+    LocalBezierCurve curve;
+    curve.x.assign(xs, xs + n);
+    curve.y.assign(ys, ys + n);
+    return evaluateBezierCurve(curve, t);
+}
 
 void run_bezier_curve(std::int32_t n, double t) {
     LocalBezierCurve curve;

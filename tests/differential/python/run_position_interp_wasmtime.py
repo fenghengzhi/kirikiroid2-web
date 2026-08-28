@@ -62,10 +62,12 @@ def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
         "cp_seg_sizes": exports["get_cp_seg_sizes_ptr"](store),
         "src_pos": exports["get_src_pos_ptr"](store),
         "dst_pos": exports["get_dst_pos_ptr"](store),
+        "out_pos": exports["get_out_pos_ptr"](store),
     }
     run_fn = exports["run_position_interp"]
 
     cases = []
+    results = []
     for spec in load_specs(spec_dir):
         base = mem_base(store, memory)
         easing = spec["easing_curve"]
@@ -98,11 +100,16 @@ def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
             spec["t"],
         )
         cases.append(spec["id"])
+        result = list(struct.unpack(
+            "<3d", ctypes.string_at(base + ptrs["out_pos"], 3 * 8)
+        ))
+        results.append({"case_id": spec["id"], "result": result})
 
     output.write_text(json.dumps({
         "ok": True,
         "runner": "position-interp-wasmtime-python-driver",
         "cases": cases,
+        "results": results,
         "host_calls": len(cases),
     }, indent=2), encoding="utf-8")
     return 0

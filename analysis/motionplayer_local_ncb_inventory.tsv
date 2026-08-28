@@ -1,0 +1,317 @@
+candidate_id	module	owner	sequence	kind	script_name	binding	local_source	binary_status
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-AFFINEPATCH	motionplayer.dll	BezierPatch	1	method	affinePatch	NCB_METHOD(affinePatch)	cpp/plugins/motionplayer/main.cpp:52	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-TRANSLATEPATCH	motionplayer.dll	BezierPatch	2	method	translatePatch	NCB_METHOD(translatePatch)	cpp/plugins/motionplayer/main.cpp:53	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-AFFINETRANSLATEPATCH	motionplayer.dll	BezierPatch	3	method	affineTranslatePatch	NCB_METHOD(affineTranslatePatch)	cpp/plugins/motionplayer/main.cpp:54	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-CALCPATCHBOUNDS	motionplayer.dll	BezierPatch	4	method	calcPatchBounds	NCB_METHOD(calcPatchBounds)	cpp/plugins/motionplayer/main.cpp:55	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-CALCMESHBOUNDS	motionplayer.dll	BezierPatch	5	method	calcMeshBounds	NCB_METHOD(calcMeshBounds)	cpp/plugins/motionplayer/main.cpp:56	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-CALCBEZIERPATCH	motionplayer.dll	BezierPatch	6	method	calcBezierPatch	NCB_METHOD(calcBezierPatch)	cpp/plugins/motionplayer/main.cpp:57	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-CALCBEZIERPATCHLIST	motionplayer.dll	BezierPatch	7	method	calcBezierPatchList	NCB_METHOD(calcBezierPatchList)	cpp/plugins/motionplayer/main.cpp:58	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-BEZIERPATCH-METHOD-REVERSECALCBEZIERPATCH	motionplayer.dll	BezierPatch	8	method	reverseCalcBezierPatch	NCB_METHOD(reverseCalcBezierPatch)	cpp/plugins/motionplayer/main.cpp:59	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-PROPERTY-DEBUGMESHAPP	motionplayer.dll	MotionLayerExtensions_guess	1	property	debugMeshApp	NCB_PROPERTY(debugMeshApp, getDebugMeshApp, setDebugMeshApp)	cpp/plugins/motionplayer/main.cpp:74	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-PROPERTY-DEBUGBEZIERAPP	motionplayer.dll	MotionLayerExtensions_guess	2	property	debugBezierApp	NCB_PROPERTY(debugBezierApp, getDebugBezierApp, setDebugBezierApp)	cpp/plugins/motionplayer/main.cpp:75	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-MESHCOPY	motionplayer.dll	MotionLayerExtensions_guess	3	method	meshCopy	NCB_METHOD(meshCopy)	cpp/plugins/motionplayer/main.cpp:76	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-OPERATEMESH	motionplayer.dll	MotionLayerExtensions_guess	4	method	operateMesh	NCB_METHOD(operateMesh)	cpp/plugins/motionplayer/main.cpp:77	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-DRAWMESHFRAME	motionplayer.dll	MotionLayerExtensions_guess	5	method	drawMeshFrame	NCB_METHOD(drawMeshFrame)	cpp/plugins/motionplayer/main.cpp:78	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-BEZIERPATCHCOPY	motionplayer.dll	MotionLayerExtensions_guess	6	method	bezierPatchCopy	NCB_METHOD(bezierPatchCopy)	cpp/plugins/motionplayer/main.cpp:79	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-OPERATEBEZIERPATCH	motionplayer.dll	MotionLayerExtensions_guess	7	method	operateBezierPatch	NCB_METHOD(operateBezierPatch)	cpp/plugins/motionplayer/main.cpp:80	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-DRAWBEZIERPATCHFRAME	motionplayer.dll	MotionLayerExtensions_guess	8	method	drawBezierPatchFrame	NCB_METHOD(drawBezierPatchFrame)	cpp/plugins/motionplayer/main.cpp:81	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTIONLAYEREXTENSIONS_GUESS-METHOD-DRAWBEZIERPATCHMESHFRAME	motionplayer.dll	MotionLayerExtensions_guess	9	method	drawBezierPatchMeshFrame	NCB_METHOD(drawBezierPatchMeshFrame)	cpp/plugins/motionplayer/main.cpp:82	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SOURCECACHE-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	SourceCache	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:96	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SOURCECACHE-METHOD-LOADSOURCE	motionplayer.dll	SourceCache	2	method	loadSource	NCB_METHOD(loadSource)	cpp/plugins/motionplayer/main.cpp:97	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SOURCECACHE-METHOD-CLEARCACHE	motionplayer.dll	SourceCache	3	method	clearCache	NCB_METHOD(clearCache)	cpp/plugins/motionplayer/main.cpp:98	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SOURCECACHE-PROPERTY_RO-BUFLAYER	motionplayer.dll	SourceCache	4	property_ro	bufLayer	NCB_PROPERTY_RO(bufLayer, getBufLayer)	cpp/plugins/motionplayer/main.cpp:99	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	ObjSource	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:106	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-PROPERTY_RO-ORIGINX	motionplayer.dll	ObjSource	2	property_ro	originX	NCB_PROPERTY_RO(originX, getOriginX)	cpp/plugins/motionplayer/main.cpp:109	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-PROPERTY_RO-ORIGINY	motionplayer.dll	ObjSource	3	property_ro	originY	NCB_PROPERTY_RO(originY, getOriginY)	cpp/plugins/motionplayer/main.cpp:110	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-PROPERTY_RO-WIDTH	motionplayer.dll	ObjSource	4	property_ro	width	NCB_PROPERTY_RO(width, getWidth)	cpp/plugins/motionplayer/main.cpp:111	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-PROPERTY_RO-HEIGHT	motionplayer.dll	ObjSource	5	property_ro	height	NCB_PROPERTY_RO(height, getHeight)	cpp/plugins/motionplayer/main.cpp:112	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-PROPERTY_RO-CLIP	motionplayer.dll	ObjSource	6	property_ro	clip	NCB_PROPERTY_RO(clip, getClip)	cpp/plugins/motionplayer/main.cpp:113	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-OBJSOURCE-METHOD-DRAWLAYER	motionplayer.dll	ObjSource	7	method	drawLayer	NCB_METHOD(drawLayer)	cpp/plugins/motionplayer/main.cpp:114	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-POINT-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	Point	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:135	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-POINT-PROPERTY_RO-TYPE	motionplayer.dll	Point	2	property_ro	type	NCB_PROPERTY_RO(type, getType)	cpp/plugins/motionplayer/main.cpp:136	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-POINT-METHOD-CONTAINS	motionplayer.dll	Point	3	method	contains	NCB_METHOD(contains)	cpp/plugins/motionplayer/main.cpp:137	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-POINT-PROPERTY_RO-X	motionplayer.dll	Point	4	property_ro	x	NCB_PROPERTY_RO(x, getX)	cpp/plugins/motionplayer/main.cpp:138	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-POINT-PROPERTY_RO-Y	motionplayer.dll	Point	5	property_ro	y	NCB_PROPERTY_RO(y, getY)	cpp/plugins/motionplayer/main.cpp:139	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-CIRCLE-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	Circle	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:142	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-CIRCLE-PROPERTY_RO-TYPE	motionplayer.dll	Circle	2	property_ro	type	NCB_PROPERTY_RO(type, getType)	cpp/plugins/motionplayer/main.cpp:143	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-CIRCLE-METHOD-CONTAINS	motionplayer.dll	Circle	3	method	contains	NCB_METHOD(contains)	cpp/plugins/motionplayer/main.cpp:144	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-CIRCLE-PROPERTY_RO-X	motionplayer.dll	Circle	4	property_ro	x	NCB_PROPERTY_RO(x, getX)	cpp/plugins/motionplayer/main.cpp:145	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-CIRCLE-PROPERTY_RO-Y	motionplayer.dll	Circle	5	property_ro	y	NCB_PROPERTY_RO(y, getY)	cpp/plugins/motionplayer/main.cpp:146	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-CIRCLE-PROPERTY_RO-R	motionplayer.dll	Circle	6	property_ro	r	NCB_PROPERTY_RO(r, getR)	cpp/plugins/motionplayer/main.cpp:147	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	Rect	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:150	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-PROPERTY_RO-TYPE	motionplayer.dll	Rect	2	property_ro	type	NCB_PROPERTY_RO(type, getType)	cpp/plugins/motionplayer/main.cpp:151	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-METHOD-CONTAINS	motionplayer.dll	Rect	3	method	contains	NCB_METHOD(contains)	cpp/plugins/motionplayer/main.cpp:152	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-PROPERTY_RO-L	motionplayer.dll	Rect	4	property_ro	l	NCB_PROPERTY_RO(l, getL)	cpp/plugins/motionplayer/main.cpp:153	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-PROPERTY_RO-T	motionplayer.dll	Rect	5	property_ro	t	NCB_PROPERTY_RO(t, getT)	cpp/plugins/motionplayer/main.cpp:154	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-PROPERTY_RO-W	motionplayer.dll	Rect	6	property_ro	w	NCB_PROPERTY_RO(w, getW)	cpp/plugins/motionplayer/main.cpp:155	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RECT-PROPERTY_RO-H	motionplayer.dll	Rect	7	property_ro	h	NCB_PROPERTY_RO(h, getH)	cpp/plugins/motionplayer/main.cpp:156	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-QUAD-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	Quad	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:159	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-QUAD-PROPERTY_RO-TYPE	motionplayer.dll	Quad	2	property_ro	type	NCB_PROPERTY_RO(type, getType)	cpp/plugins/motionplayer/main.cpp:160	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-QUAD-METHOD-CONTAINS	motionplayer.dll	Quad	3	method	contains	NCB_METHOD(contains)	cpp/plugins/motionplayer/main.cpp:161	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-QUAD-PROPERTY_RO-P	motionplayer.dll	Quad	4	property_ro	p	NCB_PROPERTY_RO(p, getP)	cpp/plugins/motionplayer/main.cpp:162	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	LayerGetter	1	constructor	<constructor>	NCB_CONSTRUCTOR(())	cpp/plugins/motionplayer/main.cpp:170	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-TYPE	motionplayer.dll	LayerGetter	2	property_ro	type	NCB_PROPERTY_RO(type, getType)	cpp/plugins/motionplayer/main.cpp:171	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-LABEL	motionplayer.dll	LayerGetter	3	property_ro	label	NCB_PROPERTY_RO(label, getLabel)	cpp/plugins/motionplayer/main.cpp:172	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-SRC	motionplayer.dll	LayerGetter	4	property_ro	src	NCB_PROPERTY_RO(src, getSrc)	cpp/plugins/motionplayer/main.cpp:173	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-VISIBLE	motionplayer.dll	LayerGetter	5	property_ro	visible	NCB_PROPERTY_RO(visible, getVisible)	cpp/plugins/motionplayer/main.cpp:174	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-BRANCHVISIBLE	motionplayer.dll	LayerGetter	6	property_ro	branchVisible	NCB_PROPERTY_RO(branchVisible, getBranchVisible)	cpp/plugins/motionplayer/main.cpp:175	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-LAYERVISIBLE	motionplayer.dll	LayerGetter	7	property_ro	layerVisible	NCB_PROPERTY_RO(layerVisible, getLayerVisible)	cpp/plugins/motionplayer/main.cpp:176	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-X	motionplayer.dll	LayerGetter	8	property_ro	x	NCB_PROPERTY_RO(x, getX)	cpp/plugins/motionplayer/main.cpp:177	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-Y	motionplayer.dll	LayerGetter	9	property_ro	y	NCB_PROPERTY_RO(y, getY)	cpp/plugins/motionplayer/main.cpp:178	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-LEFT	motionplayer.dll	LayerGetter	10	property_ro	left	NCB_PROPERTY_RO(left, getLeft)	cpp/plugins/motionplayer/main.cpp:179	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-TOP	motionplayer.dll	LayerGetter	11	property_ro	top	NCB_PROPERTY_RO(top, getTop)	cpp/plugins/motionplayer/main.cpp:180	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-COORD	motionplayer.dll	LayerGetter	12	property_ro	coord	NCB_PROPERTY_RO(coord, getCoord)	cpp/plugins/motionplayer/main.cpp:181	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-FLIPX	motionplayer.dll	LayerGetter	13	property_ro	flipX	NCB_PROPERTY_RO(flipX, getFlipX)	cpp/plugins/motionplayer/main.cpp:182	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-FLIPY	motionplayer.dll	LayerGetter	14	property_ro	flipY	NCB_PROPERTY_RO(flipY, getFlipY)	cpp/plugins/motionplayer/main.cpp:183	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-ZOOMX	motionplayer.dll	LayerGetter	15	property_ro	zoomX	NCB_PROPERTY_RO(zoomX, getZoomX)	cpp/plugins/motionplayer/main.cpp:184	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-ZOOMY	motionplayer.dll	LayerGetter	16	property_ro	zoomY	NCB_PROPERTY_RO(zoomY, getZoomY)	cpp/plugins/motionplayer/main.cpp:185	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-ANGLEDEG	motionplayer.dll	LayerGetter	17	property_ro	angleDeg	NCB_PROPERTY_RO(angleDeg, getAngleDeg)	cpp/plugins/motionplayer/main.cpp:186	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-ANGLERAD	motionplayer.dll	LayerGetter	18	property_ro	angleRad	NCB_PROPERTY_RO(angleRad, getAngleRad)	cpp/plugins/motionplayer/main.cpp:187	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-SLANTX	motionplayer.dll	LayerGetter	19	property_ro	slantX	NCB_PROPERTY_RO(slantX, getSlantX)	cpp/plugins/motionplayer/main.cpp:188	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-SLANTY	motionplayer.dll	LayerGetter	20	property_ro	slantY	NCB_PROPERTY_RO(slantY, getSlantY)	cpp/plugins/motionplayer/main.cpp:189	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-ORIGINX	motionplayer.dll	LayerGetter	21	property_ro	originX	NCB_PROPERTY_RO(originX, getOriginX)	cpp/plugins/motionplayer/main.cpp:190	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-ORIGINY	motionplayer.dll	LayerGetter	22	property_ro	originY	NCB_PROPERTY_RO(originY, getOriginY)	cpp/plugins/motionplayer/main.cpp:191	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-OPACITY	motionplayer.dll	LayerGetter	23	property_ro	opacity	NCB_PROPERTY_RO(opacity, getOpacity)	cpp/plugins/motionplayer/main.cpp:192	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-MTX	motionplayer.dll	LayerGetter	24	property_ro	mtx	NCB_PROPERTY_RO(mtx, getMtx)	cpp/plugins/motionplayer/main.cpp:193	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-VTX	motionplayer.dll	LayerGetter	25	property_ro	vtx	NCB_PROPERTY_RO(vtx, getVtx)	cpp/plugins/motionplayer/main.cpp:194	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-COLOR	motionplayer.dll	LayerGetter	26	property_ro	color	NCB_PROPERTY_RO(color, getColor)	cpp/plugins/motionplayer/main.cpp:195	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-BEZIERPATCH	motionplayer.dll	LayerGetter	27	property_ro	bezierPatch	NCB_PROPERTY_RO(bezierPatch, getBezierPatch)	cpp/plugins/motionplayer/main.cpp:196	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-SHAPE	motionplayer.dll	LayerGetter	28	property_ro	shape	NCB_PROPERTY_RO(shape, getShape)	cpp/plugins/motionplayer/main.cpp:197	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-MOTION	motionplayer.dll	LayerGetter	29	property_ro	motion	NCB_PROPERTY_RO(motion, getMotion)	cpp/plugins/motionplayer/main.cpp:198	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-LAYERGETTER-PROPERTY_RO-PARTICLE	motionplayer.dll	LayerGetter	30	property_ro	particle	NCB_PROPERTY_RO(particle, getParticle)	cpp/plugins/motionplayer/main.cpp:199	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SEPARATELAYERADAPTOR-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	SeparateLayerAdaptor	1	constructor	<constructor>	NCB_CONSTRUCTOR((tTJSVariant))	cpp/plugins/motionplayer/main.cpp:220	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SEPARATELAYERADAPTOR-PROPERTY-ABSOLUTE	motionplayer.dll	SeparateLayerAdaptor	2	property	absolute	NCB_PROPERTY(absolute, getAbsolute, setAbsolute)	cpp/plugins/motionplayer/main.cpp:221	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SEPARATELAYERADAPTOR-PROPERTY-TARGETLAYER	motionplayer.dll	SeparateLayerAdaptor	3	property	targetLayer	NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer)	cpp/plugins/motionplayer/main.cpp:222	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SEPARATELAYERADAPTOR-METHOD-CLEAR	motionplayer.dll	SeparateLayerAdaptor	4	method	clear	NCB_METHOD(clear)	cpp/plugins/motionplayer/main.cpp:223	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-SEPARATELAYERADAPTOR-METHOD-ASSIGN	motionplayer.dll	SeparateLayerAdaptor	5	method	assign	NCB_METHOD(assign)	cpp/plugins/motionplayer/main.cpp:224	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-FACTORY-FACTORY	motionplayer.dll	D3DAdaptor	1	factory	<factory>	Factory(&D3DAdaptor::factory)	cpp/plugins/motionplayer/main.cpp:239	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-SETPOS	motionplayer.dll	D3DAdaptor	2	method	setPos	NCB_METHOD(setPos)	cpp/plugins/motionplayer/main.cpp:240	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-SETSIZE	motionplayer.dll	D3DAdaptor	3	method	setSize	NCB_METHOD(setSize)	cpp/plugins/motionplayer/main.cpp:241	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-SETCLEARCOLOR	motionplayer.dll	D3DAdaptor	4	method	setClearColor	NCB_METHOD(setClearColor)	cpp/plugins/motionplayer/main.cpp:242	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-SETRESIZABLE	motionplayer.dll	D3DAdaptor	5	method	setResizable	NCB_METHOD(setResizable)	cpp/plugins/motionplayer/main.cpp:243	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-REMOVEALLTEXTURES	motionplayer.dll	D3DAdaptor	6	method	removeAllTextures	NCB_METHOD(removeAllTextures)	cpp/plugins/motionplayer/main.cpp:244	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-REMOVEALLBG	motionplayer.dll	D3DAdaptor	7	method	removeAllBg	NCB_METHOD(removeAllBg)	cpp/plugins/motionplayer/main.cpp:245	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-REMOVEALLCAPTION	motionplayer.dll	D3DAdaptor	8	method	removeAllCaption	NCB_METHOD(removeAllCaption)	cpp/plugins/motionplayer/main.cpp:246	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-REGISTERBG	motionplayer.dll	D3DAdaptor	9	method	registerBg	NCB_METHOD(registerBg)	cpp/plugins/motionplayer/main.cpp:247	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-REGISTERCAPTION	motionplayer.dll	D3DAdaptor	10	method	registerCaption	NCB_METHOD(registerCaption)	cpp/plugins/motionplayer/main.cpp:248	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-UNLOADUNUSEDTEXTURES	motionplayer.dll	D3DAdaptor	11	method	unloadUnusedTextures	NCB_METHOD(unloadUnusedTextures)	cpp/plugins/motionplayer/main.cpp:249	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-PROPERTY-VISIBLE	motionplayer.dll	D3DAdaptor	12	property	visible	NCB_PROPERTY(visible, getVisible, setVisible)	cpp/plugins/motionplayer/main.cpp:250	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-PROPERTY-ALPHAOPADD	motionplayer.dll	D3DAdaptor	13	property	alphaOpAdd	NCB_PROPERTY(alphaOpAdd, getAlphaOpAdd, setAlphaOpAdd)	cpp/plugins/motionplayer/main.cpp:251	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-METHOD-CAPTURECANVAS	motionplayer.dll	D3DAdaptor	14	method	captureCanvas	NCB_METHOD(captureCanvas)	cpp/plugins/motionplayer/main.cpp:252	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-PROPERTY-CANVASCAPTUREENABLED	motionplayer.dll	D3DAdaptor	15	property	canvasCaptureEnabled	NCB_PROPERTY(canvasCaptureEnabled, getCanvasCaptureEnabled, setCanvasCaptureEnabled)	cpp/plugins/motionplayer/main.cpp:253	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-D3DADAPTOR-PROPERTY-CLEARENABLED	motionplayer.dll	D3DAdaptor	16	property	clearEnabled	NCB_PROPERTY(clearEnabled, getClearEnabled, setClearEnabled)	cpp/plugins/motionplayer/main.cpp:254	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	Player	1	constructor	<constructor>	NCB_CONSTRUCTOR((tTJSVariant))	cpp/plugins/motionplayer/main.cpp:284	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-DEFAULTSYNCACTIVE	motionplayer.dll	Player	2	property	defaultSyncActive	NCB_PROPERTY(defaultSyncActive, getDefaultSyncActive, setDefaultSyncActive)	cpp/plugins/motionplayer/main.cpp:290	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-DEFAULTTRANSFORMORDER	motionplayer.dll	Player	3	property	defaultTransformOrder	NCB_PROPERTY(defaultTransformOrder, getDefaultTransformOrder, setDefaultTransformOrder)	cpp/plugins/motionplayer/main.cpp:292	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-RESOURCEMANAGER	motionplayer.dll	Player	4	property_ro	resourceManager	NCB_PROPERTY_RO(resourceManager, getResourceManager)	cpp/plugins/motionplayer/main.cpp:294	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-LASTTIME	motionplayer.dll	Player	5	property_ro	lastTime	NCB_PROPERTY_RO(lastTime, getLastTime)	cpp/plugins/motionplayer/main.cpp:295	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-LOOPTIME	motionplayer.dll	Player	6	property_ro	loopTime	NCB_PROPERTY_RO(loopTime, getLoopTime)	cpp/plugins/motionplayer/main.cpp:296	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-VARIABLEKEYS	motionplayer.dll	Player	7	property_ro	variableKeys	NCB_PROPERTY_RO(variableKeys, getVariableKeys)	cpp/plugins/motionplayer/main.cpp:297	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-CHARA	motionplayer.dll	Player	8	property	chara	NCB_PROPERTY(chara, getChara, setChara)	cpp/plugins/motionplayer/main.cpp:298	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-STEALTHCHARA	motionplayer.dll	Player	9	property	stealthChara	NCB_PROPERTY(stealthChara, getStealthChara, setStealthChara)	cpp/plugins/motionplayer/main.cpp:299	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-MOTION	motionplayer.dll	Player	10	property	motion	NCB_PROPERTY(motion, getMotion, setMotion)	cpp/plugins/motionplayer/main.cpp:300	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-STEALTHMOTION	motionplayer.dll	Player	11	property	stealthMotion	NCB_PROPERTY(stealthMotion, getStealthMotion, setStealthMotion)	cpp/plugins/motionplayer/main.cpp:301	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-TAGS	motionplayer.dll	Player	12	property_ro	tags	NCB_PROPERTY_RO(tags, getTags)	cpp/plugins/motionplayer/main.cpp:302	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-MOTIONKEY	motionplayer.dll	Player	13	property	motionKey	NCB_PROPERTY(motionKey, getMotionKey, setMotionKey)	cpp/plugins/motionplayer/main.cpp:303	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-PROJECT	motionplayer.dll	Player	14	property	project	NCB_PROPERTY(project, getProject, setProject)	cpp/plugins/motionplayer/main.cpp:304	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-COMPLETIONTYPE	motionplayer.dll	Player	15	property	completionType	NCB_PROPERTY(completionType, getCompletionType, setCompletionType)	cpp/plugins/motionplayer/main.cpp:305	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-PREVIEW	motionplayer.dll	Player	16	property	preview	NCB_PROPERTY(preview, getPreview, setPreview)	cpp/plugins/motionplayer/main.cpp:306	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-PRIORDRAW	motionplayer.dll	Player	17	property	priorDraw	NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw)	cpp/plugins/motionplayer/main.cpp:307	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-OUTSIDEFACTOR	motionplayer.dll	Player	18	property	outsideFactor	NCB_PROPERTY(outsideFactor, getOutsideFactor, setOutsideFactor)	cpp/plugins/motionplayer/main.cpp:308	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-MESHDIVISIONRATIO	motionplayer.dll	Player	19	property	meshDivisionRatio	NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio)	cpp/plugins/motionplayer/main.cpp:309	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-SPEED	motionplayer.dll	Player	20	property	speed	NCB_PROPERTY(speed, getSpeed, setSpeed)	cpp/plugins/motionplayer/main.cpp:311	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-SYNCACTIVE	motionplayer.dll	Player	21	property	syncActive	NCB_PROPERTY(syncActive, getSyncActive, setSyncActive)	cpp/plugins/motionplayer/main.cpp:312	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-TICKCOUNT	motionplayer.dll	Player	22	property	tickCount	NCB_PROPERTY(tickCount, getTickCount, setTickCount)	cpp/plugins/motionplayer/main.cpp:313	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-FRAMETICKCOUNT	motionplayer.dll	Player	23	property	frameTickCount	NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount)	cpp/plugins/motionplayer/main.cpp:314	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-CAMERAACTIVE	motionplayer.dll	Player	24	property	cameraActive	NCB_PROPERTY(cameraActive, getCameraActive, setCameraActive)	cpp/plugins/motionplayer/main.cpp:315	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-STEREOVISIONACTIVE	motionplayer.dll	Player	25	property	stereovisionActive	NCB_PROPERTY(stereovisionActive, getStereovisionActive, setStereovisionActive)	cpp/plugins/motionplayer/main.cpp:316	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-OUTLINE	motionplayer.dll	Player	26	property	outline	NCB_PROPERTY(outline, getOutline, setOutline)	cpp/plugins/motionplayer/main.cpp:318	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-MESHLINE	motionplayer.dll	Player	27	property	meshline	NCB_PROPERTY(meshline, getMeshline, setMeshline)	cpp/plugins/motionplayer/main.cpp:319	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-MASKMODE	motionplayer.dll	Player	28	property	maskMode	NCB_PROPERTY(maskMode, getMaskMode, setMaskMode)	cpp/plugins/motionplayer/main.cpp:320	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-COLORWEIGHT	motionplayer.dll	Player	29	property	colorWeight	NCB_PROPERTY(colorWeight, getColorWeight, setColorWeight)	cpp/plugins/motionplayer/main.cpp:321	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-INDEPENDENTLAYERINHERIT	motionplayer.dll	Player	30	property	independentLayerInherit	NCB_PROPERTY(independentLayerInherit, getIndependentLayerInherit, setIndependentLayerInherit)	cpp/plugins/motionplayer/main.cpp:322	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-TRANSFORMORDER	motionplayer.dll	Player	31	property	transformOrder	NCB_PROPERTY(transformOrder, getTransformOrder, setTransformOrder)	cpp/plugins/motionplayer/main.cpp:324	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-COORDINATE	motionplayer.dll	Player	32	property	coordinate	NCB_PROPERTY(coordinate, getCoordinate, setCoordinate)	cpp/plugins/motionplayer/main.cpp:325	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-ZFACTOR	motionplayer.dll	Player	33	property	zFactor	NCB_PROPERTY(zFactor, getZFactor, setZFactor)	cpp/plugins/motionplayer/main.cpp:326	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-CAMERATARGET	motionplayer.dll	Player	34	property_ro	cameraTarget	NCB_PROPERTY_RO(cameraTarget, getCameraTarget)	cpp/plugins/motionplayer/main.cpp:327	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-CAMERAPOSITION	motionplayer.dll	Player	35	property_ro	cameraPosition	NCB_PROPERTY_RO(cameraPosition, getCameraPosition)	cpp/plugins/motionplayer/main.cpp:328	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-CAMERAFOV	motionplayer.dll	Player	36	property_ro	cameraFOV	NCB_PROPERTY_RO(cameraFOV, getCameraFOV)	cpp/plugins/motionplayer/main.cpp:329	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-CAMERAALIVE	motionplayer.dll	Player	37	property_ro	cameraAlive	NCB_PROPERTY_RO(cameraAlive, getCameraAlive)	cpp/plugins/motionplayer/main.cpp:330	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-BOUNDS	motionplayer.dll	Player	38	property_ro	bounds	NCB_PROPERTY_RO(bounds, getBounds)	cpp/plugins/motionplayer/main.cpp:331	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-PLAYING	motionplayer.dll	Player	39	property_ro	playing	NCB_PROPERTY_RO(playing, getPlaying)	cpp/plugins/motionplayer/main.cpp:332	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-ALLPLAYING	motionplayer.dll	Player	40	property_ro	allplaying	NCB_PROPERTY_RO(allplaying, getAllplaying)	cpp/plugins/motionplayer/main.cpp:333	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-SYNCWAITING	motionplayer.dll	Player	41	property_ro	syncWaiting	NCB_PROPERTY_RO(syncWaiting, getSyncWaiting)	cpp/plugins/motionplayer/main.cpp:334	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-FRAMELASTTIME	motionplayer.dll	Player	42	property_ro	frameLastTime	NCB_PROPERTY_RO(frameLastTime, getFrameLastTime)	cpp/plugins/motionplayer/main.cpp:335	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-FRAMELOOPTIME	motionplayer.dll	Player	43	property_ro	frameLoopTime	NCB_PROPERTY_RO(frameLoopTime, getFrameLoopTime)	cpp/plugins/motionplayer/main.cpp:336	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-HASCAMERA	motionplayer.dll	Player	44	property_ro	hasCamera	NCB_PROPERTY_RO(hasCamera, getHasCamera)	cpp/plugins/motionplayer/main.cpp:337	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-ANGLEDEG	motionplayer.dll	Player	45	property	angleDeg	NCB_PROPERTY(angleDeg, getAngleDeg, setAngleDeg)	cpp/plugins/motionplayer/main.cpp:338	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-ANGLERAD	motionplayer.dll	Player	46	property	angleRad	NCB_PROPERTY(angleRad, getAngleRad, setAngleRad)	cpp/plugins/motionplayer/main.cpp:339	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETCOORD	motionplayer.dll	Player	47	method	setCoord	NCB_METHOD(setCoord)	cpp/plugins/motionplayer/main.cpp:340	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-X	motionplayer.dll	Player	48	property	x	NCB_PROPERTY(x, getX, setX)	cpp/plugins/motionplayer/main.cpp:341	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-Y	motionplayer.dll	Player	49	property	y	NCB_PROPERTY(y, getY, setY)	cpp/plugins/motionplayer/main.cpp:342	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-LEFT	motionplayer.dll	Player	50	property	left	NCB_PROPERTY(left, getLeft, setLeft)	cpp/plugins/motionplayer/main.cpp:343	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-TOP	motionplayer.dll	Player	51	property	top	NCB_PROPERTY(top, getTop, setTop)	cpp/plugins/motionplayer/main.cpp:344	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETFLIP	motionplayer.dll	Player	52	method	setFlip	NCB_METHOD(setFlip)	cpp/plugins/motionplayer/main.cpp:345	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-FLIPX	motionplayer.dll	Player	53	property	flipX	NCB_PROPERTY(flipX, getFlipX, setFlipX)	cpp/plugins/motionplayer/main.cpp:346	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-FLIPY	motionplayer.dll	Player	54	property	flipY	NCB_PROPERTY(flipY, getFlipY, setFlipY)	cpp/plugins/motionplayer/main.cpp:347	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETOPACITY	motionplayer.dll	Player	55	method	setOpacity	NCB_METHOD(setOpacity)	cpp/plugins/motionplayer/main.cpp:348	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-OPACITY	motionplayer.dll	Player	56	property	opacity	NCB_PROPERTY(opacity, getOpacity, setOpacity)	cpp/plugins/motionplayer/main.cpp:349	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETVISIBLE	motionplayer.dll	Player	57	method	setVisible	NCB_METHOD(setVisible)	cpp/plugins/motionplayer/main.cpp:350	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-VISIBLE	motionplayer.dll	Player	58	property	visible	NCB_PROPERTY(visible, getVisible, setVisible)	cpp/plugins/motionplayer/main.cpp:351	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETSLANT	motionplayer.dll	Player	59	method	setSlant	NCB_METHOD(setSlant)	cpp/plugins/motionplayer/main.cpp:352	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-SLANTX	motionplayer.dll	Player	60	property	slantX	NCB_PROPERTY(slantX, getSlantX, setSlantX)	cpp/plugins/motionplayer/main.cpp:353	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-SLANTY	motionplayer.dll	Player	61	property	slantY	NCB_PROPERTY(slantY, getSlantY, setSlantY)	cpp/plugins/motionplayer/main.cpp:354	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETZOOM	motionplayer.dll	Player	62	method	setZoom	NCB_METHOD(setZoom)	cpp/plugins/motionplayer/main.cpp:355	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-ZOOMX	motionplayer.dll	Player	63	property	zoomX	NCB_PROPERTY(zoomX, getZoomX, setZoomX)	cpp/plugins/motionplayer/main.cpp:356	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-ZOOMY	motionplayer.dll	Player	64	property	zoomY	NCB_PROPERTY(zoomY, getZoomY, setZoomY)	cpp/plugins/motionplayer/main.cpp:357	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-USED3D	motionplayer.dll	Player	65	property	useD3D	NCB_PROPERTY(useD3D, getUseD3D, setUseD3D)	cpp/plugins/motionplayer/main.cpp:358	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY-PIXELATEDIVISION	motionplayer.dll	Player	66	property	pixelateDivision	NCB_PROPERTY(pixelateDivision, getPixelateDivision, setPixelateDivision)	cpp/plugins/motionplayer/main.cpp:359	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD_RAW-SETVARIABLE	motionplayer.dll	Player	67	method_raw	setVariable	NCB_METHOD_RAW_CALLBACK(setVariable, &Player::setVariableCompatMethod, 0)	cpp/plugins/motionplayer/main.cpp:361	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETVARIABLE	motionplayer.dll	Player	68	method	getVariable	NCB_METHOD(getVariable)	cpp/plugins/motionplayer/main.cpp:363	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-MODIFYROOT	motionplayer.dll	Player	69	method	modifyRoot	NCB_METHOD(modifyRoot)	cpp/plugins/motionplayer/main.cpp:364	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-PROPERTY_RO-PROCESSEDMESHVERTICESNUM	motionplayer.dll	Player	70	property_ro	processedMeshVerticesNum	NCB_PROPERTY_RO(processedMeshVerticesNum, getProcessedMeshVerticesNum)	cpp/plugins/motionplayer/main.cpp:365	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETLAYERNAMES	motionplayer.dll	Player	71	method	getLayerNames	NCB_METHOD(getLayerNames)	cpp/plugins/motionplayer/main.cpp:367	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD_RAW-PLAY	motionplayer.dll	Player	72	method_raw	play	NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0)	cpp/plugins/motionplayer/main.cpp:368	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD_RAW-PROGRESS	motionplayer.dll	Player	73	method_raw	progress	NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0)	cpp/plugins/motionplayer/main.cpp:369	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD_DETAIL-CLEAR	motionplayer.dll	Player	74	method_detail	clear	NCB_METHOD_DETAIL(clear, Class, void, Class::drawToLayerRecursive_guess, (tTJSVariant, tTJSVariant))	cpp/plugins/motionplayer/main.cpp:372	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-STOP	motionplayer.dll	Player	75	method	stop	NCB_METHOD(stop)	cpp/plugins/motionplayer/main.cpp:374	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETCAMERAOFFSET	motionplayer.dll	Player	76	method	setCameraOffset	NCB_METHOD(setCameraOffset)	cpp/plugins/motionplayer/main.cpp:375	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETCAMERAOFFSET	motionplayer.dll	Player	77	method	getCameraOffset	NCB_METHOD(getCameraOffset)	cpp/plugins/motionplayer/main.cpp:376	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-RELEASESYNCWAIT	motionplayer.dll	Player	78	method	releaseSyncWait	NCB_METHOD(releaseSyncWait)	cpp/plugins/motionplayer/main.cpp:377	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD_DETAIL-DRAW	motionplayer.dll	Player	79	method_detail	draw	NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant))	cpp/plugins/motionplayer/main.cpp:378	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETDRAWAFFINETRANSLATEMATRIX	motionplayer.dll	Player	80	method	setDrawAffineTranslateMatrix	NCB_METHOD(setDrawAffineTranslateMatrix)	cpp/plugins/motionplayer/main.cpp:380	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-CONTAINS	motionplayer.dll	Player	81	method	contains	NCB_METHOD(contains)	cpp/plugins/motionplayer/main.cpp:381	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-CALCVIEWPARAM	motionplayer.dll	Player	82	method	calcViewParam	NCB_METHOD(calcViewParam)	cpp/plugins/motionplayer/main.cpp:382	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETCOMMANDLIST	motionplayer.dll	Player	83	method	getCommandList	NCB_METHOD(getCommandList)	cpp/plugins/motionplayer/main.cpp:383	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETLAYERMOTION	motionplayer.dll	Player	84	method	getLayerMotion	NCB_METHOD(getLayerMotion)	cpp/plugins/motionplayer/main.cpp:384	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETLAYERGETTER	motionplayer.dll	Player	85	method	getLayerGetter	NCB_METHOD(getLayerGetter)	cpp/plugins/motionplayer/main.cpp:385	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-GETLAYERGETTERLIST	motionplayer.dll	Player	86	method	getLayerGetterList	NCB_METHOD(getLayerGetterList)	cpp/plugins/motionplayer/main.cpp:386	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SKIPTOSYNC	motionplayer.dll	Player	87	method	skipToSync	NCB_METHOD(skipToSync)	cpp/plugins/motionplayer/main.cpp:387	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-ONACTION	motionplayer.dll	Player	88	method	onAction	NCB_METHOD(onAction)	cpp/plugins/motionplayer/main.cpp:388	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-ONSYNC	motionplayer.dll	Player	89	method	onSync	NCB_METHOD(onSync)	cpp/plugins/motionplayer/main.cpp:389	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-ONGROUNDCORRECTION	motionplayer.dll	Player	90	method	onGroundCorrection	NCB_METHOD(onGroundCorrection)	cpp/plugins/motionplayer/main.cpp:390	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-ONFINDMOTION	motionplayer.dll	Player	91	method	onFindMotion	NCB_METHOD(onFindMotion)	cpp/plugins/motionplayer/main.cpp:391	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-ISEXISTMOTION	motionplayer.dll	Player	92	method	isExistMotion	NCB_METHOD(isExistMotion)	cpp/plugins/motionplayer/main.cpp:392	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-PLAYER-METHOD-SETSTEREOVISIONCAMERAPOSITION	motionplayer.dll	Player	93	method	setStereovisionCameraPosition	NCB_METHOD(setStereovisionCameraPosition)	cpp/plugins/motionplayer/main.cpp:393	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-FACTORY-FACTORY	motionplayer.dll	EmotePlayer	1	factory	<factory>	Factory(&EmotePlayer::factory)	cpp/plugins/motionplayer/main.cpp:407	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-VARIANT-TIMELINEPLAYFLAGPARALLEL	motionplayer.dll	EmotePlayer	2	variant	TimelinePlayFlagParallel	"Variant(TJS_W(""TimelinePlayFlagParallel""), (tjs_int)TimelinePlayFlagParallel)"	cpp/plugins/motionplayer/main.cpp:410	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-VARIANT-TIMELINEPLAYFLAGDIFFERENCE	motionplayer.dll	EmotePlayer	3	variant	TimelinePlayFlagDifference	"Variant(TJS_W(""TimelinePlayFlagDifference""), (tjs_int)TimelinePlayFlagDifference)"	cpp/plugins/motionplayer/main.cpp:412	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-PROGRESS	motionplayer.dll	EmotePlayer	4	method	progress	NCB_METHOD(progress)	cpp/plugins/motionplayer/main.cpp:416	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-FRAMEPROGRESS	motionplayer.dll	EmotePlayer	5	method	frameProgress	"Method(TJS_W(""frameProgress""), &EmoteEngine::progress)"	cpp/plugins/motionplayer/main.cpp:417	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-DRAW	motionplayer.dll	EmotePlayer	6	method	draw	NCB_METHOD(draw)	cpp/plugins/motionplayer/main.cpp:419	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-INITPHYSICS	motionplayer.dll	EmotePlayer	7	method	initPhysics	"Method(TJS_W(""initPhysics""), &EmoteEngine::applyMetadata_guess)"	cpp/plugins/motionplayer/main.cpp:420	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-STARTWIND	motionplayer.dll	EmotePlayer	8	method	startWind	"Method(TJS_W(""startWind""), &EmoteEngine::setWind_guess)"	cpp/plugins/motionplayer/main.cpp:422	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-STOPWIND	motionplayer.dll	EmotePlayer	9	method	stopWind	NCB_METHOD(stopWind)	cpp/plugins/motionplayer/main.cpp:424	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-PLAY	motionplayer.dll	EmotePlayer	10	method	play	NCB_METHOD(play)	cpp/plugins/motionplayer/main.cpp:425	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-CLEAR	motionplayer.dll	EmotePlayer	11	method	clear	NCB_METHOD(clear)	cpp/plugins/motionplayer/main.cpp:426	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETVARIABLE	motionplayer.dll	EmotePlayer	12	method	getVariable	"Method(TJS_W(""getVariable""), &EmoteEngine::getVariable)"	cpp/plugins/motionplayer/main.cpp:427	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-CONTAINS	motionplayer.dll	EmotePlayer	13	method	contains	NCB_METHOD(contains)	cpp/plugins/motionplayer/main.cpp:429	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SERIALIZE	motionplayer.dll	EmotePlayer	14	method	serialize	"Method(TJS_W(""serialize""), &EmoteEngine::serializeState_guess)"	cpp/plugins/motionplayer/main.cpp:430	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-UNSERIALIZE	motionplayer.dll	EmotePlayer	15	method	unserialize	"Method(TJS_W(""unserialize""), &EmoteEngine::unserializeState_guess)"	cpp/plugins/motionplayer/main.cpp:432	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-PASS	motionplayer.dll	EmotePlayer	16	method	pass	NCB_METHOD(pass)	cpp/plugins/motionplayer/main.cpp:434	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETVARIABLE	motionplayer.dll	EmotePlayer	17	method_raw	setVariable	NCB_METHOD_RAW_CALLBACK(setVariable, &EmotePlayer::setVariableCompat, 0)	cpp/plugins/motionplayer/main.cpp:435	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETCOORD	motionplayer.dll	EmotePlayer	18	method_raw	setCoord	NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0)	cpp/plugins/motionplayer/main.cpp:436	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETSCALE	motionplayer.dll	EmotePlayer	19	method_raw	setScale	NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0)	cpp/plugins/motionplayer/main.cpp:437	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETROTATE	motionplayer.dll	EmotePlayer	20	method_raw	setRotate	NCB_METHOD_RAW_CALLBACK(setRotate, &EmotePlayer::setRotateCompat, 0)	cpp/plugins/motionplayer/main.cpp:438	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETCOLOR	motionplayer.dll	EmotePlayer	21	method_raw	setColor	NCB_METHOD_RAW_CALLBACK(setColor, &EmotePlayer::setColorCompat, 0)	cpp/plugins/motionplayer/main.cpp:439	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETOUTERFORCE	motionplayer.dll	EmotePlayer	22	method_raw	setOuterForce	NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0)	cpp/plugins/motionplayer/main.cpp:440	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-COMPLETIONTYPE	motionplayer.dll	EmotePlayer	23	property	completionType	NCB_PROPERTY(completionType, getCompletionType, setCompletionType)	cpp/plugins/motionplayer/main.cpp:443	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-CHARA	motionplayer.dll	EmotePlayer	24	property	chara	NCB_PROPERTY(chara, getChara, setChara)	cpp/plugins/motionplayer/main.cpp:444	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-MOTION	motionplayer.dll	EmotePlayer	25	property	motion	NCB_PROPERTY(motion, getMotion, setMotion)	cpp/plugins/motionplayer/main.cpp:445	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-MOTIONKEY	motionplayer.dll	EmotePlayer	26	property	motionKey	NCB_PROPERTY(motionKey, getMotionKey, setMotionKey)	cpp/plugins/motionplayer/main.cpp:446	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-PROJECT	motionplayer.dll	EmotePlayer	27	property	project	NCB_PROPERTY(project, getMotionKey, setMotionKey)	cpp/plugins/motionplayer/main.cpp:447	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-MASKMODE	motionplayer.dll	EmotePlayer	28	property	maskMode	NCB_PROPERTY(maskMode, getMaskMode, setMaskMode)	cpp/plugins/motionplayer/main.cpp:448	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-MESHDIVISIONRATIO	motionplayer.dll	EmotePlayer	29	property	meshDivisionRatio	NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio)	cpp/plugins/motionplayer/main.cpp:449	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-OUTLINE	motionplayer.dll	EmotePlayer	30	property	outline	NCB_PROPERTY(outline, getOutline, setOutline)	cpp/plugins/motionplayer/main.cpp:450	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-PRIORDRAW	motionplayer.dll	EmotePlayer	31	property	priorDraw	NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw)	cpp/plugins/motionplayer/main.cpp:451	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-FRAMELASTTIME	motionplayer.dll	EmotePlayer	32	property_ro	frameLastTime	NCB_PROPERTY_RO(frameLastTime, getFrameLastTime)	cpp/plugins/motionplayer/main.cpp:452	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-FRAMELOOPTIME	motionplayer.dll	EmotePlayer	33	property_ro	frameLoopTime	NCB_PROPERTY_RO(frameLoopTime, getFrameLoopTime)	cpp/plugins/motionplayer/main.cpp:453	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-LASTTIME	motionplayer.dll	EmotePlayer	34	property_ro	lastTime	NCB_PROPERTY_RO(lastTime, getFrameLastTime)	cpp/plugins/motionplayer/main.cpp:454	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-LOOPTIME	motionplayer.dll	EmotePlayer	35	property_ro	loopTime	NCB_PROPERTY_RO(loopTime, getFrameLoopTime)	cpp/plugins/motionplayer/main.cpp:455	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-BOUNDS	motionplayer.dll	EmotePlayer	36	property_ro	bounds	NCB_PROPERTY_RO(bounds, getBounds)	cpp/plugins/motionplayer/main.cpp:456	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-PROCESSEDMESHVERTICESNUM	motionplayer.dll	EmotePlayer	37	property_ro	processedMeshVerticesNum	NCB_PROPERTY_RO(processedMeshVerticesNum, getProcessedMeshVerticesNum)	cpp/plugins/motionplayer/main.cpp:457	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SETDRAWAFFINETRANSLATEMATRIX	motionplayer.dll	EmotePlayer	38	method	setDrawAffineTranslateMatrix	NCB_METHOD(setDrawAffineTranslateMatrix)	cpp/plugins/motionplayer/main.cpp:459	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETCAMERAOFFSET	motionplayer.dll	EmotePlayer	39	method	getCameraOffset	NCB_METHOD(getCameraOffset)	cpp/plugins/motionplayer/main.cpp:462	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SETCAMERAOFFSET	motionplayer.dll	EmotePlayer	40	method	setCameraOffset	NCB_METHOD(setCameraOffset)	cpp/plugins/motionplayer/main.cpp:463	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-MODIFYROOT	motionplayer.dll	EmotePlayer	41	method	modifyRoot	NCB_METHOD(modifyRoot)	cpp/plugins/motionplayer/main.cpp:464	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SETHAIRSCALE	motionplayer.dll	EmotePlayer	42	method	setHairScale	NCB_METHOD(setHairScale)	cpp/plugins/motionplayer/main.cpp:465	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SETPARTSSCALE	motionplayer.dll	EmotePlayer	43	method	setPartsScale	NCB_METHOD(setPartsScale)	cpp/plugins/motionplayer/main.cpp:466	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SETBUSTSCALE	motionplayer.dll	EmotePlayer	44	method	setBustScale	NCB_METHOD(setBustScale)	cpp/plugins/motionplayer/main.cpp:467	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-HAIRSCALE	motionplayer.dll	EmotePlayer	45	property	hairScale	NCB_PROPERTY(hairScale, getHairScale, setHairScale)	cpp/plugins/motionplayer/main.cpp:470	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-BUSTSCALE	motionplayer.dll	EmotePlayer	46	property	bustScale	NCB_PROPERTY(bustScale, getBustScale, setBustScale)	cpp/plugins/motionplayer/main.cpp:471	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-PARTSSCALE	motionplayer.dll	EmotePlayer	47	property	partsScale	NCB_PROPERTY(partsScale, getPartsScale, setPartsScale)	cpp/plugins/motionplayer/main.cpp:472	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-DEBUGPRINT	motionplayer.dll	EmotePlayer	48	property	debugPrint	NCB_PROPERTY(debugPrint, getDebugPrint, setDebugPrint)	cpp/plugins/motionplayer/main.cpp:473	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-QUEUING	motionplayer.dll	EmotePlayer	49	property	queuing	NCB_PROPERTY(queuing, getQueuing, setQueuing)	cpp/plugins/motionplayer/main.cpp:474	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-DIRECTEDIT	motionplayer.dll	EmotePlayer	50	property	directEdit	NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit)	cpp/plugins/motionplayer/main.cpp:475	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-SELECTORENABLED	motionplayer.dll	EmotePlayer	51	property	selectorEnabled	NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled)	cpp/plugins/motionplayer/main.cpp:476	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY_RO-VARIABLEKEYS	motionplayer.dll	EmotePlayer	52	property_ro	variableKeys	NCB_PROPERTY_RO(variableKeys, getVariableKeys)	cpp/plugins/motionplayer/main.cpp:477	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-PROPERTY-ANIMATING	motionplayer.dll	EmotePlayer	53	property	animating	"Property(TJS_W(""animating""), &EmoteEngine::getAnimating_guess, (int)0)"	cpp/plugins/motionplayer/main.cpp:478	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SETMIRROR	motionplayer.dll	EmotePlayer	54	method	setMirror	"Method(TJS_W(""setMirror""), &EmoteEngine::setMirror_guess)"	cpp/plugins/motionplayer/main.cpp:482	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-SKIP	motionplayer.dll	EmotePlayer	55	method	skip	"Method(TJS_W(""skip""), &EmoteEngine::resetControllers_guess)"	cpp/plugins/motionplayer/main.cpp:484	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-PLAYTIMELINE	motionplayer.dll	EmotePlayer	56	method_raw	playTimeline	NCB_METHOD_RAW_CALLBACK( playTimeline, &EmotePlayer::playTimelineRawCallback_guess, 0)	cpp/plugins/motionplayer/main.cpp:486	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-STOPTIMELINE	motionplayer.dll	EmotePlayer	57	method_raw	stopTimeline	NCB_METHOD_RAW_CALLBACK( stopTimeline, &EmotePlayer::stopTimelineRawCallback_guess, 0)	cpp/plugins/motionplayer/main.cpp:488	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-GETTIMELINEPLAYING	motionplayer.dll	EmotePlayer	58	method_raw	getTimelinePlaying	NCB_METHOD_RAW_CALLBACK( getTimelinePlaying, &EmotePlayer::getTimelinePlayingRawCallback_guess, 0)	cpp/plugins/motionplayer/main.cpp:490	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-SETTIMELINEBLENDRATIO	motionplayer.dll	EmotePlayer	59	method_raw	setTimelineBlendRatio	NCB_METHOD_RAW_CALLBACK( setTimelineBlendRatio, &EmotePlayer::setTimelineBlendRatioRawCallback_guess, 0)	cpp/plugins/motionplayer/main.cpp:493	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-FADEINTIMELINE	motionplayer.dll	EmotePlayer	60	method_raw	fadeInTimeline	NCB_METHOD_RAW_CALLBACK( fadeInTimeline, &EmotePlayer::fadeInTimelineRawCallback_guess, 0)	cpp/plugins/motionplayer/main.cpp:496	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD_RAW-FADEOUTTIMELINE	motionplayer.dll	EmotePlayer	61	method_raw	fadeOutTimeline	NCB_METHOD_RAW_CALLBACK( fadeOutTimeline, &EmotePlayer::fadeOutTimelineRawCallback_guess, 0)	cpp/plugins/motionplayer/main.cpp:498	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETTIMELINEBLENDRATIO	motionplayer.dll	EmotePlayer	62	method	getTimelineBlendRatio	"Method(TJS_W(""getTimelineBlendRatio""), &EmoteEngine::getTimelineBlendRatio_guess)"	cpp/plugins/motionplayer/main.cpp:500	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETVARIABLERANGE	motionplayer.dll	EmotePlayer	63	method	getVariableRange	NCB_METHOD(getVariableRange)	cpp/plugins/motionplayer/main.cpp:502	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETVARIABLEFRAMELIST	motionplayer.dll	EmotePlayer	64	method	getVariableFrameList	NCB_METHOD(getVariableFrameList)	cpp/plugins/motionplayer/main.cpp:503	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETMAINTIMELINELABELLIST	motionplayer.dll	EmotePlayer	65	method	getMainTimelineLabelList	"Method(TJS_W(""getMainTimelineLabelList""), &EmoteEngine::getMainTimelineLabelList_guess)"	cpp/plugins/motionplayer/main.cpp:504	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETDIFFTIMELINELABELLIST	motionplayer.dll	EmotePlayer	66	method	getDiffTimelineLabelList	"Method(TJS_W(""getDiffTimelineLabelList""), &EmoteEngine::getDiffTimelineLabelList_guess)"	cpp/plugins/motionplayer/main.cpp:506	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETLOOPTIMELINE	motionplayer.dll	EmotePlayer	67	method	getLoopTimeline	"Method(TJS_W(""getLoopTimeline""), &EmoteEngine::getLoopTimeline_guess)"	cpp/plugins/motionplayer/main.cpp:508	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETTIMELINETOTALFRAMECOUNT	motionplayer.dll	EmotePlayer	68	method	getTimelineTotalFrameCount	"Method(TJS_W(""getTimelineTotalFrameCount""), &EmoteEngine::getTimelineTotalFrameCount_guess)"	cpp/plugins/motionplayer/main.cpp:510	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETPLAYINGTIMELINEINFOLIST	motionplayer.dll	EmotePlayer	69	method	getPlayingTimelineInfoList	"Method(TJS_W(""getPlayingTimelineInfoList""), &EmoteEngine::getPlayingTimelineInfoList_guess)"	cpp/plugins/motionplayer/main.cpp:512	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-ISSELECTORTARGET	motionplayer.dll	EmotePlayer	70	method	isSelectorTarget	"Method(TJS_W(""isSelectorTarget""), &EmoteEngine::isSelectorTarget)"	cpp/plugins/motionplayer/main.cpp:515	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-ACTIVATESELECTORTARGET	motionplayer.dll	EmotePlayer	71	method	activateSelectorTarget	"Method(TJS_W(""activateSelectorTarget""), &EmoteEngine::activateSelectorTarget)"	cpp/plugins/motionplayer/main.cpp:517	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-DEACTIVATESELECTORTARGET	motionplayer.dll	EmotePlayer	72	method	deactivateSelectorTarget	"Method(TJS_W(""deactivateSelectorTarget""), &EmoteEngine::deactivateSelectorTarget)"	cpp/plugins/motionplayer/main.cpp:519	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-EMOTEPLAYER-METHOD-GETCOMMANDLIST	motionplayer.dll	EmotePlayer	73	method	getCommandList	NCB_METHOD(getCommandList)	cpp/plugins/motionplayer/main.cpp:521	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-CONSTRUCTOR-CONSTRUCTOR	motionplayer.dll	ResourceManager	1	constructor	<constructor>	NCB_CONSTRUCTOR((tTJSVariant, tjs_int))	cpp/plugins/motionplayer/main.cpp:536	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-LOADSOURCE	motionplayer.dll	ResourceManager	2	method	loadSource	NCB_METHOD(loadSource)	cpp/plugins/motionplayer/main.cpp:542	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-CLEARCACHE	motionplayer.dll	ResourceManager	3	method	clearCache	NCB_METHOD(clearCache)	cpp/plugins/motionplayer/main.cpp:543	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-PROPERTY_RO-BUFLAYER	motionplayer.dll	ResourceManager	4	property_ro	bufLayer	NCB_PROPERTY_RO(bufLayer, getBufLayer)	cpp/plugins/motionplayer/main.cpp:544	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-LOAD	motionplayer.dll	ResourceManager	5	method	load	NCB_METHOD(load)	cpp/plugins/motionplayer/main.cpp:545	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-UNLOAD	motionplayer.dll	ResourceManager	6	method	unload	NCB_METHOD(unload)	cpp/plugins/motionplayer/main.cpp:546	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-UNLOADALL	motionplayer.dll	ResourceManager	7	method	unloadAll	NCB_METHOD(unloadAll)	cpp/plugins/motionplayer/main.cpp:547	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-ISEXISTMOTION	motionplayer.dll	ResourceManager	8	method	isExistMotion	NCB_METHOD(isExistMotion)	cpp/plugins/motionplayer/main.cpp:548	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-FINDMOTION	motionplayer.dll	ResourceManager	9	method	findMotion	NCB_METHOD(findMotion)	cpp/plugins/motionplayer/main.cpp:549	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-FINDSOURCE	motionplayer.dll	ResourceManager	10	method	findSource	NCB_METHOD(findSource)	cpp/plugins/motionplayer/main.cpp:550	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-RANDOM	motionplayer.dll	ResourceManager	11	method	random	NCB_METHOD(random)	cpp/plugins/motionplayer/main.cpp:551	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-REQUIRELAYERID	motionplayer.dll	ResourceManager	12	method	requireLayerId	NCB_METHOD(requireLayerId)	cpp/plugins/motionplayer/main.cpp:552	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-RESOURCEMANAGER-METHOD-RELEASELAYERID	motionplayer.dll	ResourceManager	13	method	releaseLayerId	NCB_METHOD(releaseLayerId)	cpp/plugins/motionplayer/main.cpp:553	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-LAYERTYPEOBJ	motionplayer.dll	Motion	1	variant	LayerTypeObj	"Variant(TJS_W(""LayerTypeObj""), (tjs_int)LayerTypeObj)"	cpp/plugins/motionplayer/main.cpp:584	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-LAYERTYPESHAPE	motionplayer.dll	Motion	2	variant	LayerTypeShape	"Variant(TJS_W(""LayerTypeShape""), (tjs_int)LayerTypeShape)"	cpp/plugins/motionplayer/main.cpp:585	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-LAYERTYPELAYOUT	motionplayer.dll	Motion	3	variant	LayerTypeLayout	"Variant(TJS_W(""LayerTypeLayout""), (tjs_int)LayerTypeLayout)"	cpp/plugins/motionplayer/main.cpp:586	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-LAYERTYPEMOTION	motionplayer.dll	Motion	4	variant	LayerTypeMotion	"Variant(TJS_W(""LayerTypeMotion""), (tjs_int)LayerTypeMotion)"	cpp/plugins/motionplayer/main.cpp:587	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-LAYERTYPEPARTICLE	motionplayer.dll	Motion	5	variant	LayerTypeParticle	"Variant(TJS_W(""LayerTypeParticle""), (tjs_int)LayerTypeParticle)"	cpp/plugins/motionplayer/main.cpp:588	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-LAYERTYPECAMERA	motionplayer.dll	Motion	6	variant	LayerTypeCamera	"Variant(TJS_W(""LayerTypeCamera""), (tjs_int)LayerTypeCamera)"	cpp/plugins/motionplayer/main.cpp:589	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-SHAPETYPEPOINT	motionplayer.dll	Motion	7	variant	ShapeTypePoint	"Variant(TJS_W(""ShapeTypePoint""), (tjs_int)ShapeTypePoint)"	cpp/plugins/motionplayer/main.cpp:590	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-SHAPETYPECIRCLE	motionplayer.dll	Motion	8	variant	ShapeTypeCircle	"Variant(TJS_W(""ShapeTypeCircle""), (tjs_int)ShapeTypeCircle)"	cpp/plugins/motionplayer/main.cpp:591	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-SHAPETYPERECT	motionplayer.dll	Motion	9	variant	ShapeTypeRect	"Variant(TJS_W(""ShapeTypeRect""), (tjs_int)ShapeTypeRect)"	cpp/plugins/motionplayer/main.cpp:592	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-SHAPETYPEQUAD	motionplayer.dll	Motion	10	variant	ShapeTypeQuad	"Variant(TJS_W(""ShapeTypeQuad""), (tjs_int)ShapeTypeQuad)"	cpp/plugins/motionplayer/main.cpp:593	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-PLAYFLAGFORCE	motionplayer.dll	Motion	11	variant	PlayFlagForce	"Variant(TJS_W(""PlayFlagForce""), (tjs_int)PlayFlagForce)"	cpp/plugins/motionplayer/main.cpp:594	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-PLAYFLAGCHAIN	motionplayer.dll	Motion	12	variant	PlayFlagChain	"Variant(TJS_W(""PlayFlagChain""), (tjs_int)PlayFlagChain)"	cpp/plugins/motionplayer/main.cpp:595	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-PLAYFLAGASCAN	motionplayer.dll	Motion	13	variant	PlayFlagAsCan	"Variant(TJS_W(""PlayFlagAsCan""), (tjs_int)PlayFlagAsCan)"	cpp/plugins/motionplayer/main.cpp:596	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-PLAYFLAGJOIN	motionplayer.dll	Motion	14	variant	PlayFlagJoin	"Variant(TJS_W(""PlayFlagJoin""), (tjs_int)PlayFlagJoin)"	cpp/plugins/motionplayer/main.cpp:597	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-PLAYFLAGSTEALTH	motionplayer.dll	Motion	15	variant	PlayFlagStealth	"Variant(TJS_W(""PlayFlagStealth""), (tjs_int)PlayFlagStealth)"	cpp/plugins/motionplayer/main.cpp:598	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-TRANSFORMORDERFLIP	motionplayer.dll	Motion	16	variant	TransformOrderFlip	"Variant(TJS_W(""TransformOrderFlip""), (tjs_int)TransformOrderFlip)"	cpp/plugins/motionplayer/main.cpp:599	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-TRANSFORMORDERSLANT	motionplayer.dll	Motion	17	variant	TransformOrderSlant	"Variant(TJS_W(""TransformOrderSlant""), (tjs_int)TransformOrderSlant)"	cpp/plugins/motionplayer/main.cpp:600	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-TRANSFORMORDERZOOM	motionplayer.dll	Motion	18	variant	TransformOrderZoom	"Variant(TJS_W(""TransformOrderZoom""), (tjs_int)TransformOrderZoom)"	cpp/plugins/motionplayer/main.cpp:601	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-TRANSFORMORDERANGLE	motionplayer.dll	Motion	19	variant	TransformOrderAngle	"Variant(TJS_W(""TransformOrderAngle""), (tjs_int)TransformOrderAngle)"	cpp/plugins/motionplayer/main.cpp:602	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-COORDINATERECUTANGULARXY	motionplayer.dll	Motion	20	variant	CoordinateRecutangularXY	"Variant(TJS_W(""CoordinateRecutangularXY""), (tjs_int)CoordinateRecutangularXY)"	cpp/plugins/motionplayer/main.cpp:603	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-COORDINATERECUTANGULARXZ	motionplayer.dll	Motion	21	variant	CoordinateRecutangularXZ	"Variant(TJS_W(""CoordinateRecutangularXZ""), (tjs_int)CoordinateRecutangularXZ)"	cpp/plugins/motionplayer/main.cpp:605	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-MASKMODESTENCIL	motionplayer.dll	Motion	22	variant	MaskModeStencil	"Variant(TJS_W(""MaskModeStencil""), (tjs_int)MaskModeStencil)"	cpp/plugins/motionplayer/main.cpp:607	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-VARIANT-MASKMODEALPHA	motionplayer.dll	Motion	23	variant	MaskModeAlpha	"Variant(TJS_W(""MaskModeAlpha""), (tjs_int)MaskModeAlpha)"	cpp/plugins/motionplayer/main.cpp:608	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-POINT	motionplayer.dll	Motion	24	subclass	Point	NCB_SUBCLASS(Point, Point)	cpp/plugins/motionplayer/main.cpp:612	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-CIRCLE	motionplayer.dll	Motion	25	subclass	Circle	NCB_SUBCLASS(Circle, Circle)	cpp/plugins/motionplayer/main.cpp:613	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-RECT	motionplayer.dll	Motion	26	subclass	Rect	NCB_SUBCLASS(Rect, Rect)	cpp/plugins/motionplayer/main.cpp:614	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-QUAD	motionplayer.dll	Motion	27	subclass	Quad	NCB_SUBCLASS(Quad, Quad)	cpp/plugins/motionplayer/main.cpp:615	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-LAYERGETTER	motionplayer.dll	Motion	28	subclass	LayerGetter	NCB_SUBCLASS(LayerGetter, LayerGetter)	cpp/plugins/motionplayer/main.cpp:616	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-PLAYER	motionplayer.dll	Motion	29	subclass	Player	NCB_SUBCLASS(Player, Player)	cpp/plugins/motionplayer/main.cpp:617	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-SOURCECACHE	motionplayer.dll	Motion	30	subclass	SourceCache	NCB_SUBCLASS(SourceCache, SourceCache)	cpp/plugins/motionplayer/main.cpp:618	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-OBJSOURCE	motionplayer.dll	Motion	31	subclass	ObjSource	NCB_SUBCLASS(ObjSource, ObjSource)	cpp/plugins/motionplayer/main.cpp:619	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-RESOURCEMANAGER	motionplayer.dll	Motion	32	subclass	ResourceManager	NCB_SUBCLASS(ResourceManager, ResourceManager)	cpp/plugins/motionplayer/main.cpp:620	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-SEPARATELAYERADAPTOR	motionplayer.dll	Motion	33	subclass	SeparateLayerAdaptor	NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor)	cpp/plugins/motionplayer/main.cpp:623	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-SUBCLASS-D3DADAPTOR	motionplayer.dll	Motion	34	subclass	D3DAdaptor	NCB_SUBCLASS(D3DAdaptor, D3DAdaptor)	cpp/plugins/motionplayer/main.cpp:627	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-METHOD-DOALPHAMASKOPERATION	motionplayer.dll	Motion	35	method	doAlphaMaskOperation	"Method(TJS_W(""doAlphaMaskOperation""), &motion_doAlphaMaskOperation)"	cpp/plugins/motionplayer/main.cpp:630	UNMAPPED
+LOCAL-NCB-MOTIONPLAYER_DLL-MOTION-METHOD-GETD3DAVAILABLE	motionplayer.dll	Motion	36	method	getD3DAvailable	"Method(TJS_W(""getD3DAvailable""), &motion_getD3DAvailable)"	cpp/plugins/motionplayer/main.cpp:631	UNMAPPED

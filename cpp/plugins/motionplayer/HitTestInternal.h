@@ -30,13 +30,15 @@ namespace motion::detail {
                 return dx * dx + dy * dy <= r * r;
             }
             case 2:
-                // Preserve the reference's rejection order.  The equivalent
-                // looking positive conjunction differs when x/y is NaN.
-                if(hit.values[3] > x || hit.values[5] <= x ||
-                   hit.values[4] > y) {
+                // Each gate requires an ordered comparison.  Writing the
+                // tempting opposite predicates (`left > x`, etc.) would let a
+                // NaN bound pass even though all four native condition-code
+                // paths reject it.
+                if(!(hit.values[3] <= x) || !(x < hit.values[5]) ||
+                   !(hit.values[4] <= y)) {
                     return false;
                 }
-                return hit.values[6] > y;
+                return y < hit.values[6];
             case 3: {
                 const double x0 = hit.values[7];
                 const double y0 = hit.values[8];
@@ -47,7 +49,9 @@ namespace motion::detail {
                 const double orientation =
                     (y2 - y0) * x1 + (x0 - x2) * y1 -
                     ((y2 - y0) * x0 + y0 * (x0 - x2));
-                const double direction = orientation < 0.0 ? -1.0 : 1.0;
+                // ARM LT is selected for the -1.0 arm in all four references;
+                // unordered FCMP flags therefore also select -1.0.
+                const double direction = orientation >= 0.0 ? 1.0 : -1.0;
 
                 for(std::size_t i = 0; i < 4; ++i) {
                     const std::size_t current = 7 + i * 2;

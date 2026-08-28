@@ -171,12 +171,15 @@ namespace motion {
     int LayerGetter::getType() const { return _node->nodeType; }
     ttstr LayerGetter::getLabel() const { return _node->layerName; }
     ttstr LayerGetter::getSrc() const { return _node->activeSlot().srcValue; }
-    bool LayerGetter::getVisible() const { return _node->accumulated.visible; }
+    bool LayerGetter::getVisible() const {
+        return _node->layerGetterVisible_guess;
+    }
     bool LayerGetter::getBranchVisible() const {
-        return _node->accumulated.active;
+        return _node->layerGetterBranchVisible_guess;
     }
     bool LayerGetter::getLayerVisible() const {
-        return _node->accumulated.visible && _node->accumulated.active;
+        return _node->layerGetterVisible_guess &&
+               _node->layerGetterBranchVisible_guess;
     }
     double LayerGetter::getX() const { return _node->accumulated.posX; }
     double LayerGetter::getY() const { return _node->accumulated.posY; }
@@ -213,10 +216,10 @@ namespace motion {
 
     tTJSVariant LayerGetter::getMtx() const {
         auto result = detail::createTJSArrayWithItems_guess();
-        result.items->emplace_back(_node->accumulated.m11);
-        result.items->emplace_back(_node->accumulated.m12);
-        result.items->emplace_back(_node->accumulated.m21);
-        result.items->emplace_back(_node->accumulated.m22);
+        result.items->emplace_back(_node->matrix.m11);
+        result.items->emplace_back(_node->matrix.m12);
+        result.items->emplace_back(_node->matrix.m21);
+        result.items->emplace_back(_node->matrix.m22);
         return result.value;
     }
 
@@ -447,10 +450,15 @@ namespace motion {
         frameProgress(0.0);
         updateLayers();
 
+        // The native body retains only the outer viewParams Object dispatch
+        // for the complete traversal. Every numeric lookup uses that same
+        // retained receiver even if script re-entry clears the caller's owner.
+        ncbPropAccessor viewParamList(viewParams);
         for(std::size_t nodeIndex = 1; nodeIndex < _nodes.size(); ++nodeIndex) {
             auto &node = _nodes[nodeIndex];
             const tTJSVariant outputValue = detail::motionPropGetByNum(
-                viewParams, static_cast<tjs_int>(nodeIndex - 1));
+                viewParamList.GetDispatch(),
+                static_cast<tjs_int>(nodeIndex - 1));
             ncbPropAccessor output(outputValue);
 
             const bool exportable =
@@ -491,69 +499,71 @@ namespace motion {
                 &detail::calcMbpMemberHint_guess);
 
             auto compositeMesh = detail::createTJSArrayWithItems_guess();
-            ncbDictionaryAccessor separator;
-            (void)separator.SetValue(
-                TJS_W("type"), ttstr(TJS_W("mesh.inherit.separator")),
-                TJS_MEMBERENSURE, &detail::typeMemberHint_guess);
-            const tTJSVariant separatorValue(
-                separator.GetDispatch(), separator.GetDispatch());
-            if(node.meshInheritanceSeparator_guess) {
-                compositeMesh.items->emplace_back(separatorValue);
-            }
-
-            for(const detail::MotionNode *mesh = node.meshAncestor;
-                mesh != nullptr; mesh = mesh->meshAncestor) {
-                if(mesh->meshInheritanceSeparator_guess) {
+            if(node.meshAncestor != nullptr) {
+                ncbDictionaryAccessor separator;
+                (void)separator.SetValue(
+                    TJS_W("type"), ttstr(TJS_W("mesh.inherit.separator")),
+                    TJS_MEMBERENSURE, &detail::typeMemberHint_guess);
+                const tTJSVariant separatorValue(
+                    separator.GetDispatch(), separator.GetDispatch());
+                if(node.meshInheritanceSeparator_guess) {
                     compositeMesh.items->emplace_back(separatorValue);
                 }
-                if(!mesh->hasMeshData) {
-                    continue;
+
+                for(const detail::MotionNode *mesh = node.meshAncestor;
+                    mesh != nullptr; mesh = mesh->meshAncestor) {
+                    if(mesh->meshInheritanceSeparator_guess) {
+                        compositeMesh.items->emplace_back(separatorValue);
+                    }
+                    if(!mesh->hasMeshData) {
+                        continue;
+                    }
+
+                    const float negOffsetX = -mesh->meshInvOffX;
+                    const float negOffsetY = -mesh->meshInvOffY;
+                    const float invOffsetX = static_cast<float>(
+                        mesh->meshInvM11 * negOffsetX +
+                        mesh->meshInvM12 * negOffsetY);
+                    const float invOffsetY = static_cast<float>(
+                        mesh->meshInvM21 * negOffsetX +
+                        mesh->meshInvM22 * negOffsetY);
+
+                    const auto invOffset = makeCalcRealArray_guess({
+                        static_cast<tjs_real>(invOffsetX),
+                        static_cast<tjs_real>(invOffsetY),
+                    });
+                    const auto invMatrix = makeCalcRealArray_guess({
+                        mesh->meshInvM11, mesh->meshInvM12,
+                        mesh->meshInvM21, mesh->meshInvM22,
+                    });
+                    const auto patch = makeCalcMeshPointArray_guess(
+                        mesh->transformedMeshControlPoints);
+
+                    const auto rawDivision = calcViewMeshDivision_guess(
+                        getMeshDivisionRatio(),
+                        static_cast<std::uint32_t>(mesh->meshDivision));
+                    const tjs_int64 division =
+                        static_cast<tjs_int64>(rawDivision);
+
+                    ncbDictionaryAccessor meshParam;
+                    (void)meshParam.SetValue(
+                        TJS_W("type"), static_cast<tjs_int>(1),
+                        TJS_MEMBERENSURE, &detail::typeMemberHint_guess);
+                    (void)meshParam.SetValue(
+                        TJS_W("division"), division, TJS_MEMBERENSURE,
+                        &detail::divisionMemberHint_guess);
+                    (void)meshParam.SetValue(
+                        TJS_W("invOffset"), invOffset, TJS_MEMBERENSURE,
+                        &detail::calcInvOffsetMemberHint_guess);
+                    (void)meshParam.SetValue(
+                        TJS_W("invMatrix"), invMatrix, TJS_MEMBERENSURE,
+                        &detail::calcInvMatrixMemberHint_guess);
+                    (void)meshParam.SetValue(
+                        TJS_W("patch"), patch, TJS_MEMBERENSURE,
+                        &detail::patchMemberHint_guess);
+                    compositeMesh.items->emplace_back(
+                        meshParam.GetDispatch(), meshParam.GetDispatch());
                 }
-
-                const float negOffsetX = -mesh->meshInvOffX;
-                const float negOffsetY = -mesh->meshInvOffY;
-                const float invOffsetX = static_cast<float>(
-                    mesh->meshInvM11 * negOffsetX +
-                    mesh->meshInvM12 * negOffsetY);
-                const float invOffsetY = static_cast<float>(
-                    mesh->meshInvM21 * negOffsetX +
-                    mesh->meshInvM22 * negOffsetY);
-
-                const auto invOffset = makeCalcRealArray_guess({
-                    static_cast<tjs_real>(invOffsetX),
-                    static_cast<tjs_real>(invOffsetY),
-                });
-                const auto invMatrix = makeCalcRealArray_guess({
-                    mesh->meshInvM11, mesh->meshInvM12,
-                    mesh->meshInvM21, mesh->meshInvM22,
-                });
-                const auto patch = makeCalcMeshPointArray_guess(
-                    mesh->transformedMeshControlPoints);
-
-                const auto rawDivision = calcViewMeshDivision_guess(
-                    getMeshDivisionRatio(),
-                    static_cast<std::uint32_t>(mesh->meshDivision));
-                const tjs_int64 division =
-                    static_cast<tjs_int64>(rawDivision);
-
-                ncbDictionaryAccessor meshParam;
-                (void)meshParam.SetValue(
-                    TJS_W("type"), static_cast<tjs_int>(1),
-                    TJS_MEMBERENSURE, &detail::typeMemberHint_guess);
-                (void)meshParam.SetValue(
-                    TJS_W("division"), division, TJS_MEMBERENSURE,
-                    &detail::divisionMemberHint_guess);
-                (void)meshParam.SetValue(
-                    TJS_W("invOffset"), invOffset, TJS_MEMBERENSURE,
-                    &detail::calcInvOffsetMemberHint_guess);
-                (void)meshParam.SetValue(
-                    TJS_W("invMatrix"), invMatrix, TJS_MEMBERENSURE,
-                    &detail::calcInvMatrixMemberHint_guess);
-                (void)meshParam.SetValue(
-                    TJS_W("patch"), patch, TJS_MEMBERENSURE,
-                    &detail::patchMemberHint_guess);
-                compositeMesh.items->emplace_back(
-                    meshParam.GetDispatch(), meshParam.GetDispatch());
             }
             (void)output.SetValue(
                 TJS_W("cmesh"), compositeMesh.value, TJS_MEMBERENSURE,
@@ -608,10 +618,10 @@ namespace motion {
                 outputValue, TJS_W("matrix"), 0,
                 &detail::calcMatrixMemberHint_guess);
             writeCalcRealArray_guess(matrix, {
-                node.accumulated.m11,
-                node.accumulated.m12,
-                node.accumulated.m21,
-                node.accumulated.m22,
+                node.matrix.m11,
+                node.matrix.m12,
+                node.matrix.m21,
+                node.matrix.m22,
             });
         }
     }

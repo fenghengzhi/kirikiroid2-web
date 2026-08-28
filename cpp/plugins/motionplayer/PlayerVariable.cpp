@@ -442,11 +442,11 @@ namespace motion {
 
     tjs_error Player::setVariableCompatMethod(tTJSVariant *, tjs_int numparams,
                                               tTJSVariant **param,
-                                              iTJSDispatch2 *objthis) {
-        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
-        if(!self) {
-            return TJS_E_INVALIDOBJECT;
-        }
+                                              Player *self) {
+        // The typed ncbind raw-callback adapter resolves the native Player
+        // before entering this body. All four references therefore receive a
+        // Player* here; receiver failure and result clearing belong to the
+        // outer method object, not to this callback.
         if(numparams < 2) {
             return TJS_E_BADPARAMCOUNT;
         }

@@ -13,44 +13,6 @@ if(NOT DEFINED KRKR2PLUGIN_PATH)
     set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_LIST_DIR}/../../../cpp/plugins)
 endif()
 
-add_library(motion_playback_native_objects OBJECT
-    ${KRKR2PLUGIN_PATH}/motionplayer/main.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/EmotePlayer.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerCore.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameProgress.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerResource.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerMotionLoad.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerVariable.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerTimeline.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerLayerQuery.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerDrawDispatch.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRender.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderInternal.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderItems.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderExecute.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderTargets.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateLayers.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateLayerEval.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateGeometry.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateChildMotion.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateParticles.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateAnchor.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/ResourceManager.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/SourceCache.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/RuntimeSupport.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/NodeTree.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/MotionNodeBridge.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/MotionTraceWeb.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PrivateMotionGLL.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/D3DAdaptor.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/PSBFile.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/PSBRawFile.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/PSBMedia.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/PSBMediaRegistry.cpp
-    ${KRKR2PLUGIN_PATH}/xp3filter.cpp
-)
-
 set(KRKR2DIFF_NATIVE_INCLUDE_DIRS
     ${KRKR2CORE_PATH}
     ${KRKR2CORE_PATH}/common
@@ -73,18 +35,8 @@ set(KRKR2DIFF_NATIVE_INCLUDE_DIRS
     ${KRKR2PLUGIN_PATH}/simplebinder
 )
 
-target_include_directories(motion_playback_native_objects PRIVATE
-    ${KRKR2DIFF_NATIVE_INCLUDE_DIRS}
-)
-target_compile_definitions(motion_playback_native_objects PRIVATE
-    TJS_TEXT_OUT_CRLF
-    __STDC_CONSTANT_MACROS
-    USE_UNICODE_FSTRING
-)
-
 add_executable(motion_playback_native EXCLUDE_FROM_ALL
     motion_playback_native.cpp
-    $<TARGET_OBJECTS:motion_playback_native_objects>
 )
 target_include_directories(motion_playback_native PRIVATE
     ${KRKR2DIFF_NATIVE_INCLUDE_DIRS}
@@ -97,24 +49,32 @@ target_compile_definitions(motion_playback_native PRIVATE
 )
 add_dependencies(motion_playback_native
     krkr2core
+    krkr2plugin
+    krkr2plugins_ncbind
 )
 
 find_package(spdlog CONFIG REQUIRED)
 find_package(EXPAT REQUIRED)
+find_package(unofficial-brotli CONFIG REQUIRED)
 
-target_link_libraries(motion_playback_native_objects PRIVATE
-    tjs2
-    spdlog::spdlog
-)
 target_link_libraries(motion_playback_native PRIVATE
     krkr2core
+    # Reuse the production source targets and their force-load contract.  The
+    # former hand-maintained OBJECT list silently missed new motionplayer
+    # translation units and could not represent the current runtime.
+    krkr2plugin
+    krkr2plugins_ncbind
     spdlog::spdlog
     EXPAT::EXPAT
+    # The vcpkg FreeType build enables WOFF2, whose decoder dependency is not
+    # carried by the legacy cocos2dx package's exported target.
+    unofficial::brotli::brotlidec
 )
 
 if(APPLE)
     target_link_options(motion_playback_native PRIVATE
         "-Wl,-multiply_defined,suppress"
+        "-Wl,-force_load,$<TARGET_FILE:krkr2plugins_ncbind>"
     )
 elseif(MSVC)
     target_link_options(motion_playback_native PRIVATE "/FORCE:MULTIPLE")

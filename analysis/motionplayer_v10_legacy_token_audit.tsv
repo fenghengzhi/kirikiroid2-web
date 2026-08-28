@@ -1,0 +1,65 @@
+kind	token	location	context	disposition	action
+LIKE_0X_IDENTIFIER				PASS_ZERO_MATCH	matches=0
+IDA_AUTO_SYMBOL				PASS_ZERO_MATCH	matches=0
+AT_BARE_CODE_ADDRESS				PASS_ZERO_MATCH	matches=0
+COMMENT_HEX_REVIEW	0x30	cpp/plugins/DrawDeviceD3D.cpp:262	Android's libstdc++ _Rb_tree objects occupy 0x30/0x18 bytes on LP64/	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/DrawDeviceD3D.cpp:262	Android's libstdc++ _Rb_tree objects occupy 0x30/0x18 bytes on LP64/	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/DrawDeviceD3D.cpp:263	ILP32; iOS's libc++ __tree objects occupy 0x18/0x0C.  The source-level	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0C	cpp/plugins/DrawDeviceD3D.cpp:263	ILP32; iOS's libc++ __tree objects occupy 0x18/0x0C.  The source-level	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/DrawDeviceD3D.cpp:1282	descriptor vtable and 0x18/0x0C concrete adaptor are all independent	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0C	cpp/plugins/DrawDeviceD3D.cpp:1282	descriptor vtable and 0x18/0x0C concrete adaptor are all independent	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/DrawDeviceD3D.cpp:1308	vtable and concrete adaptor.  The 0x18/0x0C concrete adaptor owns the	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0C	cpp/plugins/DrawDeviceD3D.cpp:1308	vtable and concrete adaptor.  The 0x18/0x0C concrete adaptor owns the	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0xB0	cpp/plugins/DrawDeviceD3D.cpp:1674	the class tuple, allocates a 0xB0/0x70 native-class descriptor and its	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x70	cpp/plugins/DrawDeviceD3D.cpp:1674	the class tuple, allocates a 0xB0/0x70 native-class descriptor and its	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x90	cpp/plugins/DrawDeviceD3D.cpp:1689	Successful attachment is non-sticky and owns the concrete 0x90/0x74/	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x74	cpp/plugins/DrawDeviceD3D.cpp:1689	Successful attachment is non-sticky and owns the concrete 0x90/0x74/	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x98	cpp/plugins/DrawDeviceD3D.cpp:1690	0x98/0x78 layer.  Generated Regist and Unregist vtable slots both exist,	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x78	cpp/plugins/DrawDeviceD3D.cpp:1690	0x98/0x78 layer.  Generated Regist and Unregist vtable slots both exist,	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/DrawDeviceD3D.cpp:1709	success owns a 0x18/0x0C D3DImage non-sticky.  Generated Unregist exists,	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0C	cpp/plugins/DrawDeviceD3D.cpp:1709	success owns a 0x18/0x0C D3DImage non-sticky.  Generated Unregist exists,	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/DrawDeviceD3D.cpp:1718	Independent concrete ClassInfo and non-sticky 0x18/0x0C adaptor.  The	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0C	cpp/plugins/DrawDeviceD3D.cpp:1718	Independent concrete ClassInfo and non-sticky 0x18/0x0C adaptor.  The	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x20	cpp/plugins/DrawDeviceD3D.cpp:1744	0x20/0x1C module, so populated-receiver re-entry leaks the old payload.	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x1C	cpp/plugins/DrawDeviceD3D.cpp:1744	0x20/0x1C module, so populated-receiver re-entry leaks the old payload.	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x38	cpp/plugins/DrawDeviceD3D.cpp:1765	sentinel) and installs a fresh non-sticky 0x38/0x24 listener shell.	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x24	cpp/plugins/DrawDeviceD3D.cpp:1765	sentinel) and installs a fresh non-sticky 0x38/0x24 listener shell.	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x9908B0DF	cpp/plugins/motionplayer/EmoteBlinkRng.cpp:15	0x9908B0DF	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x50	cpp/plugins/motionplayer/EmoteEngine.h:181	The object is exactly the platform std::deque header: 0x50/0x28 on	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x28	cpp/plugins/motionplayer/EmoteEngine.h:181	The object is exactly the platform std::deque header: 0x50/0x28 on	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x30	cpp/plugins/motionplayer/EmoteEngine.h:182	Android arm64/armv7 and 0x30/0x18 on iOS arm64/armv7.	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/motionplayer/EmoteEngine.h:182	Android arm64/armv7 and 0x30/0x18 on iOS arm64/armv7.	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+STALE_COMMENT_REVIEW	TODO	cpp/plugins/motionplayer/EmotePlayer.cpp:259	unconditionally throw the same TODO eTJSError.	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+STALE_COMMENT_REVIEW	TODO	cpp/plugins/motionplayer/EmotePlayer.cpp:343	All five query functions are intentional TODO leaves in every current	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+STALE_COMMENT_REVIEW	TODO	cpp/plugins/motionplayer/EmotePlayer.cpp:488	All four current references intentionally expose this TODO boundary.	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+COMMENT_HEX_REVIEW	0x61C	cpp/plugins/motionplayer/EmoteWindEmitter.h:47	1564-byte wind emitter object (operator new(0x61C)).	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x80000000	cpp/plugins/motionplayer/MotionRenderBackend.cpp:218	differently, while both 32-bit targets retain the 0x80000000 word.	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+STALE_COMMENT_REVIEW	former port	cpp/plugins/motionplayer/PlayerFrameProgress.cpp:1072	only the labels it produces. A former port-only 1.1-frame substep loop	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+COMMENT_HEX_REVIEW	0x40000	cpp/plugins/motionplayer/PlayerFrameProgress.cpp:1219	(Per-node frame actions — node mask 0x40000 from the node seek — remain	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0xE	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:738	operation mode: 1->0xE, 2/5->0xF, 3->0x10, 4->0x11, and the raw 0 /	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0xF	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:738	operation mode: 1->0xE, 2/5->0xF, 3->0x10, 4->0x11, and the raw 0 /	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x10	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:738	operation mode: 1->0xE, 2/5->0xF, 3->0x10, 4->0x11, and the raw 0 /	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x11	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:738	operation mode: 1->0xE, 2/5->0xF, 3->0x10, 4->0x11, and the raw 0 /	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0xE	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:742	0xE	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0xF	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:745	0xF	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x10	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:747	0x10	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x11	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:749	0x11	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x2	cpp/plugins/motionplayer/PlayerRenderInternal.cpp:752	0x2	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x40	cpp/plugins/motionplayer/PlayerResource.cpp:456	Records are appended by value. Observed ABI strides are 0x40	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x2C	cpp/plugins/motionplayer/PlayerResource.cpp:457	(Android arm64), 0x2C (Android armv7), 0x50 (iOS arm64), and	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x50	cpp/plugins/motionplayer/PlayerResource.cpp:457	(Android arm64), 0x2C (Android armv7), 0x50 (iOS arm64), and	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x34	cpp/plugins/motionplayer/PlayerResource.cpp:458	0x34 (iOS armv7). Growth follows the STL-specific member order	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0	cpp/plugins/motionplayer/PlayerResource.cpp:513	ImagePacker::pack appends one 0x0 bin for an empty record	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x22	cpp/plugins/motionplayer/PlayerUpdateGeometry.cpp:213	if ((1 << nodeType) & 0x22) != 0 → nodeType 1 (shape) or 5 (camera)	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x1C41	cpp/plugins/motionplayer/PlayerUpdateGeometry.cpp:239	Normal: 7233 = 0x1C41, preview: 7241 = 0x1C49	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x1C49	cpp/plugins/motionplayer/PlayerUpdateGeometry.cpp:239	Normal: 7233 = 0x1C41, preview: 7241 = 0x1C49	REVIEWED_NUMERIC_OR_FLAG_CONSTANT	retain numeric/layout explanation
+STALE_COMMENT_REVIEW	old port	cpp/plugins/motionplayer/PlayerUpdateParticles.cpp:630	packed representation; the old port duplicated this field.	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+STALE_COMMENT_REVIEW	former port	cpp/plugins/motionplayer/ResourceManager.h:84	maps. The former port-only Player by-name helper was removed; no second	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/motionplayer/ResourceManager.h:87	ObjSource is independently proven as a 0x18-byte facade on both 64-bit	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0c	cpp/plugins/motionplayer/ResourceManager.h:88	references and a 0x0c-byte facade on both 32-bit references: retained	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x18	cpp/plugins/motionplayer/SourceCache.h:105	allocation is 0x18 bytes in both 64-bit ABIs and 0x0c in both 32-bit	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+COMMENT_HEX_REVIEW	0x0c	cpp/plugins/motionplayer/SourceCache.h:105	allocation is 0x18 bytes in both 64-bit ABIs and 0x0c in both 32-bit	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation
+STALE_COMMENT_REVIEW	MASTER	cpp/plugins/motionplayer/SourceCache.h:110	"MASTER's older ""ObjSource missing 6 members"" verdict was also inverted."	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+STALE_COMMENT_REVIEW	former port	cpp/plugins/motionplayer/SourceCache.h:123	The former port-only Player by-name cache helper was removed; there is no	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+STALE_COMMENT_REVIEW	XXX	cpp/plugins/motionplayer/main.cpp:86	Subclass registrations (used as Motion.XXX)	CURRENT_RECONCILIATION_COMMENT	retain; comment describes a current removal/correction
+COMMENT_HEX_REVIEW	0x10000	cpp/plugins/motionplayer/main.cpp:691	registering its class object on Motion with flags 0x10000; the class	REVIEWED_LAYOUT_OR_SIZE_CONSTANT	retain numeric/layout explanation

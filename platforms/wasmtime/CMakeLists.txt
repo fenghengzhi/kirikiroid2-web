@@ -44,6 +44,8 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/RuntimeSupport.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/NodeTree.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/MotionNodeBridge.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/MotionRenderBackend.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/MotionLayerExtensions.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PrivateMotionGLL.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/D3DAdaptor.cpp
@@ -92,6 +94,17 @@ target_compile_options(krkr2_wasmtime_guest_objects PRIVATE
     -g3
     -O0
     "SHELL:-sUSE_FREETYPE=1"
+)
+
+# Keep the existing continuous-event trace compiled only into the dedicated
+# Wasmtime differential build.  The direct host opts into the trace at runtime;
+# normal Web/native targets retain the reference-compatible no-diagnostic path.
+target_compile_definitions(core_base_module PRIVATE
+    TVP_ENABLE_WCHAIN_CONTINUOUS_EVENT_TRACE=1
+    KRKR2_WASMTIME_DIAGNOSTICS=1
+)
+target_compile_definitions(core_environ_module PRIVATE
+    TVP_ENABLE_WCHAIN_CONTINUOUS_EVENT_TRACE=1
 )
 
 find_package(Boost COMPONENTS locale REQUIRED NO_MODULE)
@@ -215,7 +228,7 @@ target_link_options(krkr2_wasmtime_guest PRIVATE
     "SHELL:-sWASM_BIGINT=1"
     "SHELL:-sUSE_LIBPNG=1"
     "SHELL:-sUSE_FREETYPE=1"
-    "SHELL:-sEXPORTED_FUNCTIONS=['_krkr2_wasm_init','_krkr2_wasm_startup_from','_krkr2_wasm_tick','_krkr2_wasm_send_input','_krkr2_wasm_get_error_ptr','_krkr2_wasm_get_error_len','_krkr2_wasm_get_framebuffer_ptr','_krkr2_wasm_get_framebuffer_width','_krkr2_wasm_get_framebuffer_height','_krkr2_wasm_get_framebuffer_pitch','_krkr2_wasm_get_framebuffer_format','_krkr2_wasm_get_framebuffer_frame_no','_malloc','_free']"
+    "SHELL:-sEXPORTED_FUNCTIONS=['_krkr2_wasm_init','_krkr2_wasm_startup_from','_krkr2_wasm_tick','_krkr2_wasm_send_input','_krkr2_wasm_get_error_ptr','_krkr2_wasm_get_error_len','_krkr2_wasm_get_framebuffer_ptr','_krkr2_wasm_get_framebuffer_width','_krkr2_wasm_get_framebuffer_height','_krkr2_wasm_get_framebuffer_pitch','_krkr2_wasm_get_framebuffer_format','_krkr2_wasm_get_framebuffer_frame_no','_krkr2_wasm_get_motion_trace_frame_count','_krkr2_wasm_get_motion_trace_ptr','_krkr2_wasm_get_motion_trace_len','_krkr2_wasm_clear_motion_trace','_krkr2_wasm_get_tick_count','_krkr2_wasm_get_tick_diag_mask','_krkr2_wasm_get_tick_diag_ever_mask','_krkr2_wasm_get_window_count','_krkr2_wasm_get_window_count_peak','_krkr2_wasm_get_continuous_event_hook_slot_count','_krkr2_wasm_get_continuous_event_hook_live_count','_krkr2_wasm_get_continuous_handler_slot_count','_krkr2_wasm_get_continuous_handler_live_count','_krkr2_wasm_get_continuous_handler_add_count','_krkr2_wasm_get_continuous_handler_remove_count','_krkr2_wasm_get_continuous_deliver_count','_krkr2_wasm_get_continuous_handler_invoke_count','_krkr2_wasm_get_continuous_handler_failure_count','_krkr2_wasm_get_continuous_tick_count','_krkr2_wasm_get_continuous_tick_at','_krkr2_wasm_get_event_disabled','_malloc','_free']"
     "-fwasm-exceptions"
     "-lopenal"
     "SHELL:-Wl,--allow-multiple-definition"

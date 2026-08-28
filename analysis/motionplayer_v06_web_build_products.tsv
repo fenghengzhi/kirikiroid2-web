@@ -1,0 +1,6 @@
+product	bytes	sha256	status
+out/web/debug/index.html	85083	988944679c6348e92a2761b2d5c2804ef50968f91831e30696c13843532a56a9	VERIFIED
+out/web/debug/index.js	616859	ad40f49f0982264e17cabf947d3eadebba5712faccb5c04ed81a7a0c2fce6c62	VERIFIED
+out/web/debug/index.wasm	85369212	c45da319e632286689d8453c9219ac7cb759e54a518c2da97ea32ecca72d01cd	VERIFIED
+out/web/debug/vlfs.js	41636	850db5f563f2ce3a9cb9b91bdafcfbe265931835a509420fc75454f3dd12631f	VERIFIED
+out/web/debug/assets.zip	7853397	1c464057f96491b04c3cb74a5de9adce14eefe124b842fab932a6a18c4985cea	VERIFIED

@@ -9,7 +9,6 @@
 
 #include <cmath>
 #include <limits>
-#include <optional>
 
 using namespace motion::internal;
 using namespace motion::internal::render_detail;
@@ -72,8 +71,7 @@ namespace motion {
     // SeparateLayerAdaptor ordered map before the later submit-only pass. Its
     // points are already clip-local, so the copy uses zero extra translation.
     void Player::emitPreparedLeafLayerCopy_guess(
-        detail::PreparedRenderItem &item,
-        const std::string &motionPath) {
+        detail::PreparedRenderItem &item) {
         // The outer clip calculation remains in call-local registers across
         // every resolver/property callback. Re-entry may mutate the persistent
         // item, but setSize and geometry offsets keep this clip snapshot while
@@ -232,15 +230,6 @@ namespace motion {
             }
         }
 
-        if(!motionPath.empty()) {
-            detail::logoChainTraceLogf(
-                motionPath, "buildCommands.leafCopy",
-                "Player.emitPreparedLeafLayerCopy", _clampedEvalTime,
-                "nodeIndex={} layerId={} clipRect=[{},{},{},{}] meshType={}",
-                item.nodeIndex, item.renderLayerId, item.clipRect[0],
-                item.clipRect[1], item.clipRect[2], item.clipRect[3],
-                item.meshType);
-        }
     }
 
     // Four-reference group/composed pass. For each auxiliary group, union the
@@ -409,33 +398,15 @@ namespace motion {
         detail::PreparedRenderItemList &mainList,
         detail::PreparedRenderItemList &auxList,
         const std::array<float, 4> &targetClip) {
-        const tjs_int canvasWidth = static_cast<tjs_int>(
-            targetClip[2] - targetClip[0]);
-        const tjs_int canvasHeight = static_cast<tjs_int>(
-            targetClip[3] - targetClip[1]);
 #if defined(KRKR2_WASMTIME_HEADLESS)
+        const int motionTraceCanvasWidth = static_cast<int>(
+            targetClip[2] - targetClip[0]);
+        const int motionTraceCanvasHeight = static_cast<int>(
+            targetClip[3] - targetClip[1]);
         detail::motionTraceRenderBuildCommandsEnter(
-            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight),
+            this, motionTraceCanvasWidth, motionTraceCanvasHeight,
             mainList, auxList);
 #endif
-        // Native command building has production TJS member-name strings but
-        // no motion-path, trace, snapshot or formatting dataflow. Materialize
-        // the Web diagnostic context only when one of its sidecars is active.
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled || logoSnapshotEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-        const bool snapshotForPath =
-            logoSnapshotEnabled &&
-            detail::logoSnapshotMarkEnabledForPath(motionPath);
-        const std::string emptyTracePath;
-        const std::string &traceMotionPath =
-            traceForPath ? motionPath : emptyTracePath;
         // Swap active/retired trees before either item loop. Keep this an
         // explicit normal-flow pair: native exception unwinding does not clear
         // the retired tree.
@@ -455,14 +426,7 @@ namespace motion {
             // failed intersections only clear rawFlag21. Native fields were
             // restored during item setup; there is no
             // persistent execute-result marker to reset here.
-
             RenderClipRect clipRect;
-            // Failure text is diagnostic-only. In the ordinary path the clip
-            // helper receives nullptr and performs only the native geometry.
-            std::optional<std::string> clipFailureReason;
-            if(traceForPath) {
-                clipFailureReason.emplace();
-            }
             const bool drawableGate = entry.drawFlag && !entry.rawFlag16;
             if(!entry.drawFlag) {
                 // The native builder only materializes rawFlag21 and clipRect
@@ -471,30 +435,8 @@ namespace motion {
                 // This branch therefore preserves the restored native fields.
             } else if(!drawableGate ||
                       !computeRenderClipRect(entry, targetClip,
-                                             clipRect,
-                                             clipFailureReason
-                                                 ? &*clipFailureReason
-                                                 : nullptr)) {
+                                             clipRect, nullptr)) {
                 entry.rawFlag21 = false;
-                if(traceForPath) {
-                    detail::logoChainTraceCheck(
-                        motionPath, "renderItem.clip",
-                        "Player.buildRenderCommands", _clampedEvalTime,
-                        fmt::format(
-                            "paintBox∩viewport exp paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={}",
-                            entry.paintBox[0], entry.paintBox[1],
-                            entry.paintBox[2], entry.paintBox[3],
-                            entry.hasViewport
-                                ? fmt::format(
-                                      "[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                      entry.viewport[0], entry.viewport[1],
-                                      entry.viewport[2], entry.viewport[3])
-                                : std::string("<invalid default>")),
-                        fmt::format("nodeIndex={} act=<invalid:{}>",
-                                    entry.nodeIndex, *clipFailureReason),
-                        false,
-                        "native command builder rejected the local clip rect");
-                }
             } else {
                 entry.rawFlag21 = true;
                 entry.clipRect = {
@@ -543,26 +485,9 @@ namespace motion {
                     entry.rawFlag20 = true;
                 }
 
-                if(traceForPath) {
-                    detail::logoChainTraceCheck(
-                        motionPath, "renderItem.clip",
-                        "Player.buildRenderCommands", _clampedEvalTime,
-                        fmt::format(
-                            "paintBox∩viewport exp=[{},{},{},{}]",
-                            clipRect.left, clipRect.top, clipRect.right,
-                            clipRect.bottom),
-                        fmt::format(
-                            "nodeIndex={} act=[{},{},{},{}]",
-                            entry.nodeIndex, entry.clipRect[0],
-                            entry.clipRect[1], entry.clipRect[2],
-                            entry.clipRect[3]),
-                        true,
-                        "native clip rect diverged from the diagnostic projection");
-                }
-
                 // Emit the per-item leaf copy onto the adaptor's ordered-map
                 // leaf layer here in the build pass, not in execute.
-                emitPreparedLeafLayerCopy_guess(entry, traceMotionPath);
+                emitPreparedLeafLayerCopy_guess(entry);
             }
 
         }
@@ -572,61 +497,13 @@ namespace motion {
         composePreparedGroupLayers_guess(auxList, targetClip);
         if(renderLayerPassStarted) {
             // The native normal-only tail invalidates and destroys retired
-            // entries that were not moved back into the active tree. Keep Web
-            // diagnostics after this explicit cleanup point.
+            // entries that were not moved back into the active tree.
             _renderSeparateLayerAdaptor
                 ->endLayerPass_guess();
         }
-        if(snapshotForPath &&
-           motionPath.find("m2logo.mtn") != std::string::npos &&
-            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < mainList.size(); ++i) {
-                const auto *itemPtr = mainList[i];
-                if(!itemPtr) {
-                    continue;
-                }
-                const auto &item = *itemPtr;
-                if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
-                     item.nodeIndex == 19 ||
-                     (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
-                    continue;
-                }
-                std::fprintf(
-                    stderr,
-                    "SNAPCMD frame=%.3f order=%zu nodeIndex=%d source=%s rawFlags=[%d,%d,%d,%d,%d,%d] parentNodeIndex=%d hasRenderParent=%d childCount=%zu layerId=(%d,%d) clipRect=[%.3f,%.3f,%.3f,%.3f] opacity=%d blend=%d\n",
-                    _clampedEvalTime,
-                    i,
-                    item.nodeIndex,
-                    item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
-                    item.rawFlag16 ? 1 : 0,
-                    item.skipFlag0 ? 1 : 0,
-                    item.skipFlag1 ? 1 : 0,
-                    item.drawFlag ? 1 : 0,
-                    item.rawFlag20 ? 1 : 0,
-                    item.rawFlag21 ? 1 : 0,
-                    item.parentItem ? item.parentItem->nodeIndex
-                                    : item.visibleAncestorIndex,
-                    item.parentItem ? 1 : 0,
-                    item.childItems.size(),
-                    item.layerId1,
-                    item.layerId2,
-                    item.clipRect[0], item.clipRect[1],
-                    item.clipRect[2], item.clipRect[3],
-                    item.opacity,
-                    item.blendMode);
-            }
-        }
-
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "renderItem.count",
-                "Player.buildRenderCommands", _clampedEvalTime,
-                "canvas={}x{} mainList={} auxList={}",
-                canvasWidth, canvasHeight, mainList.size(), auxList.size());
-        }
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderBuildCommandsLeave(
-            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight),
+            this, motionTraceCanvasWidth, motionTraceCanvasHeight,
             mainList, auxList);
 #endif
     }
@@ -639,283 +516,20 @@ namespace motion {
         tjs_int canvasHeight,
         bool skipUpdate,
         detail::PreparedRenderItemList &mainList) {
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::MotionTraceRenderExecuteScope renderTrace(
-            this, renderLayerObject, skipUpdate, mainList);
-#endif
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled || logoSnapshotEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-        const bool snapshotForPath =
-            logoSnapshotEnabled &&
-            detail::logoSnapshotMarkEnabledForPath(motionPath);
-        const bool snapshotWindow =
-            snapshotForPath &&
-            motionPath.find("m2logo.mtn") != std::string::npos &&
-            _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0;
-        const std::string emptyTracePath;
-        const std::string &traceMotionPath =
-            traceForPath ? motionPath : emptyTracePath;
-
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        auto *renderLayer = resolveNativeLayer(renderLayerObject);
-        if(!renderLayer) {
-            renderLayer =
-                resolvePrivateMotionGLLNative_guess(renderLayerObject);
-        }
-        iTJSDispatch2 *scratchOwner = resolveMainWindowOwnerObject();
-        iTJSDispatch2 *scratchParent = resolveMainWindowPrimaryLayerObject();
-        if(scratchParent && !resolveNativeLayer(scratchParent)) {
-            if(auto *resolved =
-                   tryResolveLayerDispatch(tTJSVariant(scratchParent, scratchParent))) {
-                scratchParent = resolved;
-            }
-        }
-        if(!scratchParent) {
-            scratchParent = renderLayerObject;
-        }
-        if(scratchParent && !resolveNativeLayer(scratchParent)) {
-            scratchParent = renderLayerObject;
-        }
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "execute.setup.pre",
-                "Player.executeLayerRenderCommands", _clampedEvalTime,
-                "renderLayer={} scratchOwner={} scratchParent={} renderLayerNative={} scratchParentNative={}",
-                static_cast<const void *>(renderLayerObject),
-                static_cast<const void *>(scratchOwner),
-                static_cast<const void *>(scratchParent),
-                static_cast<const void *>(renderLayer),
-                static_cast<const void *>(resolveNativeLayer(scratchParent)));
-            detail::logoChainTraceLogf(
-                motionPath, "execute.begin",
-                "Player.executeLayerRenderCommands", _clampedEvalTime,
-                "mainItems={} renderLayer={} scratchOwner={} scratchParent={} skipUpdate={}",
-                mainList.size(),
-                static_cast<const void *>(renderLayer),
-                static_cast<const void *>(scratchOwner),
-                static_cast<const void *>(scratchParent),
-                skipUpdate ? 1 : 0);
-        }
-#endif
-        int snapshotCopyOrder = 0;
         using PreparedRenderItem = detail::PreparedRenderItem;
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        const auto recordPostDrawCandidate =
-            [&](iTJSDispatch2 *layerObject, const char *samplePoint) {
-            detail::motionTraceRecordPostDrawLayerCandidate(
-                this, layerObject, samplePoint);
-        };
-        const auto directItemCoversRenderTarget =
-            [&](const PreparedRenderItem &item) {
-            if(!renderLayer) return false;
-            float minX = item.corners[0];
-            float maxX = item.corners[0];
-            float minY = item.corners[1];
-            float maxY = item.corners[1];
-            for(size_t i = 2; i + 1 < item.corners.size(); i += 2) {
-                minX = std::min(minX, item.corners[i]);
-                maxX = std::max(maxX, item.corners[i]);
-                minY = std::min(minY, item.corners[i + 1]);
-                maxY = std::max(maxY, item.corners[i + 1]);
-            }
-            return minX <= 0.0f && minY <= 0.0f &&
-                maxX >= static_cast<float>(renderLayer->GetWidth()) &&
-                maxY >= static_cast<float>(renderLayer->GetHeight());
-        };
+        detail::MotionTraceRenderExecuteScope motionTraceExecuteScope(
+            this, renderLayerObject, skipUpdate, mainList);
 #endif
 
         struct ResolvedSourceObject {
             tTJSVariant object;
-            iTJSDispatch2 *layerObject = nullptr;
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            tTJSNI_BaseLayer *layer = nullptr;
-            iTVPBaseBitmap *image = nullptr;
-#endif
             tjs_int width = 0;
             tjs_int height = 0;
         };
 
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        // HEADLESS-only diagnostic reconstruction; ordinary native execution
-        // has no native-layer/scratch-owner precondition or side query.
-        // Per-item alpha-mask composition belongs to the build pass through
-        // composePreparedGroupLayers_guess; execute is submit-only.
-        auto ensureLeafItemLayer =
-            [&](PreparedRenderItem &item) -> iTJSDispatch2 * {
-            const tjs_int stateLayerId = item.renderLayerId;
-            if(stateLayerId == 0) {
-                return ensureReusableLayerObject(
-                    item.leafLayer,
-                    scratchOwner,
-                    scratchParent,
-                    static_cast<tTVPLayerType>(ltAlpha),
-                    false);
-            }
-
-            auto &state = _renderLayerStates[stateLayerId];
-            if(!state.initialized) {
-                state.absolute = _nextLayerAbsolute++;
-                state.initialized = true;
-            }
-
-            auto *layerObject = ensureReusableLayerObject(
-                state.layerObject,
-                scratchOwner,
-                scratchParent,
-                static_cast<tTVPLayerType>(ltAlpha),
-                false);
-            if(!layerObject) {
-                return nullptr;
-            }
-            // The native build loop latches rawFlag20; execute never does.
-            // The build pass already
-            // materialized rawFlag20/layerId under the oracle gate, so the
-            // execute stage only consumes them here.
-
-            setObjectIntProperty(layerObject, TJS_W("absolute"), state.absolute);
-            setObjectIntProperty(layerObject, TJS_W("hitThreshold"), 256);
-
-            item.leafLayer = state.layerObject;
-            return layerObject;
-        };
-        auto renderAccurateSlaPostDrawCandidate_guess =
-            [&](PreparedRenderItem &item,
-                const ResolvedSourceObject &source,
-                const tTVPRect &sourceRect) -> bool {
-            if(!detail::motionTraceIsAccurateSlaRenderActive() ||
-               !renderLayer || !source.image) {
-                return false;
-            }
-
-            // The accurate-SLA pass clips the paint box to the target Layer,
-            // then sizes the tracked Layer to right-left/bottom-top
-            // before calling affineCopy/meshCopy/bezierPatchCopy on it.
-            float clipLeft = std::max(item.paintBox[0], 0.0f);
-            float clipTop = std::max(item.paintBox[1], 0.0f);
-            float clipRight = std::min(
-                item.paintBox[2],
-                static_cast<float>(renderLayer->GetWidth()));
-            float clipBottom = std::min(
-                item.paintBox[3],
-                static_cast<float>(renderLayer->GetHeight()));
-            if(!item.corners.empty()) {
-                float minX = item.corners[0];
-                float maxX = item.corners[0];
-                float minY = item.corners[1];
-                float maxY = item.corners[1];
-                for(size_t i = 2; i + 1 < item.corners.size(); i += 2) {
-                    minX = std::min(minX, item.corners[i]);
-                    maxX = std::max(maxX, item.corners[i]);
-                    minY = std::min(minY, item.corners[i + 1]);
-                    maxY = std::max(maxY, item.corners[i + 1]);
-                }
-                clipLeft = std::max(clipLeft, std::floor(minX));
-                clipTop = std::max(clipTop, std::floor(minY));
-                clipRight = std::min(clipRight, std::ceil(maxX));
-                clipBottom = std::min(clipBottom, std::ceil(maxY));
-            }
-            if(clipRight <= clipLeft || clipBottom <= clipTop) {
-                return false;
-            }
-            const int clipWidth = static_cast<int>(clipRight - clipLeft);
-            const int clipHeight = static_cast<int>(clipBottom - clipTop);
-            // The native accurate-SLA path sizes the item layer and invokes
-            // affineCopy(clear=1) before writing the final layer
-            // type, so the checkpoint helper must start from the ltAlpha
-            // transparent-white neutral color, not a stale reused type color.
-            int layerWidth = clipWidth;
-            int layerHeight = clipHeight;
-            if(layerWidth <= 0 || layerHeight <= 0) {
-                return false;
-            }
-
-            iTJSDispatch2 *candidateLayerObject = ensureLeafItemLayer(item);
-            auto *candidateLayer = resolveNativeLayer(candidateLayerObject);
-            if(!candidateLayerObject || !candidateLayer ||
-               !prepareLayerForRender(
-                   candidateLayerObject, layerWidth, layerHeight,
-                   0x00FFFFFFu)) {
-                return false;
-            }
-
-            (void)candidateLayer;
-            const float offsetX = -0.5f - clipLeft;
-            const float offsetY = -0.5f - clipTop;
-            // Keep the SLA checkpoint copy consistent with the converted main
-            // path: dispatch affineCopy/meshCopy/bezierPatchCopy through the
-            // candidate Layer instance via FuncCall with clear=1.
-            if(source.object.Type() != tvtObject ||
-               !source.object.AsObjectNoAddRef()) {
-                return false;
-            }
-            if(item.meshType == 0) {
-                const auto localPts =
-                    buildAffineTrianglePoints(item.corners, offsetX, offsetY);
-                if(TJS_FAILED(callLayerAffineCopy_guess(
-                       candidateLayerObject, localPts.data(), source.object,
-                       sourceRect, stNearest, true))) {
-                    return false;
-                }
-                recordPostDrawCandidate(
-                    candidateLayerObject,
-                    "Player::executeLayerRenderCommands.accurateSla.item.afterAffineCopy");
-                return true;
-            }
-            const auto &renderMeshPoints = item.meshType == 2
-                ? item.commandCompositeMeshPoints
-                : item.meshPoints;
-            if(renderMeshPoints.empty()) {
-                return false;
-            }
-            std::array<tjs_int, 2> cellDivisions{
-                item.meshDivX, item.meshDivY
-            };
-            if(item.meshType == 1) {
-                cellDivisions = renderBezierPatchCellDivisions_guess(
-                    item.commandPatchDivision, source.width, source.height);
-            } else if(item.meshType == 2) {
-                if(item.meshDivX < 1 || item.meshDivY < 1) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-            tTJSVariant meshArray =
-                buildMeshPointTJSArrayVariant_guess(renderMeshPoints, offsetX,
-                                                     offsetY);
-            bool ok = false;
-            if(item.meshType == 1) {
-                ok = TJS_SUCCEEDED(callLayerBezierPatchCopy_guess(
-                    candidateLayerObject, source.object, sourceRect, meshArray,
-                    cellDivisions[0], cellDivisions[1], stNearest, true));
-                if(ok) {
-                    recordPostDrawCandidate(
-                        candidateLayerObject,
-                        "Player::executeLayerRenderCommands.accurateSla.item.afterBezierPatchCopy");
-                }
-            } else if(item.meshType == 2) {
-                ok = TJS_SUCCEEDED(callLayerMeshCopy_guess(
-                    candidateLayerObject, source.object, sourceRect, meshArray,
-                    cellDivisions[0], cellDivisions[1], stNearest, true));
-                if(ok) {
-                    recordPostDrawCandidate(
-                        candidateLayerObject,
-                        "Player::executeLayerRenderCommands.accurateSla.item.afterMeshCopy");
-                }
-            }
-            return ok;
-        };
-#endif
         auto applyTargetLayerClip_guess =
-            [&](const PreparedRenderItem &item,
-                std::array<tjs_real, 4> &outRect) -> bool {
+            [&](const PreparedRenderItem &item) -> bool {
             // The native phase rejects only ordered right<left or bottom<top.
             // Unordered comparisons therefore remain valid.
             if(!(item.viewport[2] < item.viewport[0]) &&
@@ -931,28 +545,22 @@ namespace motion {
                 if(clipLeft > clipRight || clipTop > clipBottom) {
                     return false;
                 }
-                outRect = {
-                    static_cast<tjs_real>(clipLeft),
-                    static_cast<tjs_real>(clipTop),
-                    static_cast<tjs_real>(clipRight),
-                    static_cast<tjs_real>(clipBottom),
-                };
+                // Native subtracts in float and promotes each final value to
+                // Real only while constructing the four argument Variants.
+                const float clipWidth = clipRight - clipLeft;
+                const float clipHeight = clipBottom - clipTop;
                 // The canvas submitter supplies four Real Variants.
                 // Layer.setClip owns the later integer
                 // conversion; this caller performs no native GetClip readback.
                 (void)callLayerSetClip_guess(
                     layerClassObject, renderLayerObject,
-                    outRect[0], outRect[1],
-                    outRect[2] - outRect[0], outRect[3] - outRect[1]);
+                    static_cast<tjs_real>(clipLeft),
+                    static_cast<tjs_real>(clipTop),
+                    static_cast<tjs_real>(clipWidth),
+                    static_cast<tjs_real>(clipHeight));
                 return true;
             }
 
-            outRect = {
-                0.0,
-                0.0,
-                static_cast<tjs_real>(canvasWidth),
-                static_cast<tjs_real>(canvasHeight),
-            };
             (void)callLayerResetClip_guess(
                 layerClassObject, renderLayerObject);
             return true;
@@ -971,17 +579,8 @@ namespace motion {
                 continue;
             }
 
-            std::array<tjs_real, 4> targetLayerClip{};
-            if(!applyTargetLayerClip_guess(item, targetLayerClip)) {
+            if(!applyTargetLayerClip_guess(item)) {
                 continue;
-            }
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "execute.setClip",
-                    "Player.executeLayerRenderCommands", _clampedEvalTime,
-                    "nodeIndex={} targetClip=[{},{},{},{}]",
-                    item.nodeIndex, targetLayerClip[0], targetLayerClip[1],
-                    targetLayerClip[2], targetLayerClip[3]);
             }
             if(_priorDraw && !item.skipFlag1) {
                 continue;
@@ -1036,94 +635,137 @@ namespace motion {
             // source Variant with AsObjectNoAddRef: that loses the observable
             // Object/ObjThis AddRef/Release prefix on both success and failure.
             ncbPropAccessor sourceAccessor{tTJSVariant(source.object)};
-            source.layerObject = sourceAccessor.GetDispatch();
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            // Native image inspection belongs only to the differential probe.
-            // The native canvas renderer keeps the source as a TJS owner and
-            // does not issue NativeInstanceSupport/GetMainImage queries.
-            source.layer = resolveNativeLayer(source.layerObject);
-            source.image = source.layer ? source.layer->GetMainImage() : nullptr;
-#endif
             source.width = getRenderSourcePropertyInt_guess(
                 sourceAccessor, TJS_W("width"),
                 &detail::widthMemberHint_guess);
             source.height = getRenderSourcePropertyInt_guess(
                 sourceAccessor, TJS_W("height"),
                 &detail::heightMemberHint_guess);
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "execute.source",
-                    "Player.executeLayerRenderCommands", _clampedEvalTime,
-                    "source={} sourceObject={} image={}x{}",
-                    item.sourceKey,
-                    static_cast<const void *>(source.layerObject),
-                    source.width, source.height);
+
+            // Exactly one shared source resolve per item. Its Object owner
+            // must span both direct and buffered branches.
+            const tTVPRect sourceRect(0, 0, source.width, source.height);
+            const auto blendMode =
+                resolveBlendOperationMode_guess(item.blendMode);
+            const bool useDirectRenderPath =
+                shouldUseDirectRenderPath_guess(
+                    item, _completionType);
+
+            if(useDirectRenderPath) {
+                if(item.meshType == 0) {
+                    const auto worldPts =
+                        buildAffineTrianglePoints(item.corners,
+                                                 -0.5f, -0.5f);
+                    (void)callLayerOperateAffine_guess(
+                        layerClassObject, renderLayerObject,
+                        worldPts.data(), source.object, sourceRect,
+                        blendMode, opa);
+                } else {
+                    const auto &renderMeshPoints = item.meshType == 2
+                        ? item.commandCompositeMeshPoints
+                        : item.meshPoints;
+                    std::array<tjs_int, 2> cellDivisions{
+                        item.meshDivX, item.meshDivY
+                    };
+                    if(item.meshType == 1) {
+                        cellDivisions =
+                            renderBezierPatchCellDivisions_guess(
+                                item.commandPatchDivision,
+                                item.sourceState->width,
+                                item.sourceState->height);
+                    } else if(item.meshType != 2) {
+                        continue;
+                    }
+                    // Direct mesh/bezier branches build the point array
+                    // with a -0.5,-0.5 world offset and dispatch through
+                    // the Layer class accessor with the target render layer
+                    // as objthis. Their clear flag is Integer 0.
+                    tTJSVariant meshArray =
+                        buildMeshPointTJSArrayVariant_guess(
+                            renderMeshPoints, -0.5f, -0.5f);
+                    if(item.meshType == 1) {
+                        (void)callLayerOperateBezierPatch_guess(
+                            layerClassObject, renderLayerObject,
+                            source.object, sourceRect,
+                            meshArray, cellDivisions[0], cellDivisions[1],
+                            blendMode, opa, false);
+                    } else if(item.meshType == 2) {
+                        (void)callLayerOperateMesh_guess(
+                            layerClassObject, renderLayerObject,
+                            source.object, sourceRect,
+                            meshArray, cellDivisions[0], cellDivisions[1],
+                            blendMode, opa, false);
+                    }
+                }
+                drawRenderItemFrame_guess(
+                    layerClassObject, renderLayerObject, item,
+                    _outline, _meshline);
+                continue;
             }
 
-                // Exactly one shared source resolve per item. Its Object owner
-                // must span both direct and buffered branches.
-                const tTVPRect sourceRect(0, 0, source.width, source.height);
-                const auto blendMode =
-                    resolveBlendOperationMode_guess(item.blendMode);
-                const bool useDirectRenderPath =
-                    shouldUseDirectRenderPath_guess(
-                        item, _completionType);
+            {
+                // Preserve the three nested owners exactly: ResourceManager
+                // raw dispatch owner -> bufLayer Variant -> buf raw
+                // dispatch owner. GetValue is inlined on Android arm64 but
+                // remains an out-of-line template helper on the other three
+                // references.
+                ncbPropAccessor resourceManager{ tTJSVariant(
+                    _sourceCacheObject) };
+                tTJSVariant bufLayer = resourceManager.GetValue(
+                    TJS_W("bufLayer"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+                    &detail::bufLayerMemberHint_guess);
+                ncbPropAccessor buffer{ tTJSVariant(bufLayer) };
+                iTJSDispatch2 *bufferObject = buffer.GetDispatch();
 
-                if(useDirectRenderPath) {
-                    // Branch names are diagnostic literals. A raw pointer is
-                    // sufficient and avoids an owning string on every native
-                    // direct-render item.
-                    const char *branch = "direct.operateAffine";
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                    const auto emitDirectProbe =
-                        [&](const char *samplePoint, const char *phase,
-                            const char *executionMethod = "native-direct-call",
-                            iTJSDispatch2 *sourceArgObject = nullptr,
-                            tTJSNI_BaseLayer *sourceArgLayer = nullptr,
-                            const char *sourceArgClass = nullptr) {
-                        emitDirectExecuteDiagnostics(
-                            this, samplePoint, phase, branch,
-                            executionMethod, item, renderLayer,
-                            std::shared_ptr<tTVPBaseBitmap>{},
-                            sourceArgObject, sourceArgLayer, sourceArgClass,
-                            blendMode, opa,
-                            static_cast<tTVPBBStretchType>(_completionType));
-                    };
-#endif
+                // The target width/height are TJS property reads performed
+                // after acquiring bufLayer; cached native dimensions are
+                // not substituted for this observable dispatch sequence.
+                const tjs_int targetWidthInteger =
+                    callLayerPropGetInt_guess(
+                        layerClassObject, renderLayerObject, TJS_W("width"),
+                        &detail::widthMemberHint_guess);
+                const float targetWidth =
+                    static_cast<float>(targetWidthInteger);
+                const tjs_int targetHeightInteger =
+                    callLayerPropGetInt_guess(
+                        layerClassObject, renderLayerObject,
+                        TJS_W("height"), &detail::heightMemberHint_guess);
+                const float targetHeight =
+                    static_cast<float>(targetHeightInteger);
+
+                // The native buffered path uses numeric-max semantics only
+                // for left/top and ordered compare/select for right/bottom.
+                // It has only a right<left image-phase skip; a vertically
+                // inverted or zero extent deliberately reaches
+                // Layer.setSize. The debug-frame phase remains outside this
+                // buffered owner scope.
+                const float bufferLeft = std::fmax(item.paintBox[0], 0.0f);
+                const float bufferTop = std::fmax(item.paintBox[1], 0.0f);
+                const float bufferRight = item.paintBox[2] < targetWidth
+                    ? item.paintBox[2]
+                    : targetWidth;
+                const float bufferBottom = item.paintBox[3] < targetHeight
+                    ? item.paintBox[3]
+                    : targetHeight;
+                if(!(bufferRight < bufferLeft)) {
+                    const tjs_real bufferWidth =
+                        static_cast<tjs_real>(bufferRight - bufferLeft);
+                    const tjs_real bufferHeight =
+                        static_cast<tjs_real>(bufferBottom - bufferTop);
+                    (void)callLayerSetSizeReal_guess(
+                        bufferObject, bufferWidth, bufferHeight);
+
+                    const float pointOffsetX = -0.5f - bufferLeft;
+                    const float pointOffsetY = -0.5f - bufferTop;
+                    const auto completionType =
+                        static_cast<tTVPBBStretchType>(_completionType);
                     if(item.meshType == 0) {
-                        const auto worldPts =
-                            buildAffineTrianglePoints(item.corners,
-                                                     -0.5f, -0.5f);
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                        TVPResetSoftwareAffineDiagnosticsForWasmtime();
-                        emitDirectProbe(
-                            "Player::executeLayerRenderCommands.direct.beforeOperateAffine",
-                            "before",
-                            "tjs-funcall-operateAffine",
-                            source.layerObject, source.layer, "Layer");
-#endif
-                        (void)callLayerOperateAffine_guess(
-                            layerClassObject, renderLayerObject,
-                            worldPts.data(), source.object, sourceRect,
-                            blendMode, opa);
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                        if(detail::motionTraceIsAccurateSlaRenderActive()) {
-                            if(!renderAccurateSlaPostDrawCandidate_guess(
-                                   item, source, sourceRect)) {
-                                recordPostDrawCandidate(
-                                    directItemCoversRenderTarget(item)
-                                        ? renderLayerObject
-                                        : source.layerObject,
-                                    "Player::executeLayerRenderCommands.direct.afterOperateAffine.accurateSlaCandidateFallback");
-                            }
-                        }
-                        emitDirectProbe(
-                            "Player::executeLayerRenderCommands.direct.afterOperateAffine",
-                            "after",
-                            "tjs-funcall-operateAffine",
-                            source.layerObject, source.layer, "Layer");
-#endif
-                    } else {
+                        const auto localPoints = buildAffineTrianglePoints(
+                            item.corners, pointOffsetX, pointOffsetY);
+                        (void)callLayerAffineCopy_guess(
+                            bufferObject, localPoints.data(), source.object,
+                            sourceRect, completionType, true);
+                    } else if(item.meshType == 1 || item.meshType == 2) {
                         const auto &renderMeshPoints = item.meshType == 2
                             ? item.commandCompositeMeshPoints
                             : item.meshPoints;
@@ -1136,282 +778,71 @@ namespace motion {
                                     item.commandPatchDivision,
                                     item.sourceState->width,
                                     item.sourceState->height);
-                        } else if(item.meshType != 2) {
-                            continue;
                         }
-                        // Direct mesh/bezier branches build the point array
-                        // with a -0.5,-0.5 world offset and dispatch through
-                        // the Layer class accessor with the target render layer
-                        // as objthis. Their clear flag is Integer 0.
                         tTJSVariant meshArray =
                             buildMeshPointTJSArrayVariant_guess(
-                                renderMeshPoints, -0.5f, -0.5f);
+                                renderMeshPoints, pointOffsetX,
+                                pointOffsetY);
                         if(item.meshType == 1) {
-                            branch = "direct.operateBezierPatch";
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                            emitDirectProbe(
-                                "Player::executeLayerRenderCommands.direct.beforeOperateBezierPatch",
-                                "before");
-#endif
-                            (void)callLayerOperateBezierPatch_guess(
-                                layerClassObject, renderLayerObject,
-                                source.object, sourceRect,
-                                meshArray, cellDivisions[0], cellDivisions[1],
-                                blendMode, opa, false);
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                            emitDirectProbe(
-                                "Player::executeLayerRenderCommands.direct.afterOperateBezierPatch",
-                                "after");
-#endif
-                        } else if(item.meshType == 2) {
-                            branch = "direct.operateMesh";
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                            emitDirectProbe(
-                                "Player::executeLayerRenderCommands.direct.beforeOperateMesh",
-                                "before");
-#endif
-                            (void)callLayerOperateMesh_guess(
-                                layerClassObject, renderLayerObject,
-                                source.object, sourceRect,
-                                meshArray, cellDivisions[0], cellDivisions[1],
-                                blendMode, opa, false);
-#if defined(KRKR2_WASMTIME_HEADLESS)
-                            emitDirectProbe(
-                                "Player::executeLayerRenderCommands.direct.afterOperateMesh",
-                                "after");
-#endif
+                            (void)callLayerBezierPatchCopy_guess(
+                                bufferObject, source.object, sourceRect,
+                                meshArray, cellDivisions[0],
+                                cellDivisions[1], completionType, true);
+                        } else {
+                            (void)callLayerMeshCopy_guess(
+                                bufferObject, source.object, sourceRect,
+                                meshArray, cellDivisions[0],
+                                cellDivisions[1], completionType, true);
                         }
                     }
-                    if(traceForPath) {
-                        const auto effectiveColor =
-                            unpackPackedRgba(item.packedColors[0]);
-                        detail::logoChainTraceLogf(
-                            motionPath, "execute.copy",
-                            "Player.executeLayerRenderCommands",
-                            _clampedEvalTime,
-                            "branch={} nodeIndex={} clipRect=[{},{},{},{}] dirtyRect=[{},{},{},{}] blendMode={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] visibleAncestorIndex={} completionType={} renderPath=direct workLayer=0x0 renderLayer={}x{}",
-                            branch, item.nodeIndex,
-                            item.clipRect[0], item.clipRect[1],
-                            item.clipRect[2], item.clipRect[3],
-                            item.dirtyRect[0], item.dirtyRect[1],
-                            item.dirtyRect[2], item.dirtyRect[3],
-                            item.blendMode, opa,
-                            item.packedColors[0], item.packedColors[1],
-                            item.packedColors[2], item.packedColors[3],
-                            effectiveColor[0], effectiveColor[1],
-                            effectiveColor[2], effectiveColor[3],
-                            item.visibleAncestorIndex,
-                            _completionType,
-                            canvasWidth, canvasHeight);
+
+                    // Walk the parent pointer chain. Each mask invocation
+                    // receives independently owning dst/src Variant copies;
+                    // declaration order makes src die before dst.
+                    for(auto *ancestor = item.parentItem; ancestor;
+                        ancestor = ancestor->parentItem) {
+                        if(ancestor->rawFlag21 && !ancestor->rawFlag16) {
+                            const tTJSVariant &selectedMask =
+                                (ancestor->stencilComposite & 4) != 0
+                                ? ancestor->composedLayer
+                                : ancestor->leafLayer;
+                            applyMotionAlphaMask_guess(
+                                bufLayer,
+                                floatToSignedIntTowardZeroSaturated_guess(
+                                    ancestor->clipRect[0] - bufferLeft),
+                                floatToSignedIntTowardZeroSaturated_guess(
+                                    ancestor->clipRect[1] - bufferTop),
+                                selectedMask, 0, 0,
+                                floatToSignedIntTowardZeroSaturated_guess(
+                                    ancestor->clipRect[2] -
+                                    ancestor->clipRect[0]),
+                                floatToSignedIntTowardZeroSaturated_guess(
+                                    ancestor->clipRect[3] -
+                                    ancestor->clipRect[1]),
+                                64, _maskMode, ancestor->stencilComposite);
+                        } else if((ancestor->stencilComposite & 3) == 1) {
+                            // Layer.fillRect rejects this deliberate argc=4
+                            // call. The native submitter ignores the error
+                            // and still terminates the ancestor walk before
+                            // operateRect.
+                            (void)callLayerFillRect4_guess(
+                                bufferObject, bufferWidth, bufferHeight);
+                            break;
+                        }
                     }
-                    if(snapshotWindow) {
-                        std::fprintf(stderr,
-                                     "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%.3f,%.3f,%.3f,%.3f] opacity=%d blend=%d\n",
-                                     snapshotCopyOrder++, _clampedEvalTime,
-                                     item.nodeIndex,
-                                     item.sourceKey.empty()
-                                         ? "<none>"
-                                         : item.sourceKey.c_str(),
-                                     branch,
-                                     item.clipRect[0], item.clipRect[1],
-                                     item.clipRect[2], item.clipRect[3],
-                                     opa, item.blendMode);
-                    }
-                    drawRenderItemFrame_guess(
-                        layerClassObject, renderLayerObject, item,
-                        _outline, _meshline);
-                    continue;
+
+                    // Exact argv types: Real L/T, Object CopyRef(bufLayer),
+                    // two Integer zeros, Real W/H, Integer mode/opacity.
+                    // Return ignored.
+                    (void)callLayerOperateRect_guess(
+                        layerClassObject, renderLayerObject,
+                        static_cast<tjs_real>(bufferLeft),
+                        static_cast<tjs_real>(bufferTop), bufLayer,
+                        bufferWidth, bufferHeight, blendMode, opa);
                 }
-
-                {
-                    // Preserve the three nested owners exactly: ResourceManager
-                    // raw dispatch owner -> bufLayer Variant -> buf raw
-                    // dispatch owner. GetValue is inlined on Android arm64 but
-                    // remains an out-of-line template helper on the other three
-                    // references.
-                    ncbPropAccessor resourceManager{ tTJSVariant(
-                        _sourceCacheObject) };
-                    tTJSVariant bufLayer = resourceManager.GetValue(
-                        TJS_W("bufLayer"), ncbTypedefs::Tag<tTJSVariant>(), 0,
-                        &detail::bufLayerMemberHint_guess);
-                    ncbPropAccessor buffer{ tTJSVariant(bufLayer) };
-                    iTJSDispatch2 *bufferObject = buffer.GetDispatch();
-
-                    // The target width/height are TJS property reads performed
-                    // after acquiring bufLayer; cached native dimensions are
-                    // not substituted for this observable dispatch sequence.
-                    const tjs_int targetWidthInteger =
-                        callLayerPropGetInt_guess(
-                            layerClassObject, renderLayerObject, TJS_W("width"),
-                            &detail::widthMemberHint_guess);
-                    const float targetWidth =
-                        static_cast<float>(targetWidthInteger);
-                    const tjs_int targetHeightInteger =
-                        callLayerPropGetInt_guess(
-                            layerClassObject, renderLayerObject,
-                            TJS_W("height"), &detail::heightMemberHint_guess);
-                    const float targetHeight =
-                        static_cast<float>(targetHeightInteger);
-
-                    // The native buffered path uses numeric-max semantics only
-                    // for left/top and ordered compare/select for right/bottom.
-                    // It has only a right<left image-phase skip; a vertically
-                    // inverted or zero extent deliberately reaches
-                    // Layer.setSize. The debug-frame phase remains outside this
-                    // buffered owner scope.
-                    const float bufferLeft = std::fmax(item.paintBox[0], 0.0f);
-                    const float bufferTop = std::fmax(item.paintBox[1], 0.0f);
-                    const float bufferRight = item.paintBox[2] < targetWidth
-                        ? item.paintBox[2]
-                        : targetWidth;
-                    const float bufferBottom = item.paintBox[3] < targetHeight
-                        ? item.paintBox[3]
-                        : targetHeight;
-                    if(!(bufferRight < bufferLeft)) {
-                        const tjs_real bufferWidth =
-                            static_cast<tjs_real>(bufferRight - bufferLeft);
-                        const tjs_real bufferHeight =
-                            static_cast<tjs_real>(bufferBottom - bufferTop);
-                        (void)callLayerSetSizeReal_guess(
-                            bufferObject, bufferWidth, bufferHeight);
-
-                        const float pointOffsetX = -0.5f - bufferLeft;
-                        const float pointOffsetY = -0.5f - bufferTop;
-                        const auto completionType =
-                            static_cast<tTVPBBStretchType>(_completionType);
-                        if(item.meshType == 0) {
-                            const auto localPoints = buildAffineTrianglePoints(
-                                item.corners, pointOffsetX, pointOffsetY);
-                            (void)callLayerAffineCopy_guess(
-                                bufferObject, localPoints.data(), source.object,
-                                sourceRect, completionType, true);
-                        } else if(item.meshType == 1 || item.meshType == 2) {
-                            const auto &renderMeshPoints = item.meshType == 2
-                                ? item.commandCompositeMeshPoints
-                                : item.meshPoints;
-                            std::array<tjs_int, 2> cellDivisions{
-                                item.meshDivX, item.meshDivY
-                            };
-                            if(item.meshType == 1) {
-                                cellDivisions =
-                                    renderBezierPatchCellDivisions_guess(
-                                        item.commandPatchDivision,
-                                        item.sourceState->width,
-                                        item.sourceState->height);
-                            }
-                            tTJSVariant meshArray =
-                                buildMeshPointTJSArrayVariant_guess(
-                                    renderMeshPoints, pointOffsetX,
-                                    pointOffsetY);
-                            if(item.meshType == 1) {
-                                (void)callLayerBezierPatchCopy_guess(
-                                    bufferObject, source.object, sourceRect,
-                                    meshArray, cellDivisions[0],
-                                    cellDivisions[1], completionType, true);
-                            } else {
-                                (void)callLayerMeshCopy_guess(
-                                    bufferObject, source.object, sourceRect,
-                                    meshArray, cellDivisions[0],
-                                    cellDivisions[1], completionType, true);
-                            }
-                        }
-
-                        // Walk the parent pointer chain. Each mask invocation
-                        // receives independently owning dst/src Variant copies;
-                        // declaration order makes src die before dst.
-                        for(auto *ancestor = item.parentItem; ancestor;
-                            ancestor = ancestor->parentItem) {
-                            if(ancestor->rawFlag21 && !ancestor->rawFlag16) {
-                                const tTJSVariant &selectedMask =
-                                    (ancestor->stencilComposite & 4) != 0
-                                    ? ancestor->composedLayer
-                                    : ancestor->leafLayer;
-                                applyMotionAlphaMask_guess(
-                                    bufLayer,
-                                    floatToSignedIntTowardZeroSaturated_guess(
-                                        ancestor->clipRect[0] - bufferLeft),
-                                    floatToSignedIntTowardZeroSaturated_guess(
-                                        ancestor->clipRect[1] - bufferTop),
-                                    selectedMask, 0, 0,
-                                    floatToSignedIntTowardZeroSaturated_guess(
-                                        ancestor->clipRect[2] -
-                                        ancestor->clipRect[0]),
-                                    floatToSignedIntTowardZeroSaturated_guess(
-                                        ancestor->clipRect[3] -
-                                        ancestor->clipRect[1]),
-                                    64, _maskMode, ancestor->stencilComposite);
-                            } else if((ancestor->stencilComposite & 3) == 1) {
-                                // Layer.fillRect rejects this deliberate argc=4
-                                // call. The native submitter ignores the error
-                                // and still terminates the ancestor walk before
-                                // operateRect.
-                                (void)callLayerFillRect4_guess(
-                                    bufferObject, bufferWidth, bufferHeight);
-                                break;
-                            }
-                        }
-
-                        // Exact argv types: Real L/T, Object CopyRef(bufLayer),
-                        // two Integer zeros, Real W/H, Integer mode/opacity.
-                        // Return ignored.
-                        (void)callLayerOperateRect_guess(
-                            layerClassObject, renderLayerObject,
-                            static_cast<tjs_real>(bufferLeft),
-                            static_cast<tjs_real>(bufferTop), bufLayer,
-                            bufferWidth, bufferHeight, blendMode, opa);
-                        if(traceForPath) {
-                            const auto effectiveColor =
-                                unpackPackedRgba(item.packedColors[0]);
-                            detail::logoChainTraceLogf(
-                                motionPath, "execute.copy",
-                                "Player.executeLayerRenderCommands",
-                                _clampedEvalTime,
-                                "branch=buffered.bufLayer.operateRect "
-                                "nodeIndex={} clipRect=[{},{},{},{}] "
-                                "dirtyRect=[{},{},{},{}] blendMode={} "
-                                "opacity={} "
-                                "packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:"
-                                "08x}] effectiveColor=[{},{},{},{}] "
-                                "completionType={} renderPath=buffered "
-                                "bufferRect=[{},{},{},{}] renderLayer={}x{} "
-                                "ancestor={}",
-                                item.nodeIndex, item.clipRect[0],
-                                item.clipRect[1], item.clipRect[2],
-                                item.clipRect[3], item.dirtyRect[0],
-                                item.dirtyRect[1], item.dirtyRect[2],
-                                item.dirtyRect[3], item.blendMode, opa,
-                                item.packedColors[0], item.packedColors[1],
-                                item.packedColors[2], item.packedColors[3],
-                                effectiveColor[0], effectiveColor[1],
-                                effectiveColor[2], effectiveColor[3],
-                                _completionType, bufferLeft, bufferTop,
-                                bufferRight, bufferBottom, canvasWidth,
-                                canvasHeight,
-                                item.parentItem ? item.parentItem->nodeIndex
-                                                : -1);
-                        }
-                        if(snapshotWindow) {
-                            std::fprintf(
-                                stderr,
-                                "SNAPCOPY order=%d frame=%.3f nodeIndex=%d "
-                                "source=%s "
-                                "branch=buffered.bufLayer.operateRect "
-                                "clipRect=[%.3f,%.3f,%.3f,%.3f] opacity=%d "
-                                "blend=%d ancestor=%d\n",
-                                snapshotCopyOrder++, _clampedEvalTime,
-                                item.nodeIndex,
-                                item.sourceKey.empty() ? "<none>"
-                                                       : item.sourceKey.c_str(),
-                                item.clipRect[0], item.clipRect[1],
-                                item.clipRect[2], item.clipRect[3], opa,
-                                item.blendMode,
-                                item.parentItem ? item.parentItem->nodeIndex
-                                                : -1);
-                        }
-                    }
-                }
-                drawRenderItemFrame_guess(layerClassObject, renderLayerObject,
-                                          item, _outline, _meshline);
+            }
+            drawRenderItemFrame_guess(layerClassObject, renderLayerObject,
+                                      item, _outline, _meshline);
         }
 
         // Once the top-level item walk completes, reset the target clip through
@@ -1421,7 +852,7 @@ namespace motion {
             layerClassObject, renderLayerObject);
         (void)skipUpdate;
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        renderTrace.setResult(true);
+        motionTraceExecuteScope.setResult(true);
 #endif
     }
 

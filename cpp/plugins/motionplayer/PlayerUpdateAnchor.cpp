@@ -66,30 +66,30 @@ namespace motion {
             {
                 Affine2x3 local = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
                 applyLocalTransform(local, anchor);
-                anchor.accumulated.m11 = local[0];
-                anchor.accumulated.m21 = local[1];
-                anchor.accumulated.m12 = local[2];
-                anchor.accumulated.m22 = local[3];
+                anchor.matrix.m11 = local[0];
+                anchor.matrix.m21 = local[1];
+                anchor.matrix.m12 = local[2];
+                anchor.matrix.m22 = local[3];
             }
 
             if(!_independentLayerInherit) {
                 const auto &root = nodes[0];
-                const double m11 = anchor.accumulated.m11;
-                const double m12 = anchor.accumulated.m12;
-                const double m21 = anchor.accumulated.m21;
-                const double m22 = anchor.accumulated.m22;
-                anchor.accumulated.m11 =
-                    root.accumulated.m11 * m11
-                    + root.accumulated.m12 * m21;
-                anchor.accumulated.m21 =
-                    root.accumulated.m21 * m11
-                    + root.accumulated.m22 * m21;
-                anchor.accumulated.m12 =
-                    root.accumulated.m11 * m12
-                    + root.accumulated.m12 * m22;
-                anchor.accumulated.m22 =
-                    root.accumulated.m21 * m12
-                    + root.accumulated.m22 * m22;
+                const double m11 = anchor.matrix.m11;
+                const double m12 = anchor.matrix.m12;
+                const double m21 = anchor.matrix.m21;
+                const double m22 = anchor.matrix.m22;
+                anchor.matrix.m11 =
+                    root.matrix.m11 * m11
+                    + root.matrix.m12 * m21;
+                anchor.matrix.m21 =
+                    root.matrix.m21 * m11
+                    + root.matrix.m22 * m21;
+                anchor.matrix.m12 =
+                    root.matrix.m11 * m12
+                    + root.matrix.m12 * m22;
+                anchor.matrix.m22 =
+                    root.matrix.m21 * m12
+                    + root.matrix.m22 * m22;
             }
 
             dampAnchorOpacity_guess(

@@ -1,0 +1,22 @@
+family	case_id	lane	status	actual	expected	toolchain	commit
+geometry_hit_test	circle_boundary	wasmtime_cli	PASS	true	true	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	circle_inside	wasmtime_cli	PASS	true	true	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	circle_outside	wasmtime_cli	PASS	false	false	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	invalid_type	wasmtime_cli	PASS	false	false	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	quad_inside	wasmtime_cli	PASS	true	true	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	quad_outside	wasmtime_cli	PASS	false	false	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	quad_winding_clockwise	wasmtime_cli	PASS	true	true	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	quad_winding_counterclockwise	wasmtime_cli	PASS	true	true	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	rect_left_top_inclusive	wasmtime_cli	PASS	true	true	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+geometry_hit_test	rect_right_bottom_exclusive	wasmtime_cli	PASS	false	false	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+bezier_curve	multi_segment_first	wasmtime_cli	PASS	0.025874999999999995	0.025874999999999995	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+bezier_curve	multi_segment_second	wasmtime_cli	PASS	0.7984	0.7984	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+bezier_curve	single_segment_linear	wasmtime_cli	PASS	0.49624999999999997	0.49624999999999997	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+bezier_curve	single_segment_mid	wasmtime_cli	PASS	0.5	0.5	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+bezier_curve	single_segment_t_after	wasmtime_cli	PASS	1.0	1.0	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+bezier_curve	single_segment_t_before	wasmtime_cli	PASS	0.0	0.0	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+position_interp	linear_no_easing	wasmtime_cli	PASS	[50.0,100.0,0.0]	[50.0,100.0,0.0]	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+position_interp	linear_t0	wasmtime_cli	PASS	[0.0,0.0,0.0]	[0.0,0.0,0.0]	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+position_interp	linear_t1	wasmtime_cli	PASS	[100.0,200.0,0.0]	[100.0,200.0,0.0]	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+position_interp	linear_with_easing	wasmtime_cli	PASS	[50.0,100.0,25.0]	[50.0,100.0,25.0]	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9
+position_interp	same_positions	wasmtime_cli	PASS	[10.0,20.0,30.0]	[10.0,20.0,30.0]	Emscripten 6.0.8 + Wasmtime CLI 31.0.0	5cc45b36c8ea64aa7ef710846ffc956efe02c3e9

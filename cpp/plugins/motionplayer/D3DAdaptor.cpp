@@ -4,19 +4,17 @@
 #include <cstring>
 
 #include "MsgIntf.h"
+#include "MotionRenderBackend.h"
 #include "RenderManager.h"
 
-namespace {
-    iTVPRenderManager *getMotionOpenGLRenderManager_guess() {
-        // The software-source bridge uploads into the private GPU renderer,
-        // independently of which renderer is selected as the process default.
-        static iTVPRenderManager *manager =
-            TVPGetRenderManager(TJS_W("opengl"));
-        return manager;
-    }
-}
-
 namespace motion {
+
+    D3DAdaptor::D3DAdaptor(TextureCacheTestTag) {}
+
+    D3DAdaptor *
+    D3DAdaptor::createTextureCacheShellForDifferentialTest_guess() {
+        return new D3DAdaptor(TextureCacheTestTag{});
+    }
 
     D3DAdaptor::D3DAdaptor(iTJSDispatch2 *windowObject,
                            int width,
@@ -34,7 +32,8 @@ namespace motion {
         if(_window) {
             _window->AddRef();
         }
-        _targetTexture = TVPGetRenderManager()->CreateTexture2D(
+        _targetTexture = render_backend_guess::
+            getPrivateOpenGLRenderManager_guess()->CreateTexture2D(
             nullptr, 0, static_cast<unsigned int>(_width),
             static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
     }
@@ -101,7 +100,8 @@ namespace motion {
                             static_cast<std::size_t>(srcPitch * height));
             } else if(height >= 1) {
                 const auto rowBytes =
-                    static_cast<std::size_t>(width * 4);
+                    static_cast<std::size_t>(width) *
+                    sizeof(std::uint32_t);
                 do {
                     std::memcpy(dst, src, rowBytes);
                     dst += dstPitch;
@@ -112,7 +112,9 @@ namespace motion {
             return;
         }
 
-        layer->IndependMainImage();
+        // GetMainImage applies pending font state before returning the current
+        // bitmap.  The native capture path deliberately does not make that
+        // bitmap independent before selecting its texture as a reuse candidate.
         iTVPTexture2D *replacement = nullptr;
         auto *candidate = layer->GetMainImage()->GetTexture();
         if(!candidate->IsStatic() &&
@@ -128,9 +130,12 @@ namespace motion {
         _targetTexture->Release();
         _targetTexture = replacement;
         if(!_targetTexture) {
-            _targetTexture = TVPGetRenderManager()->CreateTexture2D(
-                nullptr, 0, static_cast<unsigned int>(_width),
-                static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
+            _targetTexture =
+                render_backend_guess::getPrivateOpenGLRenderManager_guess()
+                    ->CreateTexture2D(
+                        nullptr, 0, static_cast<unsigned int>(_width),
+                        static_cast<unsigned int>(_height),
+                        TVPTextureFormat::RGBA, 0);
         }
     }
 
@@ -147,22 +152,26 @@ namespace motion {
         // The first caches the borrowed/raw FillARGB method pointer; the
         // second caches its `color` parameter ID.  Both values are trivial, so
         // process exit runs no destructor and releases no renderer object.  A
-        // disabled clear reaches neither guard.  If an initializer throws, the
-        // ABI landing path aborts only that guard: a failed method lookup is
+        // disabled clear reaches neither guard.  ABIs which emit an exception
+        // landing path abort only the active guard: a failed method lookup is
         // retried from stage one, whereas a failed parameter lookup preserves
-        // the already-published method and retries only stage two.
+        // the already-published method and retries only stage two.  The Android
+        // armv7 build emits no explicit guard-abort landing for these calls.
         static auto *method =
-            TVPGetRenderManager()->GetRenderMethod("FillARGB");
+            render_backend_guess::getPrivateOpenGLRenderManager_guess()
+                ->GetRenderMethod("FillARGB");
         static const int colorId = method->EnumParameterID("color");
         method->SetParameterColor4B(colorId, static_cast<unsigned int>(color));
         const tTVPRect rc(0, 0, _targetTexture->GetWidth(),
                           _targetTexture->GetHeight());
-        // This lookup is deliberately not cached.  The first successful clear
-        // therefore obtains the manager once for method initialization and
-        // once here; every later enabled clear performs only this lookup.  No
-        // local null check or lock separates SetParameterColor4B from the
-        // in-place target==source OperateRect call.
-        auto *mgr = TVPGetRenderManager();
+        // This call-site does not retain another local pointer: the first
+        // successful clear calls the shared private-manager getter once for
+        // method initialization and once here; later clears call it here only.
+        // The getter itself owns the guarded process cache. No local null check
+        // or lock separates SetParameterColor4B from the in-place
+        // target==source OperateRect call.
+        auto *mgr =
+            render_backend_guess::getPrivateOpenGLRenderManager_guess();
         mgr->OperateRect(method, _targetTexture, _targetTexture, rc,
                          tRenderTexRectArray());
     }
@@ -182,7 +191,8 @@ namespace motion {
         if(height >= 1) {
             const tjs_int width =
                 static_cast<tjs_int>(_targetTexture->GetWidth());
-            const auto rowBytes = static_cast<std::size_t>(width * 4);
+            const auto rowBytes =
+                static_cast<std::size_t>(width) * sizeof(std::uint32_t);
             do {
                 std::memcpy(dst, srcBase, rowBytes);
                 dst += dstPitch;
@@ -200,12 +210,15 @@ namespace motion {
         }
         const auto found = _softwareTextureCopies.find(source);
         if(found != _softwareTextureCopies.end()) {
+            // A hit is only a borrow from the mapped intrusive holder.  It does
+            // not acquire another reference for the return value.
             return found->second.GetObjectNoAddRef();
         }
 
         // Preserve the native callback order across compilers: acquire the
         // private renderer first, then query scanline, pitch, size, and format.
-        auto *manager = getMotionOpenGLRenderManager_guess();
+        auto *manager =
+            render_backend_guess::getPrivateOpenGLRenderManager_guess();
         const auto *pixels = source->GetScanLineForRead(0);
         const auto pitch = source->GetPitch();
         const auto width = source->GetWidth();
@@ -215,39 +228,31 @@ namespace motion {
             pixels, pitch, width, height, format,
             RENDER_CREATE_TEXTURE_FLAG_STATIC);
         // The implicit mapped-holder construction is non-null-safe. The
-        // factory's creation reference is not released by this caller.
+        // factory's creation reference is not released by this caller. If the
+        // following node allocation throws, that raw creation reference has no
+        // local RAII owner and leaks just as it does in the four references.
         _softwareTextureCopies.emplace(source, copy);
         return copy;
     }
 
-    void D3DAdaptor::initialize_guess(const tTJSVariant &window,
-                                      int width,
-                                      int height,
-                                      int centerX,
-                                      int centerY) {
-        initializeFromWindowObject_guess(
-            window.AsObjectNoAddRef(), width, height, centerX, centerY);
+    void D3DAdaptor::seedTextureCacheForDifferentialTest_guess(
+        iTVPTexture2D *source, iTVPTexture2D *copy) {
+        _softwareTextureCopies.emplace(source, copy);
     }
 
-    void D3DAdaptor::initializeFromWindowObject_guess(
+    void D3DAdaptor::configureShellForDifferentialTest_guess(
         iTJSDispatch2 *windowObject,
-        int width,
-        int height,
-        int centerX,
-        int centerY) {
-        _window = windowObject;
+        int width, int height, int centerX, int centerY,
+        iTVPTexture2D *adoptedTarget) {
         _width = width;
         _height = height;
         _centerX = centerX;
         _centerY = centerY;
-        // Match the parameter constructor's observable order: all dimensions
-        // are installed before the retained Window receives AddRef.
+        _window = windowObject;
         if(_window) {
             _window->AddRef();
         }
-        _targetTexture = TVPGetRenderManager()->CreateTexture2D(
-            nullptr, 0, static_cast<unsigned int>(_width),
-            static_cast<unsigned int>(_height), TVPTextureFormat::RGBA, 0);
+        _targetTexture = adoptedTarget;
     }
 
     void D3DAdaptor::releaseTargetTexture() {

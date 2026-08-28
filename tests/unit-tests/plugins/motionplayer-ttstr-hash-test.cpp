@@ -271,7 +271,7 @@ TEST_CASE("EvalCascadeMap: stores EvalCascadeState by ttstr key",
     // MotionNode pointers are non-owning; destruction only frees vector backing.
 }
 
-TEST_CASE("VariableLabelScope: default track state matches binary seeds",
+TEST_CASE("VariableLabelScope: value construction precedes binary track seeds",
           "[motionplayer][value_struct]") {
     using motion::detail::VariableLabelScope;
     VariableLabelScope s;
@@ -279,8 +279,8 @@ TEST_CASE("VariableLabelScope: default track state matches binary seeds",
     REQUIRE(s.activeSlotCursor == 0);
     REQUIRE(s.value == 0.0);
     REQUIRE(s.frameSource.Type() == tvtVoid);
-    REQUIRE(s.slot[0].typeZeroFlag);
-    REQUIRE(s.slot[1].typeZeroFlag);
+    REQUIRE_FALSE(s.slot[0].typeZeroFlag);
+    REQUIRE_FALSE(s.slot[1].typeZeroFlag);
     REQUIRE_FALSE(s.slot[0].merged);
     REQUIRE_FALSE(s.slot[1].merged);
 }

@@ -3,7 +3,6 @@
 //
 #include "PlayerInternal.h"
 #include "MotionDispatch.h"
-#include "MotionTraceWeb.h"
 
 #include <memory>
 
@@ -11,14 +10,6 @@ using namespace motion::internal;
 
 namespace motion {
     namespace {
-        bool shouldEmitMotionLoadDiag(std::uint32_t seq) {
-            return seq <= 200 || (seq % 100) == 0;
-        }
-
-        const char *diagBool(bool v) {
-            return v ? "true" : "false";
-        }
-
         struct DispatchRelease {
             void operator()(iTJSDispatch2 *dispatch) const {
                 if(dispatch) {
@@ -107,10 +98,11 @@ namespace motion {
                 return true;
             });
 
-        // Rebuild preserves HM1 entries but resets their live write value and
-        // drops every cached, non-owning node pointer.
+        // Rebuild preserves HM1 entries and their last live write value. It
+        // rearms the one-shot cache rebuild gate, then drops every cached,
+        // non-owning node pointer while retaining vector capacity.
         for(auto &entry : _evalCascadeMap) {
-            entry.second.writeVal = 1.0;
+            entry.second.weight = 1.0;
             entry.second.heapResult.clear();
         }
 
@@ -171,74 +163,13 @@ namespace motion {
     }
 
     void Player::buildNodeTree_guess() {
-        static std::uint32_t s_buildDiagSeq = 0;
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::uint32_t diagSeq = 0;
-        bool emitDiag = false;
-        if(logoTraceEnabled && LOGGER) {
-            diagSeq = ++s_buildDiagSeq;
-            emitDiag = shouldEmitMotionLoadDiag(diagSeq);
-        }
-
         // Construct the owning property accessor before old-tree teardown.
         // A non-object Variant throws here and leaves the existing tree intact.
         ncbPropAccessor motionContent{
             tTJSVariant(_motionContentVariant)};
 
-        const auto nodesBefore = emitDiag ? _nodes.size() : 0;
         resetAndReleaseOldNodeTree_guess();
-
-        if(emitDiag && LOGGER) {
-            const auto entryMotionPath = matchedMotionPath();
-            LOGGER->info(
-                "PRTDIAG Player::buildNodeTree enter seq={} this={} motionKey='{}' chara='{}' activePath='{}' nodesBefore={} nodesAfterReset={} allplaying={}",
-                diagSeq, static_cast<const void *>(this),
-                detail::narrow(_motionKey), detail::narrow(_chara),
-                entryMotionPath.empty()
-                    ? std::string("<none>") : entryMotionPath,
-                nodesBefore, _nodes.size(),
-                diagBool(_allplaying));
-        }
-
         detail::buildNodeTree(*this, motionContent);
-
-        // Both the sampled PRTDIAG projection and the per-node trace consume
-        // the same post-build path. Do not materialize it when trace is off.
-        std::string motionPath;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        if(emitDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG Player::buildNodeTree after-detail seq={} this={} activePath='{}' nodeCount={} labelMap={} preview={}",
-                diagSeq, static_cast<const void *>(this),
-                motionPath.empty()
-                    ? std::string("<none>") : motionPath,
-                _nodes.size(), _nodeLabelMap.size(), diagBool(_preview));
-        }
-
-        if(logoTraceEnabled &&
-           detail::logoChainTraceEnabledForPath(motionPath)) {
-            detail::logoChainTraceLogf(
-                motionPath, "buildNodeTree", "buildNodeTree", _clampedEvalTime,
-                "nodeCount={}", _nodes.size());
-            for(const auto &node : _nodes) {
-                detail::logoChainTraceLogf(
-                    motionPath, "buildNodeTree.node", "buildNodeTree",
-                    _clampedEvalTime,
-                    "nodeIndex={} label={} type={} parent={} hasSource={} meshType={} inheritFlags=0x{:x} parameterizeIndex={} objTriPriority={} clipAABB={} meshAncestor={} stencilType={}",
-                    node.index,
-                    node.layerName.IsEmpty() ? std::string("<root>")
-                                             : detail::narrow(node.layerName),
-                    node.nodeType, node.parentIndex,
-                    node.source.valid ? 1 : 0,
-                    node.meshType, node.inheritFlags, node.parameterizeIndex,
-                    node.objTriPriority,
-                    static_cast<const void *>(node.clipAABB),
-                    static_cast<const void *>(node.meshAncestor),
-                    node.stencilType);
-            }
-        }
     }
 
 } // namespace motion

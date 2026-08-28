@@ -1,14 +1,38 @@
 #include "SeparateLayerAdaptor.h"
 
-#include <algorithm>
-#include <utility>
-
 #include "PlayerInternal.h"
 #include "PlayerRenderInternal.h"
 
 using namespace motion::internal;
 
 namespace {
+
+    tjs_int wrappingAddInt32_guess(tjs_int lhs, tjs_int rhs) {
+        return static_cast<tjs_int>(
+            static_cast<tjs_uint32>(lhs) +
+            static_cast<tjs_uint32>(rhs));
+    }
+
+    tjs_int wrappingIncrementInt32_guess(tjs_int value) {
+        return static_cast<tjs_int>(
+            static_cast<tjs_uint32>(value) + 1u);
+    }
+
+    tjs_int wrappingSubtractInt32_guess(tjs_int lhs, tjs_int rhs) {
+        return static_cast<tjs_int>(
+            static_cast<tjs_uint32>(lhs) -
+            static_cast<tjs_uint32>(rhs));
+    }
+
+    struct DispatchReleaseGuard_guess {
+        iTJSDispatch2 *dispatch = nullptr;
+
+        ~DispatchReleaseGuard_guess() {
+            if(dispatch) {
+                dispatch->Release();
+            }
+        }
+    };
 
     void invalidateObjectVariant_guess(tTJSVariant &value) {
         if(value.Type() == tvtObject) {
@@ -18,64 +42,30 @@ namespace {
         value.Clear();
     }
 
+    void invalidatePayloadLayerVariant_guess(
+        const tTJSVariant &value) {
+        if(value.Type() == tvtObject) {
+            iTJSDispatch2 *object = value.AsObjectNoAddRef();
+            object->Invalidate(0, nullptr, nullptr, object);
+        }
+    }
+
     tTJSVariant separateLayerOwner_guess(
         const tTJSVariant &targetLayer) {
         tTJSVariant targetCopy(targetLayer);
         tTJSVariant owner;
-        iTJSDispatch2 *targetObject = targetCopy.AsObjectNoAddRef();
-        targetObject->PropGet(0, TJS_W("window"), nullptr, &owner,
-                              targetObject);
+        DispatchReleaseGuard_guess targetObject;
+        targetObject.dispatch = targetCopy.AsObject();
+        targetObject.dispatch->PropGet(
+            0, TJS_W("window"), nullptr, &owner,
+            targetObject.dispatch);
         return owner;
-    }
-
-    iTJSDispatch2 *resolveAssignableLayer(const tTJSVariant &value) {
-        if(value.Type() != tvtObject || !value.AsObjectNoAddRef()) {
-            return nullptr;
-        }
-
-        if(auto *adaptor =
-               ncbInstanceAdaptor<motion::SeparateLayerAdaptor>::GetNativeInstance(
-                   value.AsObjectNoAddRef(), false)) {
-            if(auto *privateTarget = adaptor->getPrivateRenderTargetObject()) {
-                return privateTarget;
-            }
-            if(auto *target = tryResolveLayerDispatch(adaptor->getTargetLayer())) {
-                return target;
-            }
-            return adaptor->getOwner();
-        }
-
-        return tryResolveLayerDispatch(value);
-    }
-
-    iTJSDispatch2 *resolveAssignableLayerStrict_guess(
-        const tTJSVariant &value) {
-        // AsObjectNoAddRef preserves native Variant conversion failure for a
-        // malformed payload instead of silently turning it into a skipped
-        // map/sequence/property update.
-        iTJSDispatch2 *object = value.AsObjectNoAddRef();
-        if(auto *adaptor =
-               ncbInstanceAdaptor<motion::SeparateLayerAdaptor>::GetNativeInstance(
-                   object, false)) {
-            if(auto *privateTarget = adaptor->getPrivateRenderTargetObject()) {
-                return privateTarget;
-            }
-            if(auto *target = tryResolveLayerDispatch(adaptor->getTargetLayer())) {
-                return target;
-            }
-            return adaptor->getOwner();
-        }
-        return tryResolveLayerDispatch(value);
     }
 
     bool getIntegerProperty_guess(iTJSDispatch2 *object,
                                   const tjs_char *name,
-                                  tjs_int &out) {
+        tjs_int &out) {
         out = 0;
-        if(!object) {
-            return false;
-        }
-
         // ncbPropAccessor::GetValue(default) first probes presence with a
         // disposable Variant. Only a successful probe performs the real
         // flags=0 read; that second status is deliberately ignored.
@@ -96,19 +86,23 @@ namespace {
                                   const tjs_char *name,
                                   tjs_int value,
                                   tjs_uint32 *memberHint = nullptr) {
-        if(!object) {
-            return;
-        }
         tTJSVariant variant(value);
         object->PropSet(TJS_MEMBERENSURE, name, memberHint, &variant, object);
+    }
+
+    void setIntegerPropertyStrict_guess(
+        iTJSDispatch2 *object,
+        const tjs_char *name,
+        tjs_int value,
+        tjs_uint32 *memberHint) {
+        tTJSVariant variant(value);
+        object->PropSet(
+            TJS_MEMBERENSURE, name, memberHint, &variant, object);
     }
 
     void callSetSize_guess(iTJSDispatch2 *object,
                            tjs_int width,
                            tjs_int height) {
-        if(!object) {
-            return;
-        }
         tTJSVariant widthVar(width);
         tTJSVariant heightVar(height);
         tTJSVariant *args[] = { &widthVar, &heightVar };
@@ -119,9 +113,6 @@ namespace {
 
     void callAssignImages_guess(iTJSDispatch2 *target,
                                 const tTJSVariant &sourceVariant) {
-        if(!target) {
-            return;
-        }
         tTJSVariant sourceArg(sourceVariant);
         tTJSVariant *args[] = { &sourceArg };
         target->FuncCall(
@@ -157,7 +148,12 @@ namespace motion {
         if(completionType != other.completionType) return true;
         if(hasOutlineOrMeshline != other.hasOutlineOrMeshline) return true;
         if(blendMode != other.blendMode) return true;
-        if(paintAndViewport != other.paintAndViewport) return true;
+        for(std::size_t index = 0; index < paintAndViewport.size(); ++index) {
+            if(paintAndViewport[index] !=
+               other.paintAndViewport[index]) {
+                return true;
+            }
+        }
         if(!meshPointsEqual(compositeMeshPoints,
                             other.compositeMeshPoints)) return true;
         if(!meshPointsEqual(bezierPatchPoints,
@@ -187,7 +183,11 @@ namespace motion {
         if(invalidateObjects) {
             for(const auto &entry : _nodes) {
                 auto payloadCopy = entry.second;
-                invalidateObjectVariant_guess(payloadCopy.layerVariant);
+                // Native keeps the temporary Layer Variant alive while the
+                // copied mesh vectors and command string unwind; its Variant
+                // is the last owning field destroyed from the payload copy.
+                invalidatePayloadLayerVariant_guess(
+                    payloadCopy.layerVariant);
             }
         }
         _nodes.clear();
@@ -260,16 +260,23 @@ namespace motion {
             layerVariant = active.layerVariant;
         }
 
-        iTJSDispatch2 *object =
-            resolveAssignableLayerStrict_guess(layerVariant);
-        setIntegerProperty_guess(
-            object, TJS_W("absolute"),
-            static_cast<tjs_int>(_absolute + _assignSequence),
+        // Both resolver overloads copy the published Layer Variant, retain
+        // only its Object, then destroy the temporary closure before either
+        // property callback. They dispatch directly to that Object; the
+        // assign-only SeparateLayerAdaptor unwrapping path is not involved.
+        DispatchReleaseGuard_guess layerObject;
+        {
+            tTJSVariant layerCopy(layerVariant);
+            layerObject.dispatch = layerCopy.AsObject();
+        }
+        setIntegerPropertyStrict_guess(
+            layerObject.dispatch, TJS_W("absolute"),
+            wrappingAddInt32_guess(_absolute, _assignSequence),
             &detail::absoluteMemberHint_guess);
         // Unlike the payload overload, this path does not increment the
         // sequence after using it.
-        setIntegerProperty_guess(
-            object, TJS_W("hitThreshold"), 256,
+        setIntegerPropertyStrict_guess(
+            layerObject.dispatch, TJS_W("hitThreshold"), 256,
             &detail::hitThresholdMemberHint_guess);
         return layerVariant;
     }
@@ -303,21 +310,25 @@ namespace motion {
             layerVariant = active.layerVariant;
         }
 
-        iTJSDispatch2 *object =
-            resolveAssignableLayerStrict_guess(layerVariant);
-        setIntegerProperty_guess(
-            object, TJS_W("absolute"),
-            static_cast<tjs_int>(_absolute + _assignSequence),
+        DispatchReleaseGuard_guess layerObject;
+        {
+            tTJSVariant layerCopy(layerVariant);
+            layerObject.dispatch = layerCopy.AsObject();
+        }
+        setIntegerPropertyStrict_guess(
+            layerObject.dispatch, TJS_W("absolute"),
+            wrappingAddInt32_guess(_absolute, _assignSequence),
             &detail::absoluteMemberHint_guess);
-        ++_assignSequence;
-        setIntegerProperty_guess(
-            object, TJS_W("hitThreshold"), 256,
+        _assignSequence = wrappingIncrementInt32_guess(
+            _assignSequence);
+        setIntegerPropertyStrict_guess(
+            layerObject.dispatch, TJS_W("hitThreshold"), 256,
             &detail::hitThresholdMemberHint_guess);
 
         return layerVariant;
     }
 
-    tjs_error SeparateLayerAdaptor::assignFromAdaptor_guess(
+    void SeparateLayerAdaptor::assign(
         const SeparateLayerAdaptor &source) {
         _activeLayers_guess.swapWith(_retiredLayers_guess);
         _assignSequence = 0;
@@ -325,26 +336,40 @@ namespace motion {
         for(const auto &entry : source._activeLayers_guess) {
             const tjs_uint32 ordinal = entry.first;
             const auto &sourcePayload = entry.second;
-            const tTJSVariant &sourceVariant = sourcePayload.layerVariant;
+            // Native retains one complete source Layer closure for the whole
+            // item independently of the later direct Object-only accessor.
+            tTJSVariant sourceVariant(sourcePayload.layerVariant);
 
             bool createdOrChanged = false;
+            // assign resets the target resolver sequence for every source
+            // node, not only once at pass entry.
+            _assignSequence = 0;
             tTJSVariant targetVariant = resolveLayerNodeInternal_guess(
                 ordinal, sourcePayload, createdOrChanged);
             (void)createdOrChanged;
-            iTJSDispatch2 *sourceLayerObject =
-                resolveAssignableLayerStrict_guess(sourceVariant);
-            iTJSDispatch2 *targetLayerObject =
-                resolveAssignableLayerStrict_guess(targetVariant);
+            DispatchReleaseGuard_guess sourceLayerObject;
+            {
+                tTJSVariant sourceLayerCopy(
+                    sourcePayload.layerVariant);
+                sourceLayerObject.dispatch = sourceLayerCopy.AsObject();
+            }
+            DispatchReleaseGuard_guess targetLayerObject;
+            {
+                tTJSVariant targetLayerCopy(targetVariant);
+                targetLayerObject.dispatch = targetLayerCopy.AsObject();
+            }
 
-            callAssignImages_guess(targetLayerObject, sourceVariant);
+            callAssignImages_guess(
+                targetLayerObject.dispatch, sourceVariant);
 
             tjs_int width = 0;
             tjs_int height = 0;
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("height"),
-                                     height);
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("width"),
-                                     width);
-            callSetSize_guess(targetLayerObject, width, height);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("height"), height);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("width"), width);
+            callSetSize_guess(
+                targetLayerObject.dispatch, width, height);
 
             tjs_int absolute = 0;
             tjs_int visible = 0;
@@ -352,68 +377,46 @@ namespace motion {
             tjs_int type = 0;
             tjs_int left = 0;
             tjs_int top = 0;
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("absolute"),
-                                     absolute);
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("visible"),
-                                     visible);
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("opacity"),
-                                     opacity);
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("type"), type);
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("left"), left);
-            getIntegerProperty_guess(sourceLayerObject, TJS_W("top"), top);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("absolute"), absolute);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("visible"), visible);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("opacity"), opacity);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("type"), type);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("left"), left);
+            getIntegerProperty_guess(
+                sourceLayerObject.dispatch, TJS_W("top"), top);
 
             // assign overwrites the temporary sequence-based absolute with a
             // value rebased from the source adaptor, then preserves the native
             // property write order.
             setIntegerProperty_guess(
-                targetLayerObject, TJS_W("absolute"),
-                _absolute + absolute - source._absolute,
+                targetLayerObject.dispatch, TJS_W("absolute"),
+                wrappingSubtractInt32_guess(
+                    wrappingAddInt32_guess(_absolute, absolute),
+                    source._absolute),
                 &detail::absoluteMemberHint_guess);
-            setIntegerProperty_guess(targetLayerObject, TJS_W("visible"),
-                                     visible,
+            setIntegerProperty_guess(targetLayerObject.dispatch,
+                                     TJS_W("visible"), visible,
                                      &detail::visibleMemberHint_guess);
-            setIntegerProperty_guess(targetLayerObject, TJS_W("opacity"),
-                                     opacity,
+            setIntegerProperty_guess(targetLayerObject.dispatch,
+                                     TJS_W("opacity"), opacity,
                                      &detail::opacityMemberHint_guess);
-            setIntegerProperty_guess(targetLayerObject, TJS_W("type"), type,
+            setIntegerProperty_guess(targetLayerObject.dispatch,
+                                     TJS_W("type"), type,
                                      &detail::typeMemberHint_guess);
-            setIntegerProperty_guess(targetLayerObject, TJS_W("left"), left,
+            setIntegerProperty_guess(targetLayerObject.dispatch,
+                                     TJS_W("left"), left,
                                      &detail::leftMemberHint_guess);
-            setIntegerProperty_guess(targetLayerObject, TJS_W("top"), top,
+            setIntegerProperty_guess(targetLayerObject.dispatch,
+                                     TJS_W("top"), top,
                                      &detail::topMemberHint_guess);
         }
 
         _retiredLayers_guess.clear(true);
-        return TJS_S_OK;
-    }
-
-    tjs_error SeparateLayerAdaptor::assignCompat(tTJSVariant *result,
-                                                 tjs_int numparams,
-                                                 tTJSVariant **param,
-                                                 iTJSDispatch2 *objthis) {
-        if(result) {
-            result->Clear();
-        }
-
-        auto *nativeInstance =
-            ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(objthis, true);
-        if(!nativeInstance) {
-            return TJS_E_INVALIDOBJECT;
-        }
-
-        SeparateLayerAdaptor *sourceAdaptor = nullptr;
-        if(numparams > 0 && param && param[0] &&
-           param[0]->Type() == tvtObject && param[0]->AsObjectNoAddRef()) {
-            sourceAdaptor =
-                ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                    param[0]->AsObjectNoAddRef(), false);
-        }
-
-        if(sourceAdaptor) {
-            return nativeInstance->assignFromAdaptor_guess(*sourceAdaptor);
-        }
-
-        return TJS_S_OK;
     }
 
 } // namespace motion

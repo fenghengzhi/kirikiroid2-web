@@ -23,7 +23,11 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PHASE3_LAST_SYMBOL = "motion::Player::updateLayersPhase3_AnchorNode"
+PROGRESS_BRIDGE_SYMBOL = "motion::Player::progressFrames_guess"
+DELIVER_CONTINUOUS_SYMBOL = "_TVPDeliverContinuousEvent"
 ACTIVE_TRACER: "NativeMotionTracer | None" = None
+LLDB_INVALID_ADDRESS = (1 << 64) - 1
+SIMULATION_FPS = 15.0
 
 
 def _native_lldb_motion_trace_callback(frame, bp_loc, _internal_dict):
@@ -31,7 +35,7 @@ def _native_lldb_motion_trace_callback(frame, bp_loc, _internal_dict):
         return False
     breakpoint_id = bp_loc.GetBreakpoint().GetID()
     ACTIVE_TRACER.handle_breakpoint_callback(breakpoint_id, frame)
-    return False
+    return ACTIVE_TRACER.should_stop()
 
 
 def _load_lldb():
@@ -99,6 +103,46 @@ def sb_unsigned(value, default: int = 0) -> int:
     except Exception:
         raw = value.GetValue()
         return int(raw, 0) if raw else default
+
+
+def callee_return_address(frame) -> int | None:
+    """Return the caller PC without assuming AArch64's LR register.
+
+    The native differential runner is x86_64 on Intel macOS, while the first
+    tracer implementation was copied from the AArch64 oracle ABI and read only
+    `lr`.  LLDB's caller frame is architecture-neutral and is also what the
+    staged native tracer already uses.
+    """
+
+    try:
+        thread = frame.GetThread()
+        if thread and thread.IsValid() and thread.GetNumFrames() > 1:
+            caller = thread.GetFrameAtIndex(1)
+            if caller and caller.IsValid():
+                pc = int(caller.GetPC())
+                if pc and pc != LLDB_INVALID_ADDRESS:
+                    return pc
+    except Exception:
+        pass
+    for register_name in ("x30", "lr"):
+        value = sb_unsigned(frame.FindRegister(register_name))
+        if value:
+            return value
+    return None
+
+
+def pointer_argument(frame, variable_name: str,
+                     register_names: tuple[str, ...]) -> int | None:
+    value = frame.FindVariable(variable_name)
+    if value and value.IsValid():
+        pointer = sb_unsigned(value)
+        if pointer:
+            return pointer
+    for register_name in register_names:
+        pointer = sb_unsigned(frame.FindRegister(register_name))
+        if pointer:
+            return pointer
+    return None
 
 
 def sb_signed(value, default: int = 0) -> int:
@@ -182,11 +226,24 @@ class NativeMotionTracer:
         self.current_record: dict[str, Any] | None = None
         self.compat_bp_id: int | None = None
         self.phase3_bp_id: int | None = None
+        self.progress_bridge_bp_id: int | None = None
+        self.tick_bp_id: int | None = None
+        self.deliver_bp_id: int | None = None
         self.record_stack: list[dict[str, Any]] = []
         self.progress_return_records: dict[int, dict[str, Any]] = {}
         self.phase3_return_records: dict[int, dict[str, Any]] = {}
+        self.tick_return_records: set[int] = set()
+        self.delivery_return_records: set[int] = set()
+        self.delivery_active = False
+        self.delivery_extra_record: dict[str, Any] | None = None
+        self.delivery_candidates: list[dict[str, Any]] = []
         self.callback_errors: list[str] = []
         self.node_layout: dict[str, int] | None = None
+        self.start_monotonic = 0.0
+        self.timed_out = False
+        self.virtual_tick_base: int | None = None
+        self.virtual_tick_index = 0
+        self.last_virtual_tick: int | None = None
 
     def run(self) -> list[dict[str, Any]]:
         global ACTIVE_TRACER
@@ -195,6 +252,7 @@ class NativeMotionTracer:
         debugger.SetAsync(False)
         try:
             ACTIVE_TRACER = self
+            self.start_monotonic = time.monotonic()
             target = debugger.CreateTarget(str(self.runner))
             if not target or not target.IsValid():
                 raise RuntimeError(f"failed to create LLDB target: {self.runner}")
@@ -217,8 +275,35 @@ class NativeMotionTracer:
                 )
             self._install_auto_callback(phase3_bp)
 
+            tick_bp = target.BreakpointCreateByName("TVPGetTickCount")
+            if tick_bp.GetNumLocations() < 1:
+                raise RuntimeError(
+                    "failed to set breakpoint on TVPGetTickCount; build the "
+                    "native runner with debug symbols")
+            self._install_auto_callback(tick_bp)
+
+            deliver_bp = target.BreakpointCreateByName(
+                DELIVER_CONTINUOUS_SYMBOL)
+            if deliver_bp.GetNumLocations() != 1:
+                raise RuntimeError(
+                    f"expected one breakpoint location for "
+                    f"{DELIVER_CONTINUOUS_SYMBOL}, got "
+                    f"{deliver_bp.GetNumLocations()}")
+            self._install_auto_callback(deliver_bp)
+
+            progress_bridge_bp = target.BreakpointCreateByName(
+                PROGRESS_BRIDGE_SYMBOL)
+            if progress_bridge_bp.GetNumLocations() < 1:
+                raise RuntimeError(
+                    f"failed to set breakpoint on {PROGRESS_BRIDGE_SYMBOL}; "
+                    "build the native runner with debug symbols")
+            self._install_auto_callback(progress_bridge_bp)
+
             self.compat_bp_id = compat_bp.GetID()
             self.phase3_bp_id = phase3_bp.GetID()
+            self.progress_bridge_bp_id = progress_bridge_bp.GetID()
+            self.tick_bp_id = tick_bp.GetID()
+            self.deliver_bp_id = deliver_bp.GetID()
 
             launch = lldb.SBLaunchInfo([
                 "--startup-xp3",
@@ -235,6 +320,12 @@ class NativeMotionTracer:
                 if self.callback_errors:
                     process.Kill()
                     raise RuntimeError("; ".join(self.callback_errors))
+                if self.timed_out:
+                    process.Kill()
+                    raise RuntimeError(
+                        f"native LLDB trace timed out after {self.timeout:.1f}s "
+                        f"with {len(self.events)} event(s)"
+                    )
                 if (self.expected_frames and
                         len(self.events) >= self.expected_frames):
                     process.Kill()
@@ -277,7 +368,25 @@ class NativeMotionTracer:
             raise RuntimeError(
                 f"failed to install LLDB breakpoint callback: "
                 f"{error.GetCString()}")
-        breakpoint.SetAutoContinue(True)
+
+    def should_stop(self) -> bool:
+        """Let synchronous SBTarget.Launch return at a terminal condition.
+
+        Script callbacks normally return ``False`` so LLDB continues the
+        inferior.  The old unconditional AutoContinue kept Launch blocked even
+        after the requested frame count, which also made the Python-side
+        timeout loop unreachable.
+        """
+
+        if self.callback_errors:
+            return True
+        if self.expected_frames and len(self.events) >= self.expected_frames:
+            return True
+        if (self.start_monotonic and
+                time.monotonic() - self.start_monotonic >= self.timeout):
+            self.timed_out = True
+            return True
+        return False
 
     def handle_breakpoint_callback(self, breakpoint_id: int, frame) -> None:
         try:
@@ -285,26 +394,41 @@ class NativeMotionTracer:
                 self._on_progress_enter(frame)
             elif breakpoint_id == self.phase3_bp_id:
                 self._on_phase3_last_enter(frame)
+            elif breakpoint_id == self.progress_bridge_bp_id:
+                self._on_progress_bridge_enter(frame)
+            elif breakpoint_id == self.tick_bp_id:
+                self._on_tick_enter(frame)
+            elif breakpoint_id == self.deliver_bp_id:
+                self._on_delivery_enter(frame)
             elif breakpoint_id in self.progress_return_records:
                 self._on_progress_return(breakpoint_id, frame)
             elif breakpoint_id in self.phase3_return_records:
                 self._on_phase3_last_return(breakpoint_id, frame)
+            elif breakpoint_id in self.tick_return_records:
+                self._on_tick_return(breakpoint_id, frame)
+            elif breakpoint_id in self.delivery_return_records:
+                self._on_delivery_return(breakpoint_id, frame)
         except Exception as exc:
             self.callback_errors.append(str(exc))
 
     def _on_progress_enter(self, frame) -> None:
-        objthis = ptr_to_hex(sb_unsigned(frame.FindRegister("x3")))
-        lr = sb_unsigned(frame.FindRegister("lr"))
-        if not lr:
-            raise RuntimeError("progressCompat breakpoint had no LR register")
+        objthis = ptr_to_hex(pointer_argument(
+            frame, "objthis", ("x3", "rcx")))
+        return_address = callee_return_address(frame)
+        if not return_address:
+            raise RuntimeError(
+                "progressCompat breakpoint had no callee return address")
 
         record: dict[str, Any] = {
             "objthis": objthis,
             "players": [],
             "errors": [],
         }
+        if self.delivery_extra_record is not None and \
+                self.delivery_extra_record.get("objthis") is None:
+            self.delivery_extra_record["objthis"] = objthis
         target = frame.GetThread().GetProcess().GetTarget()
-        ret_bp = target.BreakpointCreateByAddress(lr)
+        ret_bp = target.BreakpointCreateByAddress(return_address)
         ret_bp.SetOneShot(True)
         try:
             ret_bp.SetThreadID(frame.GetThread().GetThreadID())
@@ -315,21 +439,149 @@ class NativeMotionTracer:
         self.record_stack.append(record)
         self.current_record = record
 
+    @staticmethod
+    def _new_delivery_record() -> dict[str, Any]:
+        return {"objthis": None, "players": [], "errors": []}
+
+    def _on_delivery_enter(self, frame) -> None:
+        if self.delivery_active:
+            raise RuntimeError("nested continuous delivery in native tracer")
+        self.delivery_active = True
+        self.delivery_extra_record = self._new_delivery_record()
+        self.delivery_candidates = []
+        self.record_stack.clear()
+        self.current_record = self.delivery_extra_record
+
+        return_address = callee_return_address(frame)
+        if not return_address:
+            raise RuntimeError(
+                "continuous delivery breakpoint had no return address")
+        thread = frame.GetThread()
+        target = thread.GetProcess().GetTarget()
+        ret_bp = target.BreakpointCreateByAddress(return_address)
+        ret_bp.SetOneShot(True)
+        try:
+            ret_bp.SetThreadID(thread.GetThreadID())
+        except Exception:
+            pass
+        self._install_auto_callback(ret_bp)
+        self.delivery_return_records.add(ret_bp.GetID())
+
+    def _on_delivery_return(self, breakpoint_id: int, frame) -> None:
+        self.delivery_return_records.discard(breakpoint_id)
+        target = frame.GetThread().GetProcess().GetTarget()
+        target.BreakpointDelete(breakpoint_id)
+
+        extra = self.delivery_extra_record
+        if extra is not None and (extra.get("players") or extra.get("errors")):
+            self.delivery_candidates.append(self._event_from_record(extra))
+
+        if self.delivery_candidates:
+            # A delivery can retire one old Player and publish/progress the new
+            # active Player tree before returning.  Android records the complete
+            # active tree at the delivery boundary; prefer the candidate with
+            # the most nested Players, then the most flattened layers.
+            _candidate_index, event = max(
+                enumerate(self.delivery_candidates),
+                key=lambda indexed: (
+                    int(indexed[1].get("playerCount") or 0),
+                    len(indexed[1].get("layers") or []),
+                    indexed[0],
+                ),
+            )
+            self._commit_event(event)
+        elif self.virtual_tick_index > 0:
+            # A delivery aborted before any motion handler ran.  It must not
+            # consume one 15 Hz oracle slot; repeat this integer-grid tick on
+            # the next delivery that actually produces a sample.
+            self.virtual_tick_index -= 1
+
+        self.delivery_active = False
+        self.delivery_extra_record = None
+        self.delivery_candidates = []
+        self.record_stack.clear()
+        self.current_record = None
+
+    def _on_progress_bridge_enter(self, frame) -> None:
+        if self.current_record is None:
+            return
+        player = ptr_to_hex(pointer_argument(
+            frame, "this", ("x0", "rdi")))
+        if player is not None:
+            self.current_record["fallbackPlayer"] = player
+
+    def _on_tick_enter(self, frame) -> None:
+        """Virtualize only _TVPDeliverContinuousEvent's tick call edge.
+
+        This mirrors the Android Frida oracle exactly: startup.tjs still owns
+        ``tick - lastTick`` and every caller outside continuous delivery keeps
+        the real clock.  Virtualizing the later Player argument was subtly too
+        late because AffineSourceMotion also consumes ``_interval`` in TJS.
+        """
+
+        thread = frame.GetThread()
+        if thread.GetNumFrames() < 2:
+            return
+        caller = thread.GetFrameAtIndex(1)
+        caller_name = caller.GetFunctionName() or ""
+        if "TVPDeliverContinuousEvent" not in caller_name:
+            return
+        return_address = callee_return_address(frame)
+        if not return_address:
+            raise RuntimeError(
+                "TVPGetTickCount continuous call had no return address")
+        target = thread.GetProcess().GetTarget()
+        ret_bp = target.BreakpointCreateByAddress(return_address)
+        ret_bp.SetOneShot(True)
+        try:
+            ret_bp.SetThreadID(thread.GetThreadID())
+        except Exception:
+            pass
+        self._install_auto_callback(ret_bp)
+        self.tick_return_records.add(ret_bp.GetID())
+
+    def _on_tick_return(self, breakpoint_id: int, frame) -> None:
+        self.tick_return_records.discard(breakpoint_id)
+        target = frame.GetThread().GetProcess().GetTarget()
+        target.BreakpointDelete(breakpoint_id)
+        result_register = None
+        for name in ("rax", "x0"):
+            register = frame.FindRegister(name)
+            if register and register.IsValid():
+                result_register = register
+                break
+        if result_register is None:
+            raise RuntimeError(
+                "TVPGetTickCount return breakpoint had no result register")
+        actual = sb_unsigned(result_register)
+        if self.virtual_tick_base is None:
+            self.virtual_tick_base = actual
+        first_grid_tick = int(1000.0 / SIMULATION_FPS)
+        grid_tick = int(
+            (self.virtual_tick_index + 1) * 1000.0 / SIMULATION_FPS)
+        virtual_tick = self.virtual_tick_base + grid_tick - first_grid_tick
+        if not result_register.SetValueFromCString(str(virtual_tick)):
+            raise RuntimeError("failed to replace continuous-handler tick")
+        self.last_virtual_tick = virtual_tick
+        self.virtual_tick_index += 1
+
     def _on_phase3_last_enter(self, frame) -> None:
         if self.current_record is None:
             return
         this_value = frame.FindVariable("this")
         player = ptr_to_hex(sb_unsigned(this_value))
         if player is None:
-            player = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
-        lr = sb_unsigned(frame.FindRegister("lr"))
-        if not lr:
-            raise RuntimeError(f"{PHASE3_LAST_SYMBOL} breakpoint had no LR")
+            player = ptr_to_hex(pointer_argument(
+                frame, "this", ("x0", "rdi")))
+        return_address = callee_return_address(frame)
+        if not return_address:
+            raise RuntimeError(
+                f"{PHASE3_LAST_SYMBOL} breakpoint had no callee return address")
         if player is None:
             raise RuntimeError(f"{PHASE3_LAST_SYMBOL} breakpoint had no Player*")
 
         target = frame.GetThread().GetProcess().GetTarget()
-        ret_bp = target.BreakpointCreateByAddress(lr)
+        ret_bp = target.BreakpointCreateByAddress(return_address)
         ret_bp.SetOneShot(True)
         try:
             ret_bp.SetThreadID(frame.GetThread().GetThreadID())
@@ -366,6 +618,35 @@ class NativeMotionTracer:
         if record is None:
             return
 
+        if not record.get("players") and record.get("fallbackPlayer"):
+            player = record["fallbackPlayer"]
+            try:
+                record["players"].append({
+                    "ptr": player,
+                    "layers": self._dump_layers(frame, player),
+                    "layout": "native-lldb-fallback",
+                })
+            except Exception as exc:
+                record["errors"].append(str(exc))
+
+        event = self._event_from_record(record)
+        if self.delivery_active:
+            self.delivery_candidates.append(event)
+        else:
+            self._commit_event(event)
+
+        if self.record_stack and self.record_stack[-1] is record:
+            self.record_stack.pop()
+        else:
+            self.record_stack = [r for r in self.record_stack if r is not record]
+        if self.record_stack:
+            self.current_record = self.record_stack[-1]
+        elif self.delivery_active:
+            self.current_record = self.delivery_extra_record
+        else:
+            self.current_record = None
+
+    def _event_from_record(self, record: dict[str, Any]) -> dict[str, Any]:
         flat_layers: list[dict[str, Any]] = []
         players = record.get("players") or []
         for player in players:
@@ -377,23 +658,30 @@ class NativeMotionTracer:
                 flat_layers.append(out)
 
         event = {
-            "frameId": self.frame_counter,
+            "frameId": -1,
             "objthis": record.get("objthis"),
             "topPlayer": players[0]["ptr"] if players else None,
             "playerCount": len(players),
             "layout": "native-lldb",
+            "virtualTick": self.last_virtual_tick,
             "layers": flat_layers,
         }
         errors = record.get("errors") or []
         if errors:
             event["error"] = "; ".join(errors)
+        return event
+
+    def _commit_event(self, event: dict[str, Any]) -> None:
+        event["frameId"] = self.frame_counter
         self.events.append(event)
         self.frame_counter += 1
-        if self.record_stack and self.record_stack[-1] is record:
-            self.record_stack.pop()
-        else:
-            self.record_stack = [r for r in self.record_stack if r is not record]
-        self.current_record = self.record_stack[-1] if self.record_stack else None
+        if len(self.events) == 1 or len(self.events) % 5 == 0:
+            print(
+                f"native LLDB trace: captured {len(self.events)}/"
+                f"{self.expected_frames} frame(s)",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _dump_layers(self, frame, player_ptr_hex: str | None = None) -> list[dict[str, Any]]:
         this_value = frame.FindVariable("this")
@@ -424,7 +712,7 @@ class NativeMotionTracer:
             else:
                 node = self._node_value_for_player_index(
                     frame, player_ptr_hex, i)
-            layers.append(self._read_layer_from_node(node, i))
+            layers.append(self._read_layer_from_node(frame, node, i))
         return layers
 
     def _node_count_for_player_ptr(self, frame, player_ptr_hex: str) -> int:
@@ -467,8 +755,8 @@ class NativeMotionTracer:
 
     def _node_sequence_for_player_ptr(self, frame, player_ptr_hex: str):
         try:
-            runtime = self._runtime_value_for_player_ptr(frame, player_ptr_hex)
-            nodes = sb_child_optional(runtime, "nodes")
+            player = self._player_value_from_ptr(frame, player_ptr_hex)
+            nodes = sb_child_optional(player, "_nodes", "nodes")
             if not nodes or not nodes.IsValid():
                 return None, None
             synthetic = nodes.GetSyntheticValue()
@@ -499,27 +787,38 @@ class NativeMotionTracer:
                 return node_type
         raise RuntimeError("motion::detail::MotionNode debug type not found")
 
-    @staticmethod
-    def _read_layer_from_node(node, index: int) -> dict[str, Any]:
-        accumulated = sb_child_optional(node, "accumulated")
+    def _read_layer_from_node(self, frame, node, index: int) -> dict[str, Any]:
+        node_type = node.GetType().GetUnqualifiedType()
+        layout = self._ensure_node_layout(node_type)
+        address = int(node.GetLoadAddress())
+        if not address or address == LLDB_INVALID_ADDRESS:
+            address = sb_unsigned(node.AddressOf())
+        if not address:
+            raise RuntimeError(f"node {index} has no load address")
+        error = self.lldb.SBError()
+        blob = frame.GetThread().GetProcess().ReadMemory(
+            address, layout["sizeof"], error)
+        if not error.Success() or len(blob) != layout["sizeof"]:
+            raise RuntimeError(
+                f"failed to read node {index}: {error.GetCString()}")
         return {
             "index": index,
             "label": "",
-            "nodeType": sb_signed(sb_child_optional(node, "nodeType"), 0),
-            "visible": sb_bool(sb_child_optional(accumulated, "visible"), None),
-            "active": sb_bool(sb_child_optional(accumulated, "active"), None),
-            "flipX": sb_bool(sb_child_optional(accumulated, "flipX"), None),
-            "flipY": sb_bool(sb_child_optional(accumulated, "flipY"), None),
-            "posX": sb_float(sb_child_optional(accumulated, "posX")),
-            "posY": sb_float(sb_child_optional(accumulated, "posY")),
-            "posZ": sb_float(sb_child_optional(accumulated, "posZ")),
-            "angleDeg": sb_float(sb_child_optional(accumulated, "angle")),
-            "scaleX": sb_float(sb_child_optional(accumulated, "scaleX")),
-            "scaleY": sb_float(sb_child_optional(accumulated, "scaleY")),
-            "slantX": sb_float(sb_child_optional(accumulated, "slantX")),
-            "slantY": sb_float(sb_child_optional(accumulated, "slantY")),
-            "opacity": sb_signed(sb_child_optional(accumulated, "opacity"), 0),
-            "blendMode": sb_signed(sb_child_optional(node, "stencilType"), 0),
+            "nodeType": self._read_i32(blob, layout["nodeType"]),
+            "visible": self._read_bool(blob, layout["visible"]),
+            "active": self._read_bool(blob, layout["active"]),
+            "flipX": self._read_bool(blob, layout["flipX"]),
+            "flipY": self._read_bool(blob, layout["flipY"]),
+            "posX": self._read_f64(blob, layout["posX"]),
+            "posY": self._read_f64(blob, layout["posY"]),
+            "posZ": self._read_f64(blob, layout["posZ"]),
+            "angleDeg": self._read_f64(blob, layout["angle"]),
+            "scaleX": self._read_f64(blob, layout["scaleX"]),
+            "scaleY": self._read_f64(blob, layout["scaleY"]),
+            "slantX": self._read_f64(blob, layout["slantX"]),
+            "slantY": self._read_f64(blob, layout["slantY"]),
+            "opacity": self._read_i32(blob, layout["opacity"]),
+            "blendMode": self._read_i32(blob, layout["stencilType"]),
             "currentImage": "",
         }
 
@@ -542,14 +841,6 @@ class NativeMotionTracer:
         err = value.GetError().GetCString() if value.IsValid() else "invalid value"
         raise RuntimeError(
             f"could not materialize motion::Player at {player_ptr_hex}: {err}")
-
-    def _runtime_value_for_player_ptr(self, frame, player_ptr_hex: str):
-        player = self._player_value_from_ptr(frame, player_ptr_hex)
-        runtime_shared = sb_child(player, "_runtime", 0)
-        runtime_ptr = sb_child(runtime_shared, "pointer", 0)
-        if not sb_unsigned(runtime_ptr):
-            raise RuntimeError("Player::_runtime pointer is null")
-        return runtime_ptr.Dereference()
 
     def _ensure_node_layout(self, node_type) -> dict[str, int]:
         if self.node_layout is not None:

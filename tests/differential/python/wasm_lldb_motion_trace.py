@@ -19,6 +19,7 @@ from wasm_lldb_runner import (
     register_double_arg,
     register_int_arg,
     run_lldb_command,
+    sb_uint,
 )
 
 
@@ -36,18 +37,35 @@ def ptr_to_hex(value: int | None) -> str | None:
     return f"0x{value:x}"
 
 
-def probe_int(frame, index: int, default: int | None = None) -> int | None:
+def probe_int(frame, index: int, default: int | None = None,
+              name: str | None = None) -> int | None:
     try:
         return register_int_arg(frame, index)
     except Exception:
+        if name:
+            parsed = sb_uint(frame.FindVariable(name))
+            if parsed is not None:
+                return parsed
         return default
 
 
-def probe_double(frame, index: int) -> float | None:
+def probe_double(frame, index: int,
+                 name: str | None = None) -> float | None:
     try:
         parsed = register_double_arg(frame, index)
         return parsed if math.isfinite(parsed) else None
     except Exception:
+        if name:
+            value = frame.FindVariable(name)
+            if value and value.IsValid():
+                raw = value.GetValue()
+                if raw is not None:
+                    try:
+                        parsed = float(raw)
+                        if math.isfinite(parsed):
+                            return parsed
+                    except Exception:
+                        pass
         return None
 
 
@@ -185,6 +203,7 @@ class WasmMotionTracer:
         self.driver_stdout = ""
         self.driver_stderr = ""
         self.driver_summary = ""
+        self.abi_dumped = False
 
     def run(self) -> list[dict[str, Any]]:
         lldb = self.lldb
@@ -427,6 +446,20 @@ class WasmMotionTracer:
             if thread.GetStopReason() != self.lldb.eStopReasonBreakpoint:
                 continue
             frame = thread.GetFrameAtIndex(0)
+            function_name = frame.GetFunctionName() or ""
+            # Wasmtime's JIT debug map can report more than one symbolic
+            # breakpoint id for the same native stop.  Dispatch by the actual
+            # top-frame function whenever LLDB resolved it; otherwise a stop in
+            # layer_sample may be incorrectly decoded with frame_begin's ABI.
+            if FRAME_BEGIN_SYMBOL in function_name:
+                self._on_frame_begin(frame)
+                continue
+            if LAYER_SAMPLE_SYMBOL in function_name:
+                self._on_layer_sample(frame)
+                continue
+            if FRAME_END_SYMBOL in function_name:
+                self._on_frame_end(frame)
+                continue
             ids = self._breakpoint_ids_for_thread(thread)
             if self.begin_bp_id in ids:
                 self._on_frame_begin(frame)
@@ -445,19 +478,64 @@ class WasmMotionTracer:
 
     def _on_frame_begin(self, frame) -> None:
         self.begin_hits += 1
-        frame_id = probe_int(frame, 0)
+        if (os.environ.get("KRKR2_WASMTIME_LLDB_DUMP_ABI") == "1" and
+                not self.abi_dumped):
+            self.abi_dumped = True
+            self.callback_errors.append(self._format_abi_dump(frame))
+            return
+        frame_id = probe_int(frame, 0, name="frameId")
         if frame_id is None:
             self.callback_errors.append(
                 f"{FRAME_BEGIN_SYMBOL} had no frameId register")
             return
         record: dict[str, Any] = {
             "frameId": frame_id,
-            "objthis": ptr_to_hex(probe_int(frame, 1)),
-            "topPlayer": ptr_to_hex(probe_int(frame, 2)),
-            "playerCount": probe_int(frame, 3, 0) or 0,
+            "objthis": ptr_to_hex(probe_int(frame, 1, name="objthis")),
+            "topPlayer": ptr_to_hex(probe_int(frame, 2, name="topPlayer")),
+            "playerCount": probe_int(
+                frame, 3, 0, name="playerCount") or 0,
             "layer_map": {},
         }
         self.frame_records[frame_id] = record
+
+    def _format_abi_dump(self, frame) -> str:
+        registers: dict[str, Any] = {}
+        for name in (
+            "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+            "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+        ):
+            registers[name] = sb_uint(frame.FindRegister(name))
+        variables: dict[str, Any] = {}
+        for name in ("frameId", "objthis", "topPlayer", "playerCount"):
+            value = frame.FindVariable(name)
+            variables[name] = {
+                "valid": bool(value and value.IsValid()),
+                "value": value.GetValue() if value and value.IsValid() else None,
+                "unsigned": sb_uint(value),
+                "summary": value.GetSummary()
+                if value and value.IsValid() else None,
+            }
+        cfa = int(frame.GetCFA())
+        stack_words: list[str] = []
+        if cfa and cfa != (1 << 64) - 1:
+            error = self.lldb.SBError()
+            start = cfa - 32
+            data = frame.GetThread().GetProcess().ReadMemory(
+                start, 128, error)
+            if error.Success() and len(data) == 128:
+                stack_words = [
+                    f"{int.from_bytes(data[offset:offset + 8], 'little'):016x}"
+                    for offset in range(0, len(data), 8)
+                ]
+        return "Wasmtime x86_64 probe ABI dump: " + json.dumps({
+            "function": frame.GetFunctionName(),
+            "pc": int(frame.GetPC()),
+            "cfa": cfa,
+            "registers": registers,
+            "variables": variables,
+            "stackStart": cfa - 32 if cfa else None,
+            "stackWords": stack_words,
+        }, sort_keys=True)
 
     def _layer_for(self, frame_id: int, index: int) -> dict[str, Any]:
         record = self.frame_records.setdefault(
@@ -483,15 +561,16 @@ class WasmMotionTracer:
 
     def _on_layer_sample(self, frame) -> None:
         self.layer_hits += 1
-        frame_id = probe_int(frame, 0)
-        index = probe_int(frame, 1)
+        frame_id = probe_int(frame, 0, name="frameId")
+        index = probe_int(frame, 1, name="index")
         if frame_id is None or index is None:
             self.callback_errors.append(
                 f"{LAYER_SAMPLE_SYMBOL} missing frame/index registers")
             return
         layer = self._layer_for(frame_id, index)
-        node_flags = probe_int(frame, 2, 0) or 0
-        opacity_blend = probe_int(frame, 3, 0) or 0
+        node_flags = probe_int(frame, 2, 0, name="nodeFlags") or 0
+        opacity_blend = probe_int(
+            frame, 3, 0, name="opacityBlend") or 0
         flags = int(node_flags & 0xffffffff)
         node_type = int((node_flags >> 32) & 0xffffffff)
         if node_type >= 0x80000000:
@@ -509,21 +588,21 @@ class WasmMotionTracer:
         layer["active"] = bool(flags & (1 << 1))
         layer["flipX"] = bool(flags & (1 << 2))
         layer["flipY"] = bool(flags & (1 << 3))
-        for key, reg in (
-            ("posX", 0),
-            ("posY", 1),
-            ("posZ", 2),
-            ("angleDeg", 3),
-            ("scaleX", 4),
-            ("scaleY", 5),
-            ("slantX", 6),
-            ("slantY", 7),
+        for key, reg, arg_name in (
+            ("posX", 0, "posX"),
+            ("posY", 1, "posY"),
+            ("posZ", 2, "posZ"),
+            ("angleDeg", 3, "angleDeg"),
+            ("scaleX", 4, "scaleX"),
+            ("scaleY", 5, "scaleY"),
+            ("slantX", 6, "slantX"),
+            ("slantY", 7, "slantY"),
         ):
-            layer[key] = probe_double(frame, reg)
+            layer[key] = probe_double(frame, reg, name=arg_name)
 
     def _on_frame_end(self, frame) -> None:
         self.end_hits += 1
-        frame_id = probe_int(frame, 0)
+        frame_id = probe_int(frame, 0, name="frameId")
         if frame_id is None:
             self.callback_errors.append(
                 f"{FRAME_END_SYMBOL} had no frameId register")

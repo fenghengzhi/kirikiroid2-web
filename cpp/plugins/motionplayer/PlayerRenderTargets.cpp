@@ -2,8 +2,8 @@
 // Split from PlayerRender.cpp for maintainability.
 //
 #include "PlayerRenderInternal.h"
-#include "MotionTraceWeb.h"
 #include "MotionRenderBackend.h"
+#include "Platform.h"
 #include "PrivateMotionGLL.h"
 #include "RenderManager.h"
 #include "ResourceManager.h"
@@ -102,7 +102,9 @@ namespace motion {
             bool priorDraw) {
             int opacity = item.opacity;
             if(priorDraw) {
-                opacity = opacity >= 0 ? opacity / 2 : (opacity + 1) / 2;
+                // C++ signed division truncates toward zero. The references
+                // implement this as (x + signbit) arithmetic-shift-right.
+                opacity /= 2;
             }
             return opacity;
         }
@@ -176,7 +178,9 @@ namespace motion {
                 ? item.paintBox[3]
                 : height;
 
-            if(item.hasViewport && item.viewport[2] >= item.viewport[0] &&
+            // The native item has no separate viewport-valid byte. A missing
+            // viewport is represented only by its inverted numeric rectangle.
+            if(item.viewport[2] >= item.viewport[0] &&
                item.viewport[3] >= item.viewport[1]) {
                 const float viewportLeft = std::floor(item.viewport[0]);
                 const float viewportTop = std::floor(item.viewport[1]);
@@ -258,10 +262,10 @@ namespace motion {
                 const int previousStencilCount = stencilCount++;
                 if(previousStencilCount >= 255 && !stencilOverflowLogged) {
                     stencilOverflowLogged = true;
-                    if(auto logger = LOGGER) {
-                        logger->warn(
-                            "MMotionPlayer: StencilCount overflow(256)");
-                    }
+                    const ttstr message(
+                        TJS_W("StencilCount overflow(256)"));
+                    const ttstr caption(TJS_W("MMotionPlayer"));
+                    (void)TVPShowSimpleMessageBox(message, caption);
                 }
                 const auto ref = static_cast<std::uint8_t>(stencilCount);
                 item.stencilWriteRef = ref;
@@ -350,7 +354,7 @@ namespace motion {
         void appendD3DAffine_guess(
             motion::render_backend_guess::TriangleBatch_guess &batch,
             iTVPRenderMethod *method,
-            iTVPTexture2D *target,
+            const D3DTargetTextureGetter_guess &targetTextureGetter,
             const tTVPRect &targetRect,
             const PreparedRenderItem &item,
             iTVPTexture2D *sourceTexture,
@@ -361,16 +365,20 @@ namespace motion {
             const auto dst = makeAffineTargetQuad(
                 item, xOffset, yOffset);
             const auto src = makeTextureQuad(sourceRect);
-            (void)method->IsBlendTarget();
+            // The getter returns (reference, target). D3DAdaptor's callable
+            // rereads its live target slot here, after the source callback and
+            // method selection; D3DLayer's callable returns its captured target.
+            const auto targets = targetTextureGetter(
+                method->IsBlendTarget(), targetRect);
             batch.appendTriangles_guess(
-                method, sourceTexture, target, target, targetRect,
+                method, sourceTexture, targets.second, targets.first, targetRect,
                 src.data(), dst.data(), dst.size(), packedColor);
         }
 
         void appendD3DMesh_guess(
             motion::render_backend_guess::TriangleBatch_guess &batch,
             iTVPRenderMethod *method,
-            iTVPTexture2D *target,
+            const D3DTargetTextureGetter_guess &targetTextureGetter,
             const tTVPRect &targetRect,
             iTVPTexture2D *sourceTexture,
             const std::array<int, 4> &sourceRect,
@@ -388,9 +396,11 @@ namespace motion {
                 [&](iTVPTexture2D *submittedSourceTexture,
                     const std::vector<tTVPPointD> &sourceVertices,
                     const std::vector<tTVPPointD> &destinationVertices) {
-                    (void)method->IsBlendTarget();
+                    const auto targets = targetTextureGetter(
+                        method->IsBlendTarget(), targetRect);
                     batch.appendTriangles_guess(
-                        method, submittedSourceTexture, target, target,
+                        method, submittedSourceTexture,
+                        targets.second, targets.first,
                         targetRect, sourceVertices.data(),
                         destinationVertices.data(),
                         destinationVertices.size(), packedColor);
@@ -416,6 +426,19 @@ namespace motion {
         int canvasHeight,
         std::array<float, 4> &out) {
         return computeD3DClip_guess(item, canvasWidth, canvasHeight, out);
+    }
+
+    bool internal::render_detail::
+    computeAccurateSlaClipForDifferentialTest_guess(
+        const detail::PreparedRenderItem &item,
+        int canvasWidth,
+        int canvasHeight,
+        std::array<float, 4> &out) {
+        RenderClipRect clip;
+        const bool valid = computeAccurateSlaClip_guess(
+            item, canvasWidth, canvasHeight, clip);
+        out = {clip.left, clip.top, clip.right, clip.bottom};
+        return valid;
     }
 
     tjs_int internal::render_detail::getInternalWorkspaceDimension_guess(
@@ -514,31 +537,14 @@ namespace motion {
 
 
     int Player::buildPrivateMotionGLLCommands_guess(
-        iTJSDispatch2 *renderTargetObject,
+        tTJSNI_BaseLayer *renderLayer,
         tjs_int canvasWidth,
         tjs_int canvasHeight,
         detail::PreparedRenderItemList &mainList,
         detail::PreparedRenderItemList &auxList) {
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        bool traceForPath = false;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-            traceForPath =
-                detail::logoChainTraceEnabledForPath(motionPath);
-        }
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "sla.renderMotionFrame",
-                "buildPrivateMotionGLLCommands_guess",
-                _clampedEvalTime,
-                "target={} canvas={}x{}",
-                static_cast<const void *>(renderTargetObject),
-                canvasWidth, canvasHeight);
-        }
-
+        const bool priorDraw = _priorDraw;
         int stencilCount = 0;
-        if(!_priorDraw) {
+        if(!priorDraw) {
             stencilCount = assignD3DStencilRefs_guess(mainList);
             for(auto *itemPtr : mainList) {
                 auto &item = *itemPtr;
@@ -563,11 +569,11 @@ namespace motion {
             }
         }
         (void)auxList;
-        clearPrivateMotionGLLRenderQueue_guess(renderTargetObject);
+        clearPrivateMotionGLLRenderQueue_guess(renderLayer);
         for(auto *itemPtr : mainList) {
             auto &item = *itemPtr;
             if(!shouldQueuePrivateMotionGLLRenderItem_guess(
-                   item, _priorDraw)) {
+                   item, priorDraw)) {
                 continue;
             }
             auto *sourceTexture =
@@ -575,7 +581,7 @@ namespace motion {
                     *this, item);
             PrivateMotionGLLRenderItemInput_guess queueItem;
             queueItem.opacity =
-                privateMotionGLLOpacity_guess(item, _priorDraw);
+                privateMotionGLLOpacity_guess(item, priorDraw);
             queueItem.stencilMaskRef = item.stencilMaskRef;
             queueItem.stencilWriteRef = item.stencilWriteRef;
             queueItem.blendMode = item.blendMode;
@@ -597,18 +603,9 @@ namespace motion {
             queueItem.sourceTexture = sourceTexture;
             auto *pointsToSwap =
                 populatePrivateMotionGLLPoints_guess(item, queueItem);
-            appendPrivateMotionGLLRenderItem_guess(renderTargetObject,
+            appendPrivateMotionGLLRenderItem_guess(renderLayer,
                                                    queueItem,
                                                    pointsToSwap);
-        }
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "sla.renderMotionFrame.queue",
-                "buildPrivateMotionGLLCommands_guess",
-                _clampedEvalTime,
-                "queuedItems={}",
-                privateMotionGLLRenderQueueSize_guess(
-                    renderTargetObject));
         }
         return stencilCount;
     }
@@ -648,15 +645,6 @@ namespace motion {
         const tjs_int canvasHeight = readTargetDimension(
             TJS_W("height"), &detail::heightMemberHint_guess);
 
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        bool traceForPath = false;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-            traceForPath =
-                detail::logoChainTraceEnabledForPath(motionPath);
-        }
-
         const std::array<float, 4> targetClip{
             0.0f, 0.0f,
             static_cast<float>(canvasWidth),
@@ -670,7 +658,6 @@ namespace motion {
         sla->beginLayerPass_guess();
         buildRenderCommands(mainList, auxList, targetClip);
 
-        int renderedItems = 0;
         for(auto *itemPtr : mainList) {
             if(!shouldRenderAccurateSlaItem_guess(*itemPtr)) {
                 continue;
@@ -709,8 +696,7 @@ namespace motion {
                 payload.compositeMeshPoints =
                     item.commandCompositeMeshPoints;
             } else if(item.meshType == 1) {
-                payload.bezierPatchPoints =
-                    item.commandBezierPatchPoints;
+                payload.bezierPatchPoints = item.meshPoints;
             }
             payload.corners = item.corners;
 
@@ -735,7 +721,8 @@ namespace motion {
                 tTJSVariant sourceObject =
                     nativeRM()->loadRenderSourceLayerFromItem_guess(
                         *this, item);
-                auto *sourceLayerObject = sourceObject.AsObjectNoAddRef();
+                ncbPropAccessor sourceLayerOwner{sourceObject};
+                auto *sourceLayerObject = sourceLayerOwner.GetDispatch();
                 const auto readSourceDimension =
                     [sourceLayerObject](const tjs_char *member,
                                         tjs_uint32 *hint) {
@@ -892,55 +879,12 @@ namespace motion {
                     &detail::opacityMemberHint_guess, &opacityValue,
                     publishLayerObject);
             }
-            ++renderedItems;
-
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            detail::motionTraceRecordPostDrawLayerCandidate(
-                this, finalLayerVariant.AsObjectNoAddRef(),
-                "Player::renderAccurateSeparateLayerAdaptor_guess.item.afterCopy");
-#endif
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "sla.accurate.item",
-                    "renderAccurateSeparateLayerAdaptor_guess",
-                    _clampedEvalTime,
-                    "nodeIndex={} layerId={} clip=[{},{},{},{}] meshType={} type={} opacity={} source={}",
-                    item.nodeIndex, item.layerId1,
-                    clip.left, clip.top, clip.right, clip.bottom,
-                    item.meshType, static_cast<int>(layerType), item.opacity,
-                    item.sourceKey);
-            }
         }
 
         sla->endLayerPass_guess();
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "sla.accurate.rendered",
-                "renderAccurateSeparateLayerAdaptor_guess",
-                _clampedEvalTime,
-                "targetLayer={} canvas={}x{} renderedItems={}",
-                static_cast<const void *>(targetLayerObject),
-                canvasWidth, canvasHeight, renderedItems);
-        }
     }
 
     void Player::renderToD3DAdaptor(D3DAdaptor *adaptor) {
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        bool traceForPath = false;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-            traceForPath =
-                detail::logoChainTraceEnabledForPath(motionPath);
-        }
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "draw.d3d", "Player::renderToD3DAdaptor",
-                _clampedEvalTime,
-                "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
-                adaptor->getWidth(), adaptor->getHeight());
-        }
-
         detail::PreparedRenderItemList mainList;
         detail::PreparedRenderItemList auxList;
         if(!prepareRenderItems(mainList, auxList)) {
@@ -954,7 +898,14 @@ namespace motion {
     // compositor's current native texture and transformed origin directly; no
     // TJS Layer or D3DAdaptor is constructed.
     void Player::drawToTexture_guess(iTVPTexture2D *target, float x, float y) {
-        auto *resourceManager = nativeRM();
+        // Match the native D3DLayer route's strict Variant::AsObject path. It
+        // AddRefs the dispatch and never releases that reference before return;
+        // using nativeRM() here would silently repair the per-call leak.
+        iTJSDispatch2 *resourceManagerDispatch =
+            _findSourceResourceManager.AsObject();
+        auto *resourceManager =
+            ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(
+                resourceManagerDispatch);
         const ttstr motionContext =
             static_cast<ttstr>(_findMotionContextVariant);
         const auto loadedIt =
@@ -977,11 +928,21 @@ namespace motion {
                 (void)loadedResource;
                 return item.sourceState->texture;
             };
-        TVPGetRenderManager()->SetRenderTarget(target);
+        // This otherwise-unused selector call is present in both D3DLayer
+        // callers before the private OpenGL target bind.
+        (void)TVPIsSoftwareRenderManager();
+        render_backend_guess::getPrivateOpenGLRenderManager_guess()
+            ->SetRenderTarget(target);
+        const tTVPRect targetRect(
+            0, 0, static_cast<tjs_int>(target->GetWidth()),
+            static_cast<tjs_int>(target->GetHeight()));
+        const D3DTargetTextureGetter_guess targetTextureGetter =
+            [target](bool, const tTVPRect &) {
+                return D3DTargetTexturePair_guess(target, target);
+            };
         renderPreparedItemsToD3DTexture_guess(
-            target, static_cast<tjs_int>(target->GetWidth()),
-            static_cast<tjs_int>(target->GetHeight()), x, y,
-            mainList, sourceTextureGetter);
+            target, targetTextureGetter, targetRect, sourceTextureGetter,
+            mainList, x, y);
     }
 
     void D3DAdaptor::renderFromPlayer_guess(
@@ -1008,43 +969,37 @@ namespace motion {
                 return nativeRM()->loadRenderSourceTextureForItem_guess(
                     *this, *adaptor, item);
             };
-        TVPGetRenderManager()->SetRenderTarget(targetTexture);
+        render_backend_guess::getPrivateOpenGLRenderManager_guess()
+            ->SetRenderTarget(targetTexture);
+        const tTVPRect targetRect(
+            0, 0, adaptor->getWidth(), adaptor->getHeight());
+        const D3DTargetTextureGetter_guess targetTextureGetter =
+            [adaptor](bool, const tTVPRect &) {
+                auto *currentTarget = adaptor->targetTexture();
+                return D3DTargetTexturePair_guess(
+                    currentTarget, currentTarget);
+            };
         renderPreparedItemsToD3DTexture_guess(
-            targetTexture, adaptor->getWidth(), adaptor->getHeight(),
-            0.5f, 0.5f, mainList,
-            sourceTextureGetter);
+            targetTexture, targetTextureGetter, targetRect,
+            sourceTextureGetter, mainList, 0.5f, 0.5f);
     }
 
     void Player::renderPreparedItemsToD3DTexture_guess(
         iTVPTexture2D *targetTexture,
-        tjs_int width,
-        tjs_int height,
-        float xOffset,
-        float yOffset,
+        const D3DTargetTextureGetter_guess &targetTextureGetter,
+        const tTVPRect &targetRect,
+        const D3DSourceTextureGetter_guess &sourceTextureGetter,
         detail::PreparedRenderItemList &mainList,
-        const D3DSourceTextureGetter_guess &sourceTextureGetter) {
-        const tTVPRect targetRect(0, 0, width, height);
+        float xOffset,
+        float yOffset) {
         const int stencilRefs = prepareD3DRenderItems_guess(
-            mainList, width, height, _priorDraw);
+            mainList, targetRect.right - targetRect.left,
+            targetRect.bottom - targetRect.top, _priorDraw);
         const bool stencilEnabled = stencilRefs > 0;
         motion::render_backend_guess::TriangleBatch_guess batch(
-            TVPGetRenderManager());
+            render_backend_guess::getPrivateOpenGLRenderManager_guess());
         motion::render_backend_guess::beginStencil_guess(
             targetTexture, stencilEnabled);
-
-        if(detail::logoChainTraceEnabled()) {
-            const auto motionPath = matchedMotionPath();
-            if(detail::logoChainTraceEnabledForPath(motionPath)) {
-                detail::logoChainTraceLogf(
-                    motionPath, "draw.d3d.renderItemsToTexture",
-                    "Player_renderPreparedItemsToD3DTexture_guess",
-                    _clampedEvalTime,
-                    "target={} targetRect=[0,0,{},{}] items={} priorDraw={} stencilRefs={}",
-                    static_cast<const void *>(targetTexture),
-                    width, height, mainList.size(),
-                    _priorDraw ? 1 : 0, stencilRefs);
-            }
-        }
 
         for(auto *itemPtr : mainList) {
             auto &item = *itemPtr;
@@ -1075,7 +1030,7 @@ namespace motion {
             const auto packedColor =
                 d3dPackedColorWithOpacity(item, opacity);
             batch.setStencilState_guess(
-                item.stencilMaskRef, item.stencilWriteRef);
+                item.stencilWriteRef, item.stencilMaskRef);
             // All four native shared renderers pass literal true here. The
             // D3DAdaptor alphaOpAdd property is stored for script readback but
             // is not propagated into this method-selection key.
@@ -1090,7 +1045,7 @@ namespace motion {
 
             if(item.meshType == 0) {
                 appendD3DAffine_guess(
-                    batch, method, targetTexture, targetRect, item,
+                    batch, method, targetTextureGetter, targetRect, item,
                     sourceTexture, sourceRect, xOffset, yOffset,
                     packedColor);
             } else if(item.meshType == 1) {
@@ -1105,7 +1060,7 @@ namespace motion {
                     tessellateBezierPatch_guess(
                         boundsPoints, cellDivisions[0], cellDivisions[1]);
                 appendD3DMesh_guess(
-                    batch, method, targetTexture, targetRect,
+                    batch, method, targetTextureGetter, targetRect,
                     sourceTexture, sourceRect, boundsPoints, meshPoints,
                     cellDivisions[0], cellDivisions[1], packedColor);
             } else if(item.meshType == 2) {
@@ -1113,7 +1068,7 @@ namespace motion {
                     buildOffsetMeshPoints(item.commandCompositeMeshPoints,
                                           xOffset, yOffset);
                 appendD3DMesh_guess(
-                    batch, method, targetTexture, targetRect,
+                    batch, method, targetTextureGetter, targetRect,
                     sourceTexture, sourceRect, meshPoints, meshPoints,
                     item.meshDivX, item.meshDivY, packedColor);
             }
@@ -1127,15 +1082,6 @@ namespace motion {
         tTJSVariant target,
         detail::PreparedRenderItemList &mainList,
         detail::PreparedRenderItemList &auxList) {
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-
         // One ncbPropAccessor for the global Layer class is constructed before
         // coercing the target. It owns the dispatch across target-size reads,
         // the submit loop and final setClip(argc=0), and dies after the target
@@ -1164,15 +1110,6 @@ namespace motion {
             layerClassObject, resolvedLayerObject, TJS_W("height"),
             &detail::heightMemberHint_guess);
 
-        if(traceForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "draw.renderToCanvas",
-                "Player.renderToCanvas", _clampedEvalTime,
-                "targetLayerCanvas={}x{} needsInternalAssignImages={} route=callerTarget",
-                canvasWidth, canvasHeight,
-                _needsInternalAssignImages ? 1 : 0);
-        }
-
         iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
 
         // Build leaf/composed state only when priorDraw is false. Prior-draw
@@ -1187,11 +1124,6 @@ namespace motion {
         executeLayerRenderCommands(
             layerClassObject, renderLayerObject, canvasWidth, canvasHeight,
             true, mainList);
-        if(traceForPath) {
-            detail::logoChainTraceSummary(
-                motionPath, "Player.renderToCanvas", _clampedEvalTime,
-                "callerTarget=1");
-        }
     }
 
     void Player::renderToSeparateLayerAdaptor(SeparateLayerAdaptor *sla) {
@@ -1202,122 +1134,33 @@ namespace motion {
         }
         applyPreparedRenderItemProjection_guess(mainList);
 
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        bool traceForPath = false;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-            traceForPath =
-                detail::logoChainTraceEnabledForPath(motionPath);
-        }
-        const bool accurateSla = isAccurateSlaRenderEnabled();
+        // The backend decision is process-lifetime state. All references use
+        // one function-local guard and never re-read the preference later.
+        static const bool accurateSla = isAccurateSlaRenderEnabled();
 
         if(accurateSla) {
-            iTJSDispatch2 *diagnosticTargetLayerObject = nullptr;
-            if(traceForPath) {
-                diagnosticTargetLayerObject =
-                    tryResolveLayerDispatch(sla->getTargetLayer());
-            }
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            if(!diagnosticTargetLayerObject) {
-                diagnosticTargetLayerObject =
-                    tryResolveLayerDispatch(sla->getTargetLayer());
-            }
-            struct AccurateSlaRenderTraceScope {
-                Player *player = nullptr;
-                iTJSDispatch2 *target = nullptr;
-                AccurateSlaRenderTraceScope(Player *p, iTJSDispatch2 *t)
-                    : player(p), target(t) {
-                    detail::motionTraceBeginAccurateSlaRender(player, target);
-                }
-                ~AccurateSlaRenderTraceScope() {
-                    detail::motionTraceEndAccurateSlaRender(player, target);
-                }
-            } accurateSlaRenderTrace{
-                this, diagnosticTargetLayerObject};
-            detail::MotionTraceRenderExecuteScope renderTrace(
-                this, diagnosticTargetLayerObject, false, mainList);
-#endif
             renderAccurateSeparateLayerAdaptor_guess(
                 sla, mainList, auxList);
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "sla.accurate.begin", "renderAccurateSla",
-                    _clampedEvalTime, "target={}",
-                    static_cast<const void *>(diagnosticTargetLayerObject));
-            }
             updateAccurateSLAAfterDraw(sla->getTargetLayer());
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "sla.accurate.end",
-                    "updateAccurateSLAAfterDraw",
-                    _clampedEvalTime, "target={}",
-                    static_cast<const void *>(diagnosticTargetLayerObject));
-            }
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            renderTrace.setResult(true);
-#endif
         } else {
-            iTJSDispatch2 *renderTarget =
-                ensurePrivateMotionGLL_guess(*sla);
-            auto *renderLayer =
-                resolvePrivateMotionGLLNative_guess(renderTarget);
+            auto *renderLayer = ensurePrivateMotionGLL_guess(*sla);
             const tjs_int canvasWidth =
                 static_cast<tjs_int>(renderLayer->GetWidth());
             const tjs_int canvasHeight =
                 static_cast<tjs_int>(renderLayer->GetHeight());
             const int stencilCount = buildPrivateMotionGLLCommands_guess(
-                renderTarget, canvasWidth, canvasHeight,
+                renderLayer, canvasWidth, canvasHeight,
                 mainList, auxList);
             setPrivateMotionGLLStencilCount_guess(
-                renderTarget, stencilCount);
+                renderLayer, stencilCount);
             if(!TVPWindowUpdateEventsDelivering) {
                 renderLayer->Update(false);
             }
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "sla.updateRect",
-                    "privateMotionGLL.Update", _clampedEvalTime,
-                    "renderTarget={} size={}x{} stencilCount={} update={}",
-                    static_cast<const void *>(renderTarget),
-                    canvasWidth, canvasHeight, stencilCount,
-                    TVPWindowUpdateEventsDelivering ? 0 : 1);
-            }
-        }
-
-        if(traceForPath) {
-            detail::logoChainTraceSummary(
-                motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
-                accurateSla ? "accurate=1" : "accurate=0");
         }
     }
 
     void Player::updateLayerAfterDrawRecovered_guess(
         const tTJSVariant &target) {
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        iTJSDispatch2 *rawProbeLayerObject =
-            tryResolveLayerDispatch(target);
-        if(!rawProbeLayerObject && target.Type() == tvtObject) {
-            rawProbeLayerObject = target.AsObjectNoAddRef();
-        }
-        detail::motionTraceRenderImageCheckpoint(
-            this, rawProbeLayerObject, "updateLayerAfterDraw_pre",
-            "Player::updateLayerAfterDraw.enter.after-target-resolve");
-        detail::motionTraceLayerRawProbe(
-            this, rawProbeLayerObject, "updateLayerAfterDraw.enter");
-        struct UpdateLayerAfterDrawTraceLeave {
-            Player *player;
-            iTJSDispatch2 *layerObject;
-            ~UpdateLayerAfterDrawTraceLeave() {
-                detail::motionTraceRenderImageCheckpoint(
-                    player, layerObject, "updateLayerAfterDraw_post",
-                    "Player::updateLayerAfterDraw.leave.before-return");
-                detail::motionTraceLayerRawProbe(
-                    player, layerObject,
-                    "updateLayerAfterDraw.leave");
-            }
-        } updateLayerAfterDrawTraceLeave{this, rawProbeLayerObject};
-#endif
         // All four references first snapshot the producer flag, even when it
         // is clear. Anchor type 10 reads this on the next frame to gate use of
         // the internal render Layer.
@@ -1325,14 +1168,6 @@ namespace motion {
         if(!_needsInternalAssignImages) {
             return;
         }
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
 
         materializeInternalRenderLayers_guess(target);
 
@@ -1340,41 +1175,13 @@ namespace motion {
         (void)internal.FuncCall(
             0, TJS_W("assignImages"),
             &detail::assignImagesMemberHint_guess, nullptr, target);
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRecordPostDrawLayerCandidate(
-            this, internal.GetDispatch(),
-            "Player::updateLayerAfterDraw.afterAssignImages");
-#endif
-        if(traceForPath) {
-            detail::logoChainTraceCheck(
-                motionPath, "post.assignImages",
-                "Player.updateLayerAfterDraw", _clampedEvalTime,
-                "materialize internal/work Layers, then internal.assignImages(original target)",
-                "assignImages(target)", true,
-                "native internal Layer snapshot dispatched");
-        }
     }
 
     void Player::updateAccurateSLAAfterDraw(const tTJSVariant &target) {
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-
         // The accurate-SLA counterpart likewise snapshots the producer flag
         // unconditionally and leaves the producer untouched.
         _internalRenderLayerReady = _needsInternalAssignImages;
         if(!_needsInternalAssignImages) {
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "post.sla.accurate",
-                    "Player.updateAccurateSLAAfterDraw",
-                    _clampedEvalTime, "needsInternalAssignImages=0");
-            }
             return;
         }
 
@@ -1393,15 +1200,6 @@ namespace motion {
             nullptr, tTJSVariant(0), tTJSVariant(0), target,
             tTJSVariant(0), tTJSVariant(0), tTJSVariant(width),
             tTJSVariant(height));
-        if(traceForPath) {
-            detail::logoChainTraceCheck(
-                motionPath, "post.sla.accurate",
-                "Player.updateAccurateSLAAfterDraw", _clampedEvalTime,
-                fmt::format("internal.piledCopy(0,0,target,0,0,{},{})",
-                            width, height),
-                "piledCopy", true,
-                "native accurate-SLA post-copy dispatched");
-        }
     }
 
 } // namespace motion

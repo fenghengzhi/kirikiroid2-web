@@ -37,6 +37,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    default=str(REPO_ROOT / "reference" / "xp3" /
                                DEFAULT_STARTUP_XP3_NAME),
                    help=f"Host path to {DEFAULT_STARTUP_XP3_NAME}")
+    p.add_argument("--case", action="append", default=[],
+                   help="Motion case id to run; repeat for multiple cases. "
+                        "Defaults to all specs in --spec-dir")
+    p.add_argument("--write-port-traces", type=Path,
+                   help="Write normalized native frames per spec as "
+                        "<id>.port.json into this directory")
     p.add_argument("--strict-missing-trace", action="store_true",
                    help="Fail when a disk golden is missing instead of "
                         "auto-skipping the case")
@@ -203,6 +209,15 @@ def main(argv: list[str]) -> int:
         return 2
 
     specs = load_specs(spec_dir)
+    if args.case:
+        requested = set(args.case)
+        known = {str(spec.get("id")) for spec in specs}
+        unknown = sorted(requested - known)
+        if unknown:
+            print(f"unknown motion_playback case(s): {unknown}",
+                  file=sys.stderr)
+            return 2
+        specs = [spec for spec in specs if spec.get("id") in requested]
     try:
         validate_simulation_contract(specs)
     except ValueError as exc:
@@ -230,6 +245,24 @@ def main(argv: list[str]) -> int:
 
     failures = 0
     for spec in specs:
+        native_frames = native_frames_by_id.get(spec["id"])
+        if native_frames is None:
+            print(f"FAIL: {spec['id']}: no native frames captured",
+                  file=sys.stderr)
+            failures += 1
+            continue
+
+        if args.write_port_traces is not None:
+            args.write_port_traces.mkdir(parents=True, exist_ok=True)
+            trace_path = args.write_port_traces / f"{spec['id']}.port.json"
+            trace_path.write_text(
+                json.dumps(native_frames, ensure_ascii=False,
+                           allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
+            print(f"[record] {spec['id']}: wrote {len(native_frames)} "
+                  f"native frames to {trace_path}")
+
         oracle_path = trace_dir / f"{spec['id']}.oracle.json"
         if not oracle_path.exists():
             msg = f"no oracle for {spec['id']} at {oracle_path}"
@@ -240,13 +273,6 @@ def main(argv: list[str]) -> int:
                 print(f"SKIP: {msg}")
             continue
         oracle_frames = json.loads(oracle_path.read_text(encoding="utf-8"))
-
-        native_frames = native_frames_by_id.get(spec["id"])
-        if native_frames is None:
-            print(f"FAIL: {spec['id']}: no native frames captured",
-                  file=sys.stderr)
-            failures += 1
-            continue
 
         result = mpb.run_case(None, spec,
                               port_frames=native_frames,

@@ -105,7 +105,8 @@ namespace motion {
             EmoteEngine(rmDispatch) {}
         ~EmotePlayer() = default;
 
-        static EmotePlayer *factory(tTJSVariant rmDispatch);
+        static EmotePlayer *factory(iTJSDispatch2 *,
+                                    tTJSVariant rmDispatch);
 
         // ============================================================
         // Motion.EmotePlayer NCB 暴露面：四端均为 70 成员 + 2 常量。

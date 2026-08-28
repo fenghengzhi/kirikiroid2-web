@@ -137,10 +137,11 @@ namespace PSB {
 
     PSBRawOwner::PSBRawOwner(std::uint8_t *data, std::size_t size) :
         data_(data), size_(size) {
-        // Android arm64 preserves this constructor boundary; the other three
-        // inline the same sequence into Adopt. All four leave refcount at zero,
-        // build the inline header view when data is non-null, and otherwise
-        // leave its fields untouched.
+        // Both Android links retain an equivalent standalone constructor
+        // boundary, while the iOS links inline the sequence into Adopt.  The
+        // four Adopt paths may scalarize it independently.  All four leave
+        // refcount at zero, build the inline header view when data is non-null,
+        // and otherwise leave its fields untouched.
         if(data_ != nullptr) {
             header_ = &headerStorage_;
             headerStorage_.signature =

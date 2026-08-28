@@ -431,11 +431,11 @@ namespace motion {
                 static_cast<tjs_int>(pixelCount));
         }
 
-        // The two references that emit local exception cleanups delete only a
-        // still-pending new-expression allocation if this constructor
-        // unwinds. Once construction returns, no reference has a guard for the
-        // bitmap; the other two optimized bodies have no local landing pad at
-        // all. This raw pointer is therefore load-bearing source structure.
+        // Android arm64 and both iOS references delete a still-pending
+        // new-expression allocation if this constructor unwinds; Android
+        // armv7's merged body has no local landing pad. Once construction
+        // returns, no reference has a guard for the bitmap. This raw pointer is
+        // therefore load-bearing source structure.
         auto *bitmap = new tTVPBitmap(width, static_cast<tjs_uint>(height), 32);
         const tjs_int pitch = bitmap->GetPitch();
         auto *destination = static_cast<std::uint8_t *>(bitmap->GetScanLine(0));

@@ -10,7 +10,6 @@
 #include <cmath>
 #include <limits>
 #include <memory>
-#include <optional>
 
 using namespace motion::internal;
 
@@ -40,15 +39,6 @@ namespace {
         std::memcpy(packedColors.data(), colorBytes,
                     sizeof(std::uint32_t) * packedColors.size());
         return packedColors;
-    }
-
-    inline std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
-        return {
-            static_cast<int>(packedColor & 0xFFu),
-            static_cast<int>((packedColor >> 8) & 0xFFu),
-            static_cast<int>((packedColor >> 16) & 0xFFu),
-            static_cast<int>((packedColor >> 24) & 0xFFu),
-        };
     }
 
     // The scalar helper uses signed truncation after multiplying by 256.
@@ -336,16 +326,6 @@ namespace motion {
             resourceManagerCopy.AsObject());
         resourceManagerCopy.Clear();
 
-        // Path materialization belongs only to the opt-in Web diagnostic
-        // sidecar. The native AABB pass does not read motion context here.
-        // Keep the ordinary path free of unrelated Variant-to-string
-        // conversion and allocation.
-        std::string motionPath;
-        const bool traceCalcBounds = detail::logoChainTraceEnabled();
-        if(traceCalcBounds) {
-            motionPath = matchedMotionPath();
-        }
-
         _boundsMinX = std::numeric_limits<double>::max();
         _boundsMinY = std::numeric_limits<double>::max();
         _boundsMaxX = -std::numeric_limits<double>::max();
@@ -450,60 +430,12 @@ namespace motion {
                 }
             }
 
-            const std::array<float, 4> expectedBounds = {
-                std::floor(minX),
-                std::floor(minY),
-                std::ceil(maxX),
-                std::ceil(maxY)
-            };
-            node.bounds[0] = expectedBounds[0];
-            node.bounds[1] = expectedBounds[1];
-            node.bounds[2] = expectedBounds[2];
-            node.bounds[3] = expectedBounds[3];
+            node.bounds[0] = std::floor(minX);
+            node.bounds[1] = std::floor(minY);
+            node.bounds[2] = std::ceil(maxX);
+            node.bounds[3] = std::ceil(maxY);
             mergeBounds(node.bounds[0], node.bounds[1], node.bounds[2],
                         node.bounds[3]);
-            if(traceCalcBounds &&
-               detail::logoChainTraceEnabledForPath(motionPath)) {
-                const std::array<float, 4> actualBounds = {
-                    node.bounds[0], node.bounds[1], node.bounds[2],
-                    node.bounds[3]
-                };
-                bool ok = true;
-                for(size_t bi = 0; bi < expectedBounds.size(); ++bi) {
-                    if(std::fabs(expectedBounds[bi] - actualBounds[bi]) >
-                       0.01f) {
-                        ok = false;
-                        break;
-                    }
-                }
-                detail::logoChainTraceCheck(
-                    motionPath, "calcBounds.node", "Player.calcBounds",
-                    _clampedEvalTime,
-                    fmt::format(
-                        "from=minmax({:.3f},{:.3f},{:.3f},{:.3f}) exp=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        minX, minY, maxX, maxY, expectedBounds[0],
-                        expectedBounds[1], expectedBounds[2],
-                        expectedBounds[3]),
-                    fmt::format(
-                        "nodeIndex={} label={} act=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        node.index,
-                        node.layerName.IsEmpty() ? std::string("<root>")
-                                                 : detail::narrow(node.layerName),
-                        actualBounds[0], actualBounds[1], actualBounds[2],
-                        actualBounds[3]),
-                    ok,
-                    "Player_calcBounds produced an unexpected node AABB");
-            }
-        }
-
-        if(traceCalcBounds) {
-            detail::logoChainTraceLogf(
-                motionPath, "calcBounds.player", "Player.calcBounds",
-                _clampedEvalTime,
-                "playerBounds=({:.3f},{:.3f},{:.3f},{:.3f}) ordered={}",
-                _boundsMinX, _boundsMinY, _boundsMaxX, _boundsMaxY,
-                (_boundsMaxX >= _boundsMinX &&
-                 _boundsMaxY >= _boundsMinY) ? 1 : 0);
         }
     }
 
@@ -532,26 +464,6 @@ namespace motion {
 
         auto &entries = mainList;
         const auto &nodes = _nodes;
-        // Motion-path conversion and the trace/snapshot projections below are
-        // Web diagnostics, not part of the native recursive builder. Keep the
-        // ordinary recursive path free of TJS string conversion and logging
-        // temporaries.
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled || logoSnapshotEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-        const bool snapshotForPath =
-            logoSnapshotEnabled &&
-            detail::logoSnapshotMarkEnabledForPath(motionPath);
-        const bool snapshotWindow =
-            snapshotForPath &&
-            motionPath.find("m2logo.mtn") != std::string::npos &&
-            _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0;
         const std::uint32_t effectiveColor =
             internal::multiplyPackedColorWeights_guess(
                 inheritedColor, _colorWeightPacked);
@@ -593,8 +505,6 @@ namespace motion {
             [&](const detail::MotionNode &ownerNode, Player *child,
                 std::vector<detail::PreparedRenderItem *> &childMainList,
                 bool childDrawFlag19) {
-            const size_t mainCountBefore = childMainList.size();
-            const size_t auxCountBefore = auxList.size();
             // The recursive child flag is the caller's inherited flag OR'd
             // with this owner node's one-byte priorDraw value. It never reads
             // the independent Player::_priorDraw property.
@@ -607,38 +517,6 @@ namespace motion {
                     : 0xFF808080u,
                 childDrawFlag19,
                 inheritedFlag18 || ownerNode.priorDraw);
-            std::string childMotionPath;
-            if(traceForPath || snapshotWindow) {
-                childMotionPath = child->matchedMotionPath();
-            }
-            if(snapshotWindow) {
-                std::fprintf(
-                    stderr,
-                    "SNAPCHILD phase=prepare frame=%.3f childActiveMotion=%s childMotionKey=%s childNodesBuilt=%d childNodeCount=%zu childPreparedItemCount=%zu firstSource=%s\n",
-                    _clampedEvalTime,
-                    childMotionPath.empty()
-                        ? "<none>" : childMotionPath.c_str(),
-                    detail::narrow(child->getMotion()).c_str(),
-                    child->_nodes.size() > 1 ? 1 : 0,
-                    child->_nodes.size(),
-                    childMainList.size() - mainCountBefore,
-                    childMainList.size() == mainCountBefore ||
-                            !childMainList[mainCountBefore] ||
-                            childMainList[mainCountBefore]->sourceKey.empty()
-                        ? "<none>"
-                        : childMainList[mainCountBefore]->sourceKey.c_str());
-            }
-            if(traceForPath) {
-                detail::logoChainTraceLogf(
-                    motionPath, "prepare.childMerge",
-                    "Player.appendPreparedRenderItems",
-                    _clampedEvalTime,
-                    "childMotionPath={} mainAdded={} auxAdded={} parentMainTotal={}",
-                    childMotionPath.empty()
-                        ? std::string("<none>") : childMotionPath,
-                    childMainList.size() - mainCountBefore,
-                    auxList.size() - auxCountBefore, childMainList.size());
-            }
         };
 
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
@@ -795,12 +673,8 @@ namespace motion {
                 detail::PreparedRenderItem *wrapperParentItem = nullptr;
                 if(node.drawFlag) {
                     auxList.push_back(&wrapper);
-                    // The native field is a nullable raw MotionNode pointer.
-                    // This portable index uses only -1 as null; every other
-                    // value is selected without a range or self guard.
-                    if(node.visibleAncestorIndex != -1) {
-                        auto &ancestor = _nodes[static_cast<size_t>(
-                            node.visibleAncestorIndex)];
+                    if(node.visibleAncestor != nullptr) {
+                        auto &ancestor = *node.visibleAncestor;
                         if(!ancestor.preparedRenderItem) {
                             ancestor.preparedRenderItem =
                                 new detail::PreparedRenderItem();
@@ -822,7 +696,7 @@ namespace motion {
                 continue;
             }
             const bool hasOwnSource = node.source.valid;
-            if(!node.forceVisible &&
+            if(!node.hasEmoteEdit_guess() &&
                (((1 << node.nodeType) & bitmask) == 0)) {
                 continue;
             }
@@ -869,10 +743,10 @@ namespace motion {
             entry.originX = node.source.originX + node.activeSlot().ox;
             entry.originY = node.source.originY + node.activeSlot().oy;
             entry.commandMatrix = {
-                node.accumulated.m11,
-                node.accumulated.m12,
-                node.accumulated.m21,
-                node.accumulated.m22,
+                node.matrix.m11,
+                node.matrix.m12,
+                node.matrix.m21,
+                node.matrix.m22,
             };
             entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
             for(auto &packedColor : entry.packedColors) {
@@ -901,7 +775,7 @@ namespace motion {
             entry.opacity = node.accumulated.opacity;
             // Native publication of the borrowed descriptor is late: it
             // follows corners/source/blend/opacity rather than the owner-label
-            // prefix. Web diagnostic sidecars are refreshed separately below.
+            // prefix.
             entry.sourceState = &node.source;
             entry.stencilComposite = node.stencilType;
             // The recursive builder combines the node-local draw causes with
@@ -911,13 +785,11 @@ namespace motion {
                 inheritedDrawFlag19;
             entry.hasOwnSource = hasOwnSource;
 
-            // The native nullable ancestor pointer is consumed after the
+            // The nullable borrowed ancestor pointer is consumed after the
             // source/color/opacity/stencil writes and before copying the raw
-            // paint/clip geometry. The portable index has exactly one null
-            // sentinel (-1); all other values, including self, are unchecked.
-            if(node.visibleAncestorIndex != -1) {
-                auto &ancestor = _nodes[
-                    static_cast<size_t>(node.visibleAncestorIndex)];
+            // paint/clip geometry. Self and cross-Player links are accepted.
+            if(node.visibleAncestor != nullptr) {
+                auto &ancestor = *node.visibleAncestor;
                 if(!ancestor.preparedRenderItem) {
                     ancestor.preparedRenderItem =
                         new detail::PreparedRenderItem();
@@ -926,7 +798,6 @@ namespace motion {
             } else {
                 entry.parentItem = nullptr;
             }
-            entry.visibleAncestorIndex = node.visibleAncestorIndex;
 
             // The paint box is an independent raw node AABB, not a reduction
             // of the item corner or mesh arrays. It is copied before the
@@ -1010,168 +881,6 @@ namespace motion {
                     transformAndRoundPreparedRect_guess(entry.paintBox);
             }
 
-            // Port-only narrow diagnostic snapshot. Keep its potentially
-            // allocating conversion after the complete native item overwrite
-            // so it cannot change which native prefix is committed by an
-            // earlier command-key, ancestor, or mesh failure.
-            entry.sourceKey = detail::narrow(node.source.path);
-
-            if(traceForPath) {
-                const std::array<float, 8> expectedCorners = {
-                    static_cast<float>(drawAffineOwner._drawAffineM11 *
-                                           static_cast<double>(node.vertices[0]) +
-                                       drawAffineOwner._drawAffineM12 *
-                                           static_cast<double>(node.vertices[1]) +
-                                       drawAffineOwner._drawAffineM14),
-                    static_cast<float>(drawAffineOwner._drawAffineM21 *
-                                           static_cast<double>(node.vertices[0]) +
-                                       drawAffineOwner._drawAffineM22 *
-                                           static_cast<double>(node.vertices[1]) +
-                                       drawAffineOwner._drawAffineM24),
-                    static_cast<float>(drawAffineOwner._drawAffineM11 *
-                                           static_cast<double>(node.vertices[2]) +
-                                       drawAffineOwner._drawAffineM12 *
-                                           static_cast<double>(node.vertices[3]) +
-                                       drawAffineOwner._drawAffineM14),
-                    static_cast<float>(drawAffineOwner._drawAffineM21 *
-                                           static_cast<double>(node.vertices[2]) +
-                                       drawAffineOwner._drawAffineM22 *
-                                           static_cast<double>(node.vertices[3]) +
-                                       drawAffineOwner._drawAffineM24),
-                    static_cast<float>(drawAffineOwner._drawAffineM11 *
-                                           static_cast<double>(node.vertices[4]) +
-                                       drawAffineOwner._drawAffineM12 *
-                                           static_cast<double>(node.vertices[5]) +
-                                       drawAffineOwner._drawAffineM14),
-                    static_cast<float>(drawAffineOwner._drawAffineM21 *
-                                           static_cast<double>(node.vertices[4]) +
-                                       drawAffineOwner._drawAffineM22 *
-                                           static_cast<double>(node.vertices[5]) +
-                                       drawAffineOwner._drawAffineM24),
-                    static_cast<float>(drawAffineOwner._drawAffineM11 *
-                                           static_cast<double>(node.vertices[6]) +
-                                       drawAffineOwner._drawAffineM12 *
-                                           static_cast<double>(node.vertices[7]) +
-                                       drawAffineOwner._drawAffineM14),
-                    static_cast<float>(drawAffineOwner._drawAffineM21 *
-                                           static_cast<double>(node.vertices[6]) +
-                                       drawAffineOwner._drawAffineM22 *
-                                           static_cast<double>(node.vertices[7]) +
-                                       drawAffineOwner._drawAffineM24)
-                };
-                const auto effectiveColor = unpackPackedRgba(entry.packedColors[0]);
-                detail::logoChainTraceLogf(
-                    motionPath, "prepare.item",
-                    "Player.appendPreparedRenderItems", _clampedEvalTime,
-                    "nodeIndex={} src={} blend={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] meshType={} meshDiv=({},{}) sortKey={:.3f} coordinateMode={} objTriPriority={} layerId=({}, {}) nodeDrawFlag={} maskRef={} itemDrawFlag={} visibleAncestorIndex={} slotDone={} frameType={} stencilType={}",
-                    entry.nodeIndex,
-                    entry.sourceKey.empty() ? std::string("<none>")
-                                            : entry.sourceKey,
-                    entry.blendMode, entry.opacity, entry.packedColors[0],
-                    entry.packedColors[1], entry.packedColors[2],
-                    entry.packedColors[3], effectiveColor[0],
-                    effectiveColor[1], effectiveColor[2], effectiveColor[3],
-                    entry.meshType, entry.meshDivX, entry.meshDivY,
-                    entry.sortKey, entry.coordinateMode, entry.objTriPriority,
-                    entry.layerId1, entry.layerId2, node.drawFlag ? 1 : 0,
-                    node.stencilCompositeMaskReferenced ? 1 : 0,
-                    entry.drawFlag ? 1 : 0, entry.visibleAncestorIndex,
-                    node.activeSlot().done ? 1 : 0,
-                    node.activeSlot().done
-                        ? 0
-                        : (node.activeSlot().crossfading ? 3 : 2),
-                    node.stencilType);
-                bool cornersOk = node.source.width <= 0.0 &&
-                    node.source.height <= 0.0;
-                if(!cornersOk) {
-                    cornersOk = true;
-                    for(size_t ci = 0; ci < expectedCorners.size(); ++ci) {
-                        if(std::fabs(entry.corners[ci] - expectedCorners[ci]) >
-                           0.01f) {
-                            cornersOk = false;
-                            break;
-                        }
-                    }
-                }
-                detail::logoChainTraceCheck(
-                    motionPath, "prepare.corners",
-                    "Player.appendPreparedRenderItems",
-                    _clampedEvalTime,
-                    fmt::format(
-                        "drawAffine*vertices exp=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        expectedCorners[0], expectedCorners[1],
-                        expectedCorners[2], expectedCorners[3],
-                        expectedCorners[4], expectedCorners[5],
-                        expectedCorners[6], expectedCorners[7]),
-                    fmt::format(
-                        "nodeIndex={} act=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        entry.nodeIndex, entry.corners[0], entry.corners[1],
-                        entry.corners[2], entry.corners[3], entry.corners[4],
-                        entry.corners[5], entry.corners[6], entry.corners[7]),
-                    cornersOk,
-                    "PreparedRenderItem corners diverged from drawAffineMatrix * node.vertices");
-                detail::logoChainTraceCheck(
-                    motionPath, "prepare.paintBox",
-                    "Player.appendPreparedRenderItems",
-                    _clampedEvalTime,
-                    fmt::format(
-                        "paintBox from transformed geometry exp=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        entry.paintBox[0], entry.paintBox[1],
-                        entry.paintBox[2], entry.paintBox[3]),
-                    fmt::format(
-                        "nodeIndex={} act=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                        entry.nodeIndex, entry.paintBox[0], entry.paintBox[1],
-                        entry.paintBox[2], entry.paintBox[3]),
-                    true,
-                    "PreparedRenderItem paintBox diverged from transformed geometry");
-                detail::logoChainTraceCheck(
-                    motionPath, "prepare.viewport",
-                    "Player.appendPreparedRenderItems",
-                    _clampedEvalTime,
-                    entry.hasViewport
-                        ? fmt::format(
-                              "parent shapeAABB chain exp=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                              entry.viewport[0], entry.viewport[1],
-                              entry.viewport[2], entry.viewport[3])
-                        : std::string(
-                              "parent shapeAABB chain exp=<invalid default>"),
-                    entry.hasViewport
-                        ? fmt::format(
-                              "nodeIndex={} act=[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                              entry.nodeIndex, entry.viewport[0],
-                              entry.viewport[1], entry.viewport[2],
-                              entry.viewport[3])
-                        : fmt::format("nodeIndex={} act=<invalid default>",
-                                      entry.nodeIndex),
-                    true,
-                    "PreparedRenderItem viewport propagation diverged from parent clip chain");
-            }
-
-            if(snapshotWindow && _clampedEvalTime >= 43.0 &&
-               (entry.nodeIndex == 14 || entry.nodeIndex == 15 ||
-                entry.nodeIndex == 19 ||
-                (entry.nodeIndex >= 20 && entry.nodeIndex <= 29))) {
-                std::fprintf(
-                    stderr,
-                    "SNAPPREP frame=%.3f nodeIndex=%d source=%s hasOwnSource=%d rawFlags=[%d,%d,%d,%d] priorDraw=%d inherited18=%d sortKey=%.3f coordinateMode=%d objTriPriority=%d visibleAncestorIndex=%d drawFlag=%d opacity=%d paintBox=[%.1f,%.1f,%.1f,%.1f] viewport=%s\n",
-                    _clampedEvalTime, entry.nodeIndex,
-                    entry.sourceKey.empty() ? "<none>" : entry.sourceKey.c_str(),
-                    entry.hasOwnSource ? 1 : 0,
-                    entry.rawFlag16 ? 1 : 0, entry.skipFlag0 ? 1 : 0,
-                    entry.skipFlag1 ? 1 : 0, entry.drawFlag ? 1 : 0,
-                    node.priorDraw, inheritedFlag18 ? 1 : 0, entry.sortKey,
-                    entry.coordinateMode, entry.objTriPriority,
-                    entry.visibleAncestorIndex, entry.drawFlag ? 1 : 0,
-                    entry.opacity, entry.paintBox[0], entry.paintBox[1],
-                    entry.paintBox[2], entry.paintBox[3],
-                    entry.hasViewport
-                        ? fmt::format("[{:.1f},{:.1f},{:.1f},{:.1f}]",
-                                      entry.viewport[0], entry.viewport[1],
-                                      entry.viewport[2], entry.viewport[3])
-                              .c_str()
-                        : "<invalid>");
-            }
-
             entries.push_back(&entry);
         }
 
@@ -1234,36 +943,12 @@ namespace motion {
 #endif
             return false;
         }
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled || logoSnapshotEnabled) {
-            motionPath = matchedMotionPath();
-        }
-        const bool traceForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-        const bool snapshotForPath =
-            logoSnapshotEnabled &&
-            detail::logoSnapshotMarkEnabledForPath(motionPath);
-
         // The outer wrapper passes neutral color and two false lineage flags
         // into the recursive builder. Callers construct both vectors empty.
         appendPreparedRenderItems(
             mainList,
             auxList,
             0xFF808080u, false, false);
-        // The four native wrappers allocate only their implementation's
-        // stable-sort pointer buffer. This parallel double-vector exists only
-        // for the opt-in ordering trace and must not be built otherwise.
-        std::optional<std::vector<double>> beforeSortKeys;
-        if(traceForPath) {
-            beforeSortKeys.emplace();
-            beforeSortKeys->reserve(mainList.size());
-            for(const auto *item : mainList) {
-                beforeSortKeys->push_back(item ? item->sortKey : 0.0);
-            }
-        }
         // Stable-sort by the render-item sort key.
         std::stable_sort(
             mainList.begin(),
@@ -1274,50 +959,6 @@ namespace motion {
                 // raw pointers and performs one ordered double less-than.
                 return lhs->sortKey < rhs->sortKey;
             });
-        if(traceForPath) {
-            std::ostringstream beforeSort;
-            std::ostringstream afterSort;
-            for(size_t i = 0; i < beforeSortKeys->size(); ++i) {
-                if(i) beforeSort << ",";
-                beforeSort << (*beforeSortKeys)[i];
-            }
-            for(size_t i = 0; i < mainList.size(); ++i) {
-                if(i) afterSort << ",";
-                afterSort << (mainList[i] ? mainList[i]->sortKey : 0.0);
-            }
-            detail::logoChainTraceLogf(
-                motionPath, "prepare.sort", "Player.prepareRenderItems",
-                _clampedEvalTime,
-                "itemCount={} sortKeysBefore=[{}] sortKeysAfter=[{}]",
-                mainList.size(), beforeSort.str(),
-                afterSort.str());
-        }
-
-        if(snapshotForPath &&
-           motionPath.find("m2logo.mtn") != std::string::npos &&
-            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < mainList.size(); ++i) {
-                const auto *itemPtr = mainList[i];
-                if(!itemPtr) {
-                    continue;
-                }
-                const auto &item = *itemPtr;
-                if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
-                     item.nodeIndex == 19 ||
-                     (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
-                    continue;
-                }
-                std::fprintf(
-                    stderr,
-                    "SNAPPREPORDER frame=%.3f order=%zu nodeIndex=%d source=%s sortKey=%.3f visibleAncestorIndex=%d parentNodeIndex=%d childCount=%zu coordinateMode=%d objTriPriority=%d\n",
-                    _clampedEvalTime, i, item.nodeIndex,
-                    item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
-                    item.sortKey, item.visibleAncestorIndex,
-                    item.parentItem ? item.parentItem->nodeIndex : -1,
-                    item.childItems.size(), item.coordinateMode,
-                    item.objTriPriority);
-            }
-        }
         // The wrapper returns true whenever the motion-content type tag is
         // nonzero, even when mainList is empty.
         const bool ok = true;

@@ -10,7 +10,9 @@ namespace motion {
     // --- updateLayers: four-reference 3-phase pipeline ---
     // Operates on persistent MotionNode deque instead of re-walking PSB tree.
     void Player::updateLayers() {
+#if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRecordUpdatePlayer(this);
+#endif
         // Every reference clears the producer flag before any phase can set it
         // again. Post-draw only snapshots it; post-draw never clears it.
         _needsInternalAssignImages = false;
@@ -18,68 +20,24 @@ namespace motion {
         // Player construction establishes the root deque entry. All four
         // references dereference it directly; an empty deque is not a
         // recoverable native state.
-        std::string motionPath;
-        if(detail::logoChainTraceEnabled()) {
-            // Keep the optional Web diagnostic outside the native/default
-            // data path: materializing this Variant as text may allocate.
-            motionPath = matchedMotionPath();
-        }
         const double currentTime = _clampedEvalTime;
 
         updateLayersPhase1_PreLoop(currentTime);
         updateLayersPhase2_MainLoop(currentTime);
-        if(detail::logoChainTraceEnabledForPath(motionPath)) {
-            const auto &root = nodes[0];
-            detail::logoChainTraceLogf(
-                motionPath, "updateLayers.phase1", "Player::updateLayers",
-                currentTime,
-                "rootPos=({:.3f},{:.3f},{:.3f}) cameraVel=({:.3f},{:.3f},{:.3f}) damping={:.6f} variableCount={}",
-                root.accumulated.posX, root.accumulated.posY,
-                root.accumulated.posZ, _cameraVelocityX, _cameraVelocityY,
-                _cameraVelocityZ, _cameraDamping, _evalResultValues.size());
-            for(const auto &[label, value] : _evalResultValues) {
-                detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase1.var",
-                    "Player::updateLayers",
-                    currentTime, "label={} value={:.6f}",
-                    detail::narrow(label), value);
-            }
-            for(const auto &node : nodes) {
-                const auto &ac = node.accumulated;
-                const auto &ls = node.accumulated;
-                const auto &slot = node.activeSlot();
-                const bool hasParent = node.parentIndex >= 0
-                    && node.parentIndex < static_cast<int>(nodes.size());
-                const auto &pc = hasParent ? nodes[node.parentIndex].accumulated
-                                           : nodes[0].accumulated;
-                detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.node",
-                    "Player::updateLayers",
-                    currentTime,
-                    "nodeIndex={} label={} type={} parent={} src={} inherit=0x{:x} indep={} interp[x={:.3f},y={:.3f},ox={:.3f},oy={:.3f},opacity={:.6f},angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) blend={}] local[pos=({:.3f},{:.3f},{:.3f}),angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) opacity={}] parentAccum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={}] accum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},active={},visible={}]",
-                    node.index,
-                    node.layerName.IsEmpty() ? std::string("<root>")
-                                             : detail::narrow(node.layerName),
-                    node.nodeType, node.parentIndex,
-                    node.activeSlot().srcValue.IsEmpty()
-                        ? std::string("<none>")
-                        : detail::narrow(node.activeSlot().srcValue),
-                    node.inheritFlags,
-                    _independentLayerInherit ? 1 : 0,
-                    ls.posX, ls.posY, slot.ox, slot.oy,
-                    static_cast<double>(ls.opacity) / 255.0,
-                    ls.angle, ls.scaleX, ls.scaleY, ls.slantX, ls.slantY,
-                    ls.flipX ? 1 : 0, ls.flipY ? 1 : 0, slot.blendMode,
-                    ls.posX, ls.posY, ls.posZ, ls.angle, ls.scaleX, ls.scaleY,
-                    ls.slantX, ls.slantY, ls.flipX ? 1 : 0, ls.flipY ? 1 : 0,
-                    ls.opacity,
-                    pc.posX, pc.posY, pc.posZ, pc.scaleX, pc.scaleY,
-                    pc.slantX, pc.slantY, pc.m11, pc.m12, pc.m21, pc.m22,
-                    pc.opacity,
-                    ac.posX, ac.posY, ac.posZ, ac.scaleX, ac.scaleY,
-                    ac.slantX, ac.slantY, ac.m11, ac.m12,
-                    ac.m21, ac.m22, ac.opacity,
-                    ac.active ? 1 : 0, ac.visible ? 1 : 0);
+
+        // The native root publishes this pass before camera constraints and
+        // every phase-3 helper. It includes the synthetic root. Queuing writes
+        // three zero words; otherwise phase-1's saved position is subtracted
+        // from the freshly evaluated accumulated position.
+        for (auto &node : nodes) {
+            if (_queuing) {
+                node.deltaPosX = 0.0;
+                node.deltaPosY = 0.0;
+                node.deltaPosZ = 0.0;
+            } else {
+                node.deltaPosX = node.accumulated.posX - node.prevPosX;
+                node.deltaPosY = node.accumulated.posY - node.prevPosY;
+                node.deltaPosZ = node.accumulated.posZ - node.prevPosZ;
             }
         }
 

@@ -111,8 +111,11 @@ private:
         }
         g_startup_started = true;
 
-        scene->scheduleOnce([](float) { finishAndExit(0); }, 0.25f,
-                            "motion_playback_native_finish");
+        // The differential driver owns termination: LLDB kills the process
+        // after the requested frame denominator has been captured.  A local
+        // scheduleOnce timer used to race TVPMainScene's script-driven
+        // scheduler mutation and left a null cocos2d::Timer in the update
+        // vector after the first frame (Timer::isAborted, this=0x0).
         return true;
     }
 

@@ -2,7 +2,6 @@
 
 #include "LayerBitmapIntf.h"
 #include "MsgIntf.h"
-#include "MotionTraceWeb.h"
 #include "MotionRenderBackend.h"
 #include "PlayerInternal.h"
 #include "PlayerRenderInternal.h"
@@ -199,7 +198,8 @@ namespace {
         tRenderTexQuadArray::Element srcTex[] = {
             tRenderTexQuadArray::Element(sourceTexture, src.data())
         };
-        TVPGetRenderManager()->OperateTriangles(
+        motion::render_backend_guess::getPrivateOpenGLRenderManager_guess()
+            ->OperateTriangles(
             method, 2, targetTexture, referenceTexture, clippedRect,
             dst.data(), tRenderTexQuadArray(srcTex));
         return true;
@@ -229,7 +229,8 @@ namespace {
                         tRenderTexQuadArray::Element(
                             submittedSourceTexture, sourceVertices.data())
                     };
-                    TVPGetRenderManager()->OperateTriangles(
+                    motion::render_backend_guess::
+                        getPrivateOpenGLRenderManager_guess()->OperateTriangles(
                         method,
                         static_cast<int>(destinationVertices.size() / 3u),
                         targetTexture, referenceTexture, targetRect,
@@ -269,14 +270,6 @@ namespace {
             UpdateBitmapForChild = target->GetDrawTargetBitmap(
                 targetRect, ignoredDrawTargetRect);
             SetFace(dfAuto);
-
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            motion::detail::motionTracePrivateMotionGLLDraw(
-                this, static_cast<int>(_renderQueue.size()),
-                rect.left, rect.top, rect.right, rect.bottom,
-                targetRect.left, targetRect.top,
-                targetRect.right, targetRect.bottom, visiblecheck);
-#endif
 
             tTVPRect clipRect(ClipRect);
             clipRect.set_offsets(x, y);
@@ -524,7 +517,7 @@ namespace {
 
 namespace motion {
 
-    iTJSDispatch2 *ensurePrivateMotionGLL_guess(
+    tTJSNI_BaseLayer *ensurePrivateMotionGLL_guess(
         SeparateLayerAdaptor &sla) {
         auto *targetLayer = tTJSNI_Layer::FromVariant(sla._targetLayer);
         tTJSNI_PrivateMotionGLLayer_guess *privateLayer = nullptr;
@@ -544,7 +537,7 @@ namespace motion {
         }
 
         privateLayer->SetSize(targetLayer->GetWidth(), targetLayer->GetHeight());
-        return sla._privateTarget.AsObjectNoAddRef();
+        return privateLayer;
     }
 
     tTJSNI_BaseLayer *resolvePrivateMotionGLLNative_guess(
@@ -570,17 +563,21 @@ namespace motion {
     void clearPrivateMotionGLLRenderQueue_guess(iTJSDispatch2 *object) {
         if(auto *layer = resolvePrivateMotionGLLNativeInternal_guess(
                object)) {
-            layer->clearRenderQueue_guess();
+            clearPrivateMotionGLLRenderQueue_guess(layer);
         }
     }
 
+    void clearPrivateMotionGLLRenderQueue_guess(
+        tTJSNI_BaseLayer *layer) {
+        static_cast<tTJSNI_PrivateMotionGLLayer_guess *>(layer)
+            ->clearRenderQueue_guess();
+    }
+
     void setPrivateMotionGLLStencilCount_guess(
-        iTJSDispatch2 *object,
+        tTJSNI_BaseLayer *layer,
         tjs_int value) {
-        if(auto *layer = resolvePrivateMotionGLLNativeInternal_guess(
-               object)) {
-            layer->setStencilCount_guess(value);
-        }
+        static_cast<tTJSNI_PrivateMotionGLLayer_guess *>(layer)
+            ->setStencilCount_guess(value);
     }
 
     void appendPrivateMotionGLLRenderItem_guess(
@@ -589,17 +586,32 @@ namespace motion {
         std::vector<detail::MeshPoint> *pointsToSwap) {
         if(auto *layer = resolvePrivateMotionGLLNativeInternal_guess(
                object)) {
-            layer->appendRenderItem_guess(item, pointsToSwap);
+            appendPrivateMotionGLLRenderItem_guess(
+                layer, item, pointsToSwap);
         }
+    }
+
+    void appendPrivateMotionGLLRenderItem_guess(
+        tTJSNI_BaseLayer *layer,
+        const PrivateMotionGLLRenderItemInput_guess &item,
+        std::vector<detail::MeshPoint> *pointsToSwap) {
+        static_cast<tTJSNI_PrivateMotionGLLayer_guess *>(layer)
+            ->appendRenderItem_guess(item, pointsToSwap);
     }
 
     std::size_t privateMotionGLLRenderQueueSize_guess(
         iTJSDispatch2 *object) {
         if(auto *layer = resolvePrivateMotionGLLNativeInternal_guess(
                object)) {
-            return layer->renderQueueSize_guess();
+            return privateMotionGLLRenderQueueSize_guess(layer);
         }
         return 0;
+    }
+
+    std::size_t privateMotionGLLRenderQueueSize_guess(
+        tTJSNI_BaseLayer *layer) {
+        return static_cast<tTJSNI_PrivateMotionGLLayer_guess *>(layer)
+            ->renderQueueSize_guess();
     }
 
 } // namespace motion

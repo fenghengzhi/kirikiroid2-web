@@ -39,6 +39,7 @@ from oracle_runner.motion_timing import (
     DEFAULT_STARTUP_XP3_NAME,
     SIMULATION_DELTA_MS,
     SIMULATION_FPS,
+    STARTUP_WARMUP_TICKS,
     select_expected_segments,
     validate_simulation_contract,
 )
@@ -117,6 +118,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Timeout for the LLDB Wasm guest tracer")
     p.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path,
                    help="Python interpreter LLDB should launch as host")
+    p.add_argument("--direct-guest", action="store_true",
+                   help="Read the guest's direct motion/render trace exports "
+                        "without LLDB breakpoint stops")
     p.add_argument("--record-framebuffer", action="store_true",
                    help="Save every Wasmtime motion_playback frame as PNG "
                         "artifacts and write a manifest.json")
@@ -359,8 +363,15 @@ class WasmtimeEnvProvider:
         data_len = self._memory_len(caller, memory)
         if ptr < 0 or ptr >= data_len:
             raise RuntimeError(f"guest string pointer out of bounds: {ptr}")
+        # Do not copy the entire remaining linear memory merely to find a NUL.
+        # The debug guest currently grows to hundreds of MiB; doing so from a
+        # hot EM_ASM callback turned every short string probe into a similarly
+        # sized host allocation/copy.  Engine/ABI strings consumed here are
+        # paths, symbol names, or inline diagnostic snippets, so 64 KiB is a
+        # conservative corruption guard as well as the intended read bound.
+        scan_len = min(data_len - ptr, 64 * 1024)
         data = ctypes.string_at(self._memory_base(caller, memory) + ptr,
-                                data_len - ptr)
+                                scan_len)
         end = data.find(0)
         if end < 0:
             return bytes(data[:256]).decode("utf-8", errors="replace")
@@ -1003,6 +1014,10 @@ def instantiate_module(wasmtime, wasm_path: Path, enable_gl: bool,
     config.wasm_simd = True
     config.wasm_threads = True
     config.shared_memory = True
+    # The debug guest is roughly 150 MiB.  Its content digest is stable across
+    # the per-case LLDB/direct-driver runs, so reuse Wasmtime's compiled-module
+    # cache instead of recompiling it for every trace lane.
+    config.cache = True
     engine = wasmtime.Engine(config)
     module = wasmtime.Module.from_file(engine, str(wasm_path))
     store = wasmtime.Store(engine)
@@ -1618,6 +1633,7 @@ def _collect_wasmtime_framebuffer_capture(
 
 def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      frames: int, *,
+                     motion_trace_out: Path | None = None,
                      framebuffer_dir: Path | None = None,
                      render_artifact_dir: Path | None = None,
                      record_render_step_checkpoints: bool = False,
@@ -1686,7 +1702,8 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     else capture_window.count),
                 render_case_frame_bases=_render_case_frame_bases(
                     specs, mpb, capture_window),
-                render_stage_out=render_stage_out)
+                render_stage_out=render_stage_out,
+                motion_trace_out=motion_trace_out)
             if framebuffer_dir is not None:
                 manifest = _collect_wasmtime_framebuffer_capture(
                     bootstrap, framebuffer_dir, specs,
@@ -1722,7 +1739,8 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      capture_frame_count: int = -1,
                                      render_case_frame_bases:
                                      dict[str, int] | None = None,
-                                     render_stage_out: Path | None = None
+                                     render_stage_out: Path | None = None,
+                                     motion_trace_out: Path | None = None
                                      ) -> dict[str, Any]:
     store, exports, gl_provider, env_provider = instantiate_module(
         wasmtime, wasm_path, enable_gl=True, wasi_root=bootstrap.root)
@@ -1756,6 +1774,46 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             "krkr2_wasm_get_motion_trace_frame_count"]
     except Exception:
         get_motion_trace_frame_count = None
+    try:
+        get_motion_trace_ptr = exports["krkr2_wasm_get_motion_trace_ptr"]
+        get_motion_trace_len = exports["krkr2_wasm_get_motion_trace_len"]
+    except Exception:
+        get_motion_trace_ptr = None
+        get_motion_trace_len = None
+    try:
+        get_tick_count = exports["krkr2_wasm_get_tick_count"]
+        get_tick_diag_mask = exports["krkr2_wasm_get_tick_diag_mask"]
+    except Exception:
+        get_tick_count = None
+        get_tick_diag_mask = None
+    diagnostic_export_names = (
+        "krkr2_wasm_get_tick_diag_ever_mask",
+        "krkr2_wasm_get_window_count",
+        "krkr2_wasm_get_window_count_peak",
+        "krkr2_wasm_get_continuous_event_hook_slot_count",
+        "krkr2_wasm_get_continuous_event_hook_live_count",
+        "krkr2_wasm_get_continuous_handler_slot_count",
+        "krkr2_wasm_get_continuous_handler_live_count",
+        "krkr2_wasm_get_continuous_handler_add_count",
+        "krkr2_wasm_get_continuous_handler_remove_count",
+        "krkr2_wasm_get_continuous_deliver_count",
+        "krkr2_wasm_get_continuous_handler_invoke_count",
+        "krkr2_wasm_get_continuous_handler_failure_count",
+        "krkr2_wasm_get_event_disabled",
+    )
+    diagnostic_exports: dict[str, Any] = {}
+    for export_name in diagnostic_export_names:
+        try:
+            diagnostic_exports[export_name] = exports[export_name]
+        except Exception:
+            pass
+    try:
+        get_continuous_tick_count = exports[
+            "krkr2_wasm_get_continuous_tick_count"]
+        get_continuous_tick_at = exports["krkr2_wasm_get_continuous_tick_at"]
+    except Exception:
+        get_continuous_tick_count = None
+        get_continuous_tick_at = None
 
     guest_path = bootstrap.xp3_guest_path.encode("utf-8")
     config = json.dumps({
@@ -1859,11 +1917,60 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     if get_motion_trace_frame_count is not None:
         motion_trace_frames = int(get_motion_trace_frame_count(store))
 
+    motion_trace_events: list[dict[str, Any]] = []
+    if get_motion_trace_ptr is not None and get_motion_trace_len is not None:
+        trace_len = int(get_motion_trace_len(store))
+        trace_ptr = int(get_motion_trace_ptr(store)) if trace_len > 0 else 0
+        trace_text = read_string(store, memory, trace_ptr, trace_len)
+        for lineno, line in enumerate(trace_text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"motion trace JSONL line {lineno} is invalid: {exc}"
+                ) from exc
+            if not isinstance(event, dict):
+                raise RuntimeError(
+                    f"motion trace JSONL line {lineno} is not an object")
+            motion_trace_events.append(event)
+    if motion_trace_out is not None:
+        motion_trace_out.parent.mkdir(parents=True, exist_ok=True)
+        motion_trace_out.write_text(
+            json.dumps(
+                motion_trace_events, ensure_ascii=False, allow_nan=False
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+    guest_diagnostics = {
+        name.removeprefix("krkr2_wasm_get_"): int(export(store))
+        for name, export in diagnostic_exports.items()
+    }
+    if (get_continuous_tick_count is not None and
+            get_continuous_tick_at is not None):
+        tick_count = int(get_continuous_tick_count(store))
+        retained_tick_count = min(tick_count, 512)
+        guest_diagnostics["continuous_ticks_u32"] = [
+            int(get_continuous_tick_at(store, index)) & 0xffffffff
+            for index in range(retained_tick_count)
+        ]
+
     return {
         "ok": True,
         "runner": "motion-playback-wasmtime-lldb-driver",
         "framesDriven": ticks_driven,
         "motionTraceFrames": motion_trace_frames,
+        "motionTraceEventCount": len(motion_trace_events),
+        "guestTickCount": (
+            int(get_tick_count(store)) if get_tick_count is not None else None
+        ),
+        "guestTickDiagMask": (
+            int(get_tick_diag_mask(store))
+            if get_tick_diag_mask is not None else None
+        ),
+        "guestDiagnostics": guest_diagnostics,
         "bootstrap": {
             "guestRoot": str(bootstrap.root),
             "preloadFiles": bootstrap.preload_files,
@@ -2021,6 +2128,74 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
     if render_artifact_dir is not None and not isinstance(render_events, list):
         raise RuntimeError(
             f"Wasmtime render stage trace root is not a list: {type(render_events)}")
+    return events, render_events
+
+
+def run_direct_guest_trace(wasm_path: Path, startup_xp3: Path, *,
+                           specs: list[dict],
+                           expected_frames: int,
+                           framebuffer_dir: Path | None = None,
+                           render_artifact_dir: Path | None = None,
+                           record_render_step_checkpoints: bool = False,
+                           checkpoint_render_only: bool = False,
+                           record_layer_raw_probes: bool = False,
+                           record_save_layer_visual_readback_probes: bool = False,
+                           save_layer_visual_readback_frame_start: int = 0,
+                           save_layer_visual_readback_frame_count: int = 1,
+                           capture_window: FrameCaptureWindow,
+                           manifest_startup_xp3: Path | None = None
+                           ) -> tuple[list[dict], list[dict]]:
+    """Drive the same full guest and consume its explicit trace exports.
+
+    The direct lane is useful for render capture, where stopping LLDB once per
+    layer multiplies image-I/O runs into thousands of synchronous debugger
+    round trips.  Guest startup, virtual time, warmup, rendering, trace schema,
+    image collection, and later artifact normalization remain identical.
+    """
+    with tempfile.TemporaryDirectory(
+        prefix="krkr2-motion-wasmtime-direct-"
+    ) as temp_dir:
+        temp = Path(temp_dir)
+        trace_path = temp / "trace.json"
+        render_stage_path = temp / "render_stages.json"
+        drive_full_guest(
+            wasm_path,
+            startup_xp3,
+            max(expected_frames + STARTUP_WARMUP_TICKS, 1),
+            motion_trace_out=trace_path,
+            framebuffer_dir=framebuffer_dir,
+            render_artifact_dir=render_artifact_dir,
+            record_render_step_checkpoints=record_render_step_checkpoints,
+            checkpoint_render_only=checkpoint_render_only,
+            record_layer_raw_probes=record_layer_raw_probes,
+            record_save_layer_visual_readback_probes=(
+                record_save_layer_visual_readback_probes),
+            save_layer_visual_readback_frame_start=(
+                save_layer_visual_readback_frame_start),
+            save_layer_visual_readback_frame_count=(
+                save_layer_visual_readback_frame_count),
+            capture_window=capture_window,
+            render_stage_out=(
+                render_stage_path if render_artifact_dir is not None else None),
+            specs=specs,
+            manifest_startup_xp3=manifest_startup_xp3,
+        )
+        events = json.loads(trace_path.read_text(encoding="utf-8"))
+        render_events: list[dict] = []
+        if render_artifact_dir is not None:
+            render_events = json.loads(
+                render_stage_path.read_text(encoding="utf-8"))
+    if not isinstance(events, list):
+        raise RuntimeError(
+            f"Wasmtime direct trace root is not a list: {type(events)}")
+    if not isinstance(render_events, list):
+        raise RuntimeError(
+            "Wasmtime direct render trace root is not a list: "
+            f"{type(render_events)}")
+    if expected_frames and len(events) < expected_frames:
+        raise RuntimeError(
+            f"Wasmtime direct trace captured only {len(events)} event(s); "
+            f"expected at least {expected_frames}")
     return events, render_events
 
 
@@ -2923,31 +3098,38 @@ def main(argv: list[str]) -> int:
     try:
         expected_frames = capture_window.driven_frames
         trace_startup_xp3 = startup_xp3
-        port_events, render_events = run_lldb_guest_trace(
-            wasm_path,
-            trace_startup_xp3,
-            spec_dir=spec_dir,
-            specs=specs,
-            expected_frames=expected_frames,
-            timeout=args.lldb_timeout,
-            host_python=args.host_python,
-            framebuffer_dir=framebuffer_dir,
-            render_artifact_dir=render_artifact_dir,
-            record_render_step_checkpoints=(
+        trace_kwargs = {
+            "specs": specs,
+            "expected_frames": expected_frames,
+            "framebuffer_dir": framebuffer_dir,
+            "render_artifact_dir": render_artifact_dir,
+            "record_render_step_checkpoints": (
                 args.record_render_step_checkpoints),
-            checkpoint_render_only=args.checkpoint_render_only,
-            record_layer_raw_probes=args.record_layer_raw_probes,
-            record_save_layer_visual_readback_probes=(
+            "checkpoint_render_only": args.checkpoint_render_only,
+            "record_layer_raw_probes": args.record_layer_raw_probes,
+            "record_save_layer_visual_readback_probes": (
                 args.record_save_layer_visual_readback_probes),
-            save_layer_visual_readback_frame_start=(
+            "save_layer_visual_readback_frame_start": (
                 args.save_layer_visual_readback_frame_start),
-            save_layer_visual_readback_frame_count=(
+            "save_layer_visual_readback_frame_count": (
                 args.save_layer_visual_readback_frame_count),
-            capture_window=capture_window,
-            manifest_startup_xp3=startup_xp3
+            "capture_window": capture_window,
+            "manifest_startup_xp3": startup_xp3
             if (framebuffer_dir is not None or render_artifact_dir is not None)
             else None,
-        )
+        }
+        if args.direct_guest:
+            port_events, render_events = run_direct_guest_trace(
+                wasm_path, trace_startup_xp3, **trace_kwargs)
+        else:
+            port_events, render_events = run_lldb_guest_trace(
+                wasm_path,
+                trace_startup_xp3,
+                spec_dir=spec_dir,
+                timeout=args.lldb_timeout,
+                host_python=args.host_python,
+                **trace_kwargs,
+            )
         port_frames_by_id = partition_port_frames(
             port_events, specs, mpb, capture_window)
         segment_order = mpb.segment_order_for_specs(specs)

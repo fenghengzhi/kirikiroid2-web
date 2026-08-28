@@ -79,6 +79,17 @@ namespace {
         return doubleToUnsignedIntTowardZeroSaturated_guess(rounded);
     }
 
+    inline int multiplyOpacityWordsDivide255_guess(
+        int lhs, int rhs) noexcept {
+        const std::uint32_t product =
+            static_cast<std::uint32_t>(lhs)
+            * static_cast<std::uint32_t>(rhs);
+        const std::uint32_t quotient = product / 255u;
+        std::int32_t signedWord;
+        std::memcpy(&signedWord, &quotient, sizeof(signedWord));
+        return static_cast<int>(signedWord);
+    }
+
     struct PositionDerivativeSampleTimes_guess {
         double first;
         double second;
@@ -331,21 +342,20 @@ namespace {
         return degrees;
     }
 
-    inline int selectVisibleAncestorIndex_guess(
-        int parentIndex, bool parentDrawFlag,
-        int parentVisibleAncestorIndex) {
-        return parentDrawFlag ? parentIndex : parentVisibleAncestorIndex;
+    inline motion::detail::MotionNode *selectVisibleAncestor_guess(
+        motion::detail::MotionNode &parent) {
+        return parent.drawFlag ? &parent : parent.visibleAncestor;
     }
 
     inline bool selectNodeDrawFlag_guess(
         bool slotDone, int stencilType, bool accumulatedActive,
-        int forceVisible, int nodeType, bool preview,
+        bool emoteEditPresent, int nodeType, bool preview,
         bool sourceValid) {
         if(slotDone || stencilType == 0 || !accumulatedActive) {
             return false;
         }
         const int visibilityMask = preview ? 6153 : 6145;
-        if(forceVisible != 0
+        if(emoteEditPresent
            || (visibilityMask & (1 << nodeType)) != 0) {
             return sourceValid;
         }
@@ -353,8 +363,8 @@ namespace {
     }
 
     inline bool selectVertexQuadMaterialization_guess(
-        int forceVisible, int nodeType, bool preview, bool sourceBlank) {
-        if(forceVisible != 0) {
+        bool emoteEditPresent, int nodeType, bool preview, bool sourceBlank) {
+        if(emoteEditPresent) {
             return true;
         }
         const int mask = preview ? 5193 : 5185;
@@ -580,21 +590,6 @@ namespace {
             static_cast<int>((packedColor >> 16) & 0xFFu),
             static_cast<int>((packedColor >> 24) & 0xFFu),
         };
-    }
-
-    inline void neutralizeDeltaTransformOverrides(
-        motion::detail::MotionNode::DeltaState &delta) {
-        delta.flipX = false;
-        delta.flipY = false;
-        delta.posX = 0.0;
-        delta.posY = 0.0;
-        delta.posZ = 0.0;
-        delta.angle = 0.0;
-        delta.scaleX = 1.0;
-        delta.scaleY = 1.0;
-        delta.slantX = 0.0;
-        delta.slantY = 0.0;
-        delta.opacity = 255;
     }
 
     inline void copyDeltaBlockToAccum(

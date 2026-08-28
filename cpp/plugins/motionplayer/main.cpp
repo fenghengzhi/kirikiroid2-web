@@ -124,6 +124,13 @@ NCB_REGISTER_SUBCLASS_DELAY(ObjSource) {
 // ClassInfo before removing the corresponding member, but all four integrated
 // loaders expose only the registration pipeline: there is no module erase or
 // unload caller.  Successfully loaded Motion/subclass state is process-lived.
+// All four zero-argument constructor callbacks also preserve ncbind's exact
+// boundary: a sole Void argument is an early-success sentinel that neither
+// clears result nor installs a native record; every other nonnegative argument
+// count is accepted and surplus arguments are ignored.  The ordinary path
+// clears result, allocates the full shared geometry record, writes only type,
+// and transfers it to the pre-existing non-sticky adaptor.  Attachment failure
+// deletes the record and returns TJS_E_NATIVECLASSCRASH.
 NCB_REGISTER_SUBCLASS_DELAY(Point) {
     NCB_CONSTRUCTOR(());
     NCB_PROPERTY_RO(type, getType);
@@ -194,24 +201,28 @@ NCB_REGISTER_SUBCLASS_DELAY(LayerGetter) {
 // SeparateLayerAdaptor owns an independent delayed-subclass ClassInfo tuple in
 // all four references.  Setup publishes borrowed name/id/class-object state;
 // unregister clears it without Release or resetting the one-time guard.
-// Factory is ncbind's constructor descriptor registered under the dynamic
-// class name, not a public member literally named "Factory".  It is the first
-// of exactly five rows and marks the constructor-seen flag, so the retained
-// dummy-constructor fallback is not published on the normal path.
+// The tTJSVariant-by-value constructor descriptor is registered under the
+// dynamic class name. It is the first of exactly five rows and marks the
+// constructor-seen flag, so the retained dummy-constructor fallback is not
+// published on the normal path.
 //
 // NativeClass creates an empty {native=null, sticky=false} instance adaptor
-// before the generated factory bridge runs.  The bridge copies only arg0 (or
-// Void), ignores surplus arguments, and attaches the new native only after it
-// can recover that adaptor by this class's own ID.  Attach failure destroys and
-// frees the new native.  The four references contain no existing-native/sticky
-// SeparateLayerAdaptor producer; Player's persistent adaptor is a separate raw
-// owner and Player's class-ID sites only consume script-supplied instances.
+// before the generated constructor bridge runs. A sole Void argument is an
+// early-success shell sentinel that does not clear result or allocate native
+// state. Otherwise the bridge clears result, requires at least one argument,
+// copies arg0 by value, ignores surplus arguments, and attaches the new native
+// only after it can recover that adaptor by this class's own ID. Attach failure
+// destroys and frees the new native. The four references contain no
+// existing-native/sticky SeparateLayerAdaptor producer; Player's persistent
+// adaptor is a separate raw owner and Player's class-ID sites only consume
+// script-supplied instances.
+NCB_TYPECONV_BOXING(SeparateLayerAdaptor);
 NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
-    Factory(&SeparateLayerAdaptor::factory);
+    NCB_CONSTRUCTOR((tTJSVariant));
     NCB_PROPERTY(absolute, getAbsolute, setAbsolute);
     NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
     NCB_METHOD(clear);
-    RawCallback(TJS_W("assign"), &SeparateLayerAdaptor::assignCompat, 0);
+    NCB_METHOD(assign);
 }
 // D3DAdaptor has a second independent delayed-subclass ClassInfo tuple.  Its
 // Factory descriptor is the dynamic class-name constructor row (the first of

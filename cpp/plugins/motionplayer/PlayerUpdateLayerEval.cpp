@@ -7,47 +7,6 @@
 namespace motion::internal {
 
     namespace {
-        // Diagnostic-only projection built at the logging boundary. It is not
-        // part of Player_evaluateTimeline's production data flow and owns no
-        // runtime state.
-        struct TimelineTraceState {
-            bool visible = false;
-            bool debugEvaluated = false;
-            bool debugFrameAInvisible = false;
-            bool debugFrameBInvisible = false;
-            bool debugInterpolated = false;
-            int frameType = 0;
-            int debugActiveIndex = -1;
-            int debugNextIndex = -1;
-            int debugFrameAType = 0;
-            int debugFrameBType = 0;
-            double x = 0.0, y = 0.0, z = 0.0;
-            double opacity = 1.0;
-            double scaleX = 1.0, scaleY = 1.0;
-            double debugFrameATime = 0.0, debugFrameBTime = 0.0;
-            double debugFrameAOpacity = 1.0, debugFrameBOpacity = 1.0;
-            double debugFrameAScaleX = 1.0, debugFrameAScaleY = 1.0;
-            double debugFrameBScaleX = 1.0, debugFrameBScaleY = 1.0;
-            double debugInterpT = 0.0;
-            std::string debugFrameASrc;
-            std::string debugFrameBSrc;
-        };
-
-        TimelineTraceState traceStateFromClipSlot(
-            const detail::MotionNode::ClipSlot &slot,
-            bool visible,
-            int frameType = 0) {
-            TimelineTraceState state;
-            state.visible = visible && !slot.done;
-            state.frameType = slot.frameIndex >= 0
-                ? (slot.done ? 0 : (slot.crossfading ? 3 : 2))
-                : frameType;
-            state.x = slot.x; state.y = slot.y; state.z = slot.z;
-            state.opacity = static_cast<double>(slot.opacity) / 255.0;
-            state.scaleX = slot.scaleX; state.scaleY = slot.scaleY;
-            return state;
-        }
-
         void copyActiveTimelinePayload_guess(
             detail::MotionNode &node) {
             const auto &slot = node.activeSlot();
@@ -863,49 +822,6 @@ namespace motion::internal {
             return currentTime;
         }
 
-        TimelineTraceState traceStateFromNodeSlots(
-            const detail::MotionNode &node,
-            double currentTime) {
-            const auto &active = node.activeSlot();
-            const auto &other = node.otherSlot();
-            TimelineTraceState state =
-                traceStateFromClipSlot(active, !active.done);
-            state.debugEvaluated = active.frameIndex >= 0;
-            state.debugActiveIndex = active.frameIndex;
-            state.debugFrameATime = active.clipStartTime;
-            state.debugFrameAType =
-                active.done ? 0 : (active.crossfading ? 3 : 2);
-            state.debugFrameAInvisible = active.done;
-            state.debugFrameAOpacity =
-                static_cast<double>(active.opacity) / 255.0;
-            state.debugFrameAScaleX = active.scaleX;
-            state.debugFrameAScaleY = active.scaleY;
-            state.debugFrameASrc = detail::narrow(active.srcValue);
-            if(other.frameIndex >= 0) {
-                state.debugNextIndex = other.frameIndex;
-                state.debugFrameBTime = other.clipStartTime;
-                state.debugFrameBType =
-                    other.done ? 0 : (other.crossfading ? 3 : 2);
-                state.debugFrameBInvisible = other.done;
-                state.debugFrameBOpacity =
-                    static_cast<double>(other.opacity) / 255.0;
-                state.debugFrameBScaleX = other.scaleX;
-                state.debugFrameBScaleY = other.scaleY;
-                state.debugFrameBSrc = detail::narrow(other.srcValue);
-            }
-
-            if(active.crossfading && other.frameIndex >= 0) {
-                const double duration = other.clipStartTime - active.clipStartTime;
-                if(duration > 0.0) {
-                    state.debugInterpT = std::clamp(
-                        (currentTime - active.clipStartTime) / duration,
-                        0.0, 1.0);
-                    state.debugInterpolated =
-                        state.debugInterpT > 0.0 && !other.done;
-                }
-            }
-            return state;
-        }
     }
 
     // Shared two-slot seek primitive retained for the independently callable
@@ -1058,7 +974,7 @@ namespace motion::internal {
         node.flags |= 0x01;
 
         const int sourceMask = player._preview ? 6153 : 6145;
-        if(node.forceVisible != 0 ||
+        if(node.hasEmoteEdit_guess() ||
            ((1 << node.nodeType) & sourceMask) != 0) {
             player.findSourceForNode_guess(node);
         }
@@ -1089,22 +1005,10 @@ namespace motion::internal {
         }
 
         const int mask = player._preview ? 6153 : 6145;
-        if(node.forceVisible != 0 ||
+        if(node.hasEmoteEdit_guess() ||
            ((1 << node.nodeType) & mask) != 0) {
             player.findSourceForNode_guess(node);
         }
-    }
-
-    // Diagnostic-only projection of the slots already positioned by progress.
-    // It uses the production selection-time rule so trace interpolation labels
-    // match the evaluator, but it is not a recovered native helper and must
-    // never run when the Web trace sidecar is disabled.
-    MOTIONPLAYER_NOINLINE TimelineTraceState
-    readNodeFrameSlotsForTrace(detail::MotionNode &node,
-                               double currentTime) {
-        const double selectionTime =
-            nodeFrameSelectionTime_guess(node, currentTime);
-        return traceStateFromNodeSlots(node, selectionTime);
     }
 
     std::uint32_t doubleToUnsignedIntTowardZeroSaturated_guess(
@@ -1237,7 +1141,7 @@ namespace motion {
                 const int mask = _preview ? 6153 : 6145;
                 // The four native tails feed nodeType directly to the target
                 // shift instruction; there is no source-level range guard.
-                if(node.forceVisible != 0 ||
+                if(node.hasEmoteEdit_guess() ||
                    (((1 << node.nodeType) & mask) != 0)) {
                     findSourceForNode_guess(node);
                 }
@@ -1360,7 +1264,7 @@ namespace motion {
         }
     }
 
-    // Pre-progress dirty-node pass. For every non-root force-visible node whose
+    // Pre-progress dirty-node pass. For every non-root node with a non-Void
     // emoteEdit object is marked modified, clear that flag and rebuild both
     // timeline slots. The emoteEdit variant is mutable TJS state, so the clear
     // uses PropSet(TJS_MEMBERENSURE) before rebuilding.
@@ -1369,7 +1273,7 @@ namespace motion {
         // node phase. The native implementation has no trailing sentinel.
         for (size_t i = 1; i < _nodes.size(); ++i) {
             detail::MotionNode &node = _nodes[i];
-            if (node.forceVisible == 0) {
+            if (!node.hasEmoteEdit_guess()) {
                 continue;
             }
 
@@ -1470,10 +1374,10 @@ namespace motion {
         if(!_type3RootTransformAlreadyPropagated) {
             Affine2x3 rootAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
             applyLocalTransform(rootAffine, root);
-            root.accumulated.m11 = rootAffine[0];
-            root.accumulated.m21 = rootAffine[1];
-            root.accumulated.m12 = rootAffine[2];
-            root.accumulated.m22 = rootAffine[3];
+            root.matrix.m11 = rootAffine[0];
+            root.matrix.m21 = rootAffine[1];
+            root.matrix.m12 = rootAffine[2];
+            root.matrix.m22 = rootAffine[3];
         }
 
     }
@@ -1481,98 +1385,19 @@ namespace motion {
     // Phase 2: Main node evaluation loop (non-root nodes)
     void Player::updateLayersPhase2_MainLoop(double currentTime) {
         auto &nodes = _nodes;
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        std::string motionPath;
-        bool logoTraceEnabledForPath = false;
-        if(logoTraceEnabled) {
-            motionPath = matchedMotionPath();
-            logoTraceEnabledForPath =
-                detail::logoChainTraceEnabledForPath(motionPath);
-        }
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
 
-            const int origParentIdx = node.parentIndex;
+            // Parent indices are native topology, consumed with unchecked deque
+            // indexing. Nodes carrying the pass-through bit are skipped until
+            // the first ordinary ancestor (normally the synthetic root).
             int parentIdx = node.parentIndex;
-            int walkSteps = 0;
-            while (parentIdx > 0 && parentIdx < static_cast<int>(nodes.size())) {
-                if ((nodes[parentIdx].inheritFlags & 0x00400000) == 0) {
-                    break;
-                }
-                parentIdx = nodes[parentIdx].parentIndex;
-                ++walkSteps;
+            while ((nodes[static_cast<size_t>(parentIdx)].inheritFlags
+                    & 0x00400000) != 0) {
+                parentIdx =
+                    nodes[static_cast<size_t>(parentIdx)].parentIndex;
             }
-            if (parentIdx < 0 || parentIdx >= static_cast<int>(nodes.size())) {
-                parentIdx = 0;
-            }
-            const auto &parent = nodes[parentIdx];
-
-            if (logoTraceEnabledForPath) {
-                const auto &parentNode = nodes[parentIdx];
-                detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.parent_lookup",
-                    "Player::updateLayersPhase2_MainLoop",
-                    currentTime,
-                    "nodeIndex={} label={} type={} inheritFlags=0x{:x} origParentIdx={} resolvedParentIdx={} parentLabel={} parentType={} parentInheritFlags=0x{:x} walkSteps={} independentLayerInherit={}",
-                    node.index,
-                    node.layerName.IsEmpty() ? std::string("<root>")
-                                             : detail::narrow(node.layerName),
-                    node.nodeType,
-                    static_cast<unsigned>(node.inheritFlags),
-                    origParentIdx,
-                    parentIdx,
-                    parentNode.layerName.IsEmpty() ? std::string("<root>")
-                        : detail::narrow(parentNode.layerName),
-                    parentNode.nodeType,
-                    static_cast<unsigned>(parentNode.inheritFlags),
-                    walkSteps,
-                    _independentLayerInherit ? 1 : 0);
-            }
-
-            // The per-node cursor seek already ran in the progress pass. Here
-            // updateLayers only reads the positioned live ClipSlots; this trace
-            // state is a diagnostic projection at that read boundary.
-            std::optional<TimelineTraceState> traceState;
-            if(logoTraceEnabledForPath) {
-                traceState.emplace(
-                    readNodeFrameSlotsForTrace(node, currentTime));
-                const auto &state = *traceState;
-                if(state.debugEvaluated) {
-                    detail::logoChainTraceLogf(
-                        motionPath, "updateLayers.phase2.framesel",
-                        "seekNodeFrameSelection", currentTime,
-                        "nodeIndex={} label={} type={} activeIndex={} nextIndex={} frameA[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] frameB[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] t={:.6f} interpolated={} final[src={},opacity={:.6f},scale=({:.6f},{:.6f})]",
-                        node.index,
-                        node.layerName.IsEmpty() ? std::string("<root>")
-                                                 : detail::narrow(node.layerName),
-                        node.nodeType,
-                        state.debugActiveIndex,
-                        state.debugNextIndex,
-                        state.debugFrameATime,
-                        state.debugFrameAType,
-                        state.debugFrameAInvisible ? 1 : 0,
-                        state.debugFrameASrc.empty() ? std::string("<none>")
-                                                    : state.debugFrameASrc,
-                        state.debugFrameAOpacity,
-                        state.debugFrameAScaleX,
-                        state.debugFrameAScaleY,
-                        state.debugFrameBTime,
-                        state.debugFrameBType,
-                        state.debugFrameBInvisible ? 1 : 0,
-                        state.debugFrameBSrc.empty() ? std::string("<none>")
-                                                    : state.debugFrameBSrc,
-                        state.debugFrameBOpacity,
-                        state.debugFrameBScaleX,
-                        state.debugFrameBScaleY,
-                        state.debugInterpT,
-                        state.debugInterpolated ? 1 : 0,
-                        state.debugFrameASrc.empty()
-                            ? std::string("<none>") : state.debugFrameASrc,
-                        state.opacity,
-                        state.scaleX,
-                        state.scaleY);
-                }
-            }
+            const auto &parent = nodes[static_cast<size_t>(parentIdx)];
 
             // A nonzero camera-constraint translation in the preceding frame
             // forces every node through evaluation once in the next frame.
@@ -1589,9 +1414,8 @@ namespace motion {
                 continue;
             }
 
-            // After a successful evaluation, neutralize the transient transform
-            // overrides while preserving the active/visible override bytes.
-            neutralizeDeltaTransformOverrides(node.delta);
+            // Setter/controller values are persistent. Native clears only the
+            // dirty byte here, then consumes the complete delta block below.
             node.delta.dirty = false;
 
             if (node.activeSlot().done) {
@@ -1601,10 +1425,10 @@ namespace motion {
                 node.accumulated.dirty = copiedDirty ? true : (node.flags != 0);
                 node.accumulated.visible =
                     node.accumulated.visible && node.delta.visibleOverride;
-                node.accumulated.m11 = parent.accumulated.m11;
-                node.accumulated.m21 = parent.accumulated.m21;
-                node.accumulated.m12 = parent.accumulated.m12;
-                node.accumulated.m22 = parent.accumulated.m22;
+                node.matrix.m11 = parent.matrix.m11;
+                node.matrix.m21 = parent.matrix.m21;
+                node.matrix.m12 = parent.matrix.m12;
+                node.matrix.m22 = parent.matrix.m22;
                 continue;
             }
 
@@ -1624,7 +1448,8 @@ namespace motion {
             node.accumulated.slantX += node.delta.slantX;
             node.accumulated.slantY += node.delta.slantY;
             node.accumulated.opacity =
-                node.delta.opacity * node.accumulated.opacity / 255;
+                multiplyOpacityWordsDivide255_guess(
+                    node.delta.opacity, node.accumulated.opacity);
             node.accumulated.posX += node.delta.posX;
             node.accumulated.posY += node.delta.posY;
             node.accumulated.posZ += node.delta.posZ;
@@ -1639,18 +1464,18 @@ namespace motion {
                 const double localY = node.accumulated.posY;
                 const double localZ = node.accumulated.posZ;
                 if (parent.coordinateMode != 0) {
-                    const double worldX = parent.accumulated.m11 * localX
-                        + parent.accumulated.m12 * localZ;
-                    const double worldZ = parent.accumulated.m21 * localX
-                        + parent.accumulated.m22 * localZ;
+                    const double worldX = parent.matrix.m11 * localX
+                        + parent.matrix.m12 * localZ;
+                    const double worldZ = parent.matrix.m21 * localX
+                        + parent.matrix.m22 * localZ;
                     node.accumulated.posX = worldX + parent.accumulated.posX;
                     node.accumulated.posY = localY + parent.accumulated.posY;
                     node.accumulated.posZ = worldZ + parent.accumulated.posZ;
                 } else {
-                    const double worldX = parent.accumulated.m11 * localX
-                        + parent.accumulated.m12 * localY;
-                    const double worldY = parent.accumulated.m21 * localX
-                        + parent.accumulated.m22 * localY;
+                    const double worldX = parent.matrix.m11 * localX
+                        + parent.matrix.m12 * localY;
+                    const double worldY = parent.matrix.m21 * localX
+                        + parent.matrix.m22 * localY;
                     node.accumulated.posX = worldX + parent.accumulated.posX;
                     node.accumulated.posY = worldY + parent.accumulated.posY;
                     node.accumulated.posZ = localZ + parent.accumulated.posZ;
@@ -1668,12 +1493,15 @@ namespace motion {
                 const int opacityInheritFlags = node.inheritFlags;
                 if ((opacityInheritFlags & 0x400) != 0) {
                     node.accumulated.opacity =
-                        parent.accumulated.opacity * node.accumulated.opacity / 255;
+                        multiplyOpacityWordsDivide255_guess(
+                            parent.accumulated.opacity,
+                            node.accumulated.opacity);
                 } else if (!_independentLayerInherit) {
                     const auto &rootNode = nodes[0];
                     node.accumulated.opacity =
-                        rootNode.accumulated.opacity
-                        * node.accumulated.opacity / 255;
+                        multiplyOpacityWordsDivide255_guess(
+                            rootNode.accumulated.opacity,
+                            node.accumulated.opacity);
                 }
             }
 
@@ -1685,18 +1513,18 @@ namespace motion {
                 const double lm21 = localAffine[1];
                 const double lm12 = localAffine[2];
                 const double lm22 = localAffine[3];
-                node.accumulated.m11 =
-                    parent.accumulated.m11 * lm11
-                    + parent.accumulated.m12 * lm21;
-                node.accumulated.m21 =
-                    parent.accumulated.m21 * lm11
-                    + parent.accumulated.m22 * lm21;
-                node.accumulated.m12 =
-                    parent.accumulated.m11 * lm12
-                    + parent.accumulated.m12 * lm22;
-                node.accumulated.m22 =
-                    parent.accumulated.m21 * lm12
-                    + parent.accumulated.m22 * lm22;
+                node.matrix.m11 =
+                    parent.matrix.m11 * lm11
+                    + parent.matrix.m12 * lm21;
+                node.matrix.m21 =
+                    parent.matrix.m21 * lm11
+                    + parent.matrix.m22 * lm21;
+                node.matrix.m12 =
+                    parent.matrix.m11 * lm12
+                    + parent.matrix.m12 * lm22;
+                node.matrix.m22 =
+                    parent.matrix.m21 * lm12
+                    + parent.matrix.m22 * lm22;
                 node.accumulated.flipX ^= parent.accumulated.flipX;
                 node.accumulated.flipY ^= parent.accumulated.flipY;
                 node.accumulated.angle += parent.accumulated.angle;
@@ -1723,10 +1551,10 @@ namespace motion {
                 if (_independentLayerInherit) {
                     Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
                     applyLocalTransform(localAffine, node);
-                    node.accumulated.m11 = localAffine[0];
-                    node.accumulated.m21 = localAffine[1];
-                    node.accumulated.m12 = localAffine[2];
-                    node.accumulated.m22 = localAffine[3];
+                    node.matrix.m11 = localAffine[0];
+                    node.matrix.m21 = localAffine[1];
+                    node.matrix.m12 = localAffine[2];
+                    node.matrix.m22 = localAffine[3];
                 } else {
                     const auto &rootNode = nodes[0];
                     if (flags & 0x004)
@@ -1766,55 +1594,21 @@ namespace motion {
                     const double lm21 = localAffine[1];
                     const double lm12 = localAffine[2];
                     const double lm22 = localAffine[3];
-                    node.accumulated.m11 =
-                        rootNode.accumulated.m11 * lm11
-                        + rootNode.accumulated.m12 * lm21;
-                    node.accumulated.m21 =
-                        rootNode.accumulated.m21 * lm11
-                        + rootNode.accumulated.m22 * lm21;
-                    node.accumulated.m12 =
-                        rootNode.accumulated.m11 * lm12
-                        + rootNode.accumulated.m12 * lm22;
-                    node.accumulated.m22 =
-                        rootNode.accumulated.m21 * lm12
-                        + rootNode.accumulated.m22 * lm22;
+                    node.matrix.m11 =
+                        rootNode.matrix.m11 * lm11
+                        + rootNode.matrix.m12 * lm21;
+                    node.matrix.m21 =
+                        rootNode.matrix.m21 * lm11
+                        + rootNode.matrix.m22 * lm21;
+                    node.matrix.m12 =
+                        rootNode.matrix.m11 * lm12
+                        + rootNode.matrix.m12 * lm22;
+                    node.matrix.m22 =
+                        rootNode.matrix.m21 * lm12
+                        + rootNode.matrix.m22 * lm22;
                 }
             }
 
-            if (logoTraceEnabledForPath) {
-                const auto &state = *traceState;
-                detail::logoChainTraceLogf(
-                    motionPath, "updateLayers.phase2.accum_final",
-                    "Player::updateLayersPhase2_MainLoop",
-                    currentTime,
-                    "nodeIndex={} label={} type={} parentIdx={} parentLabel={} state[visible={},evaluated={},opacity={:.3f},scale=({:.3f},{:.3f}),localPos=({:.3f},{:.3f},{:.3f})] parentAccum[pos=({:.3f},{:.3f},{:.3f}),m=({:.3f},{:.3f},{:.3f},{:.3f}),opacity={},visible={}] accum[pos=({:.3f},{:.3f},{:.3f}),m=({:.3f},{:.3f},{:.3f},{:.3f}),scale=({:.3f},{:.3f}),opacity={},visible={},active={}]",
-                    node.index,
-                    node.layerName.IsEmpty() ? std::string("<root>")
-                                             : detail::narrow(node.layerName),
-                    node.nodeType,
-                    parentIdx,
-                    parent.layerName.IsEmpty() ? std::string("<root>")
-                                               : detail::narrow(parent.layerName),
-                    state.visible ? 1 : 0,
-                    state.debugEvaluated ? 1 : 0,
-                    state.opacity,
-                    state.scaleX, state.scaleY,
-                    state.x, state.y, state.z,
-                    parent.accumulated.posX, parent.accumulated.posY,
-                    parent.accumulated.posZ,
-                    parent.accumulated.m11, parent.accumulated.m21,
-                    parent.accumulated.m12, parent.accumulated.m22,
-                    parent.accumulated.opacity,
-                    parent.accumulated.visible ? 1 : 0,
-                    node.accumulated.posX, node.accumulated.posY,
-                    node.accumulated.posZ,
-                    node.accumulated.m11, node.accumulated.m21,
-                    node.accumulated.m12, node.accumulated.m22,
-                    node.accumulated.scaleX, node.accumulated.scaleY,
-                    node.accumulated.opacity,
-                    node.accumulated.visible ? 1 : 0,
-                    node.accumulated.active ? 1 : 0);
-            }
         }
     }
 

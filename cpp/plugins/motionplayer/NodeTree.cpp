@@ -102,15 +102,8 @@ namespace motion::detail {
                 TJS_W("parameterize"),
                 ncbTypedefs::Tag<tTJSVariant>(), 0,
                 &parameterizeMemberHint_guess);
-            if(parameterize.Type() == tvtInteger) {
-                node.parameterizeIndex =
-                    static_cast<int>(parameterize.AsInteger());
-                node.parameterEntry =
-                    internal::resolveNodeParameterEntry(player, node);
-            } else {
-                node.parameterizeIndex = -1;
-                node.parameterEntry = nullptr;
-            }
+            node.parameterEntry =
+                internal::selectParameterEntry_guess(player, parameterize);
 
             node.coordinateMode = static_cast<int>(layer.GetValue(
                 TJS_W("coordinate"), ncbTypedefs::Tag<tjs_int>(), 0,
@@ -267,7 +260,6 @@ namespace motion::detail {
                 // element in the deque.
                 nodes.emplace_back();
                 MotionNode &node = nodes.back();
-                node.index = thisIndex;
                 node.parentIndex = parentIndex;
                 node.slots[0].done = true;
                 node.slots[1].done = true;
@@ -309,8 +301,9 @@ namespace motion::detail {
             rawLayers, 0, player,
             player._resourceManager);
 
-        for(size_t index = 1; index < player._nodes.size(); ++index) {
-            auto &node = player._nodes[index];
+        const int nodeCount = static_cast<int>(player._nodes.size());
+        for(int index = 1; index < nodeCount; ++index) {
+            auto &node = player._nodes[static_cast<size_t>(index)];
             if(node.nodeType != 12 || (node.stencilType & 4) == 0) {
                 continue;
             }

@@ -6,16 +6,10 @@
 #include "MotionDispatch.h"
 #include "MotionTraceWeb.h"
 #include "ncbind.hpp"
-#include "tjsDebug.h"
 
 using namespace motion::internal;
 
 namespace {
-    std::string shortTJSStackTrace(tjs_int limit = 8) {
-        ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
-        return stack.AsStdString();
-    }
-
     tjs_int signedIndexFromBits32_guess(std::uint32_t bits) noexcept {
         static_assert(sizeof(tjs_int) == sizeof(bits),
                       "motion numeric properties require a 32-bit tjs_int");
@@ -1298,6 +1292,9 @@ namespace {
     // references and this implementation; frameProgress does not clear it.
     void Player::progressFrames_guess(iTJSDispatch2 *currentDispatch,
                                       double frameDt) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::MotionTraceProgressScope traceScope(this, currentDispatch);
+#endif
         _currentDispatch = currentDispatch;
         frameProgress(frameDt);
         updateLayers();                         // unconditional in all four targets
@@ -1309,112 +1306,27 @@ namespace {
     tjs_error Player::progressCompatMethod(tTJSVariant *result, tjs_int numparams,
                                            tTJSVariant **param,
                                            iTJSDispatch2 *objthis) {
-        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        // The legacy method object clears a non-null result before entering
+        // this raw callback; the callback itself never writes it.
+        (void)result;
+
+        auto *self =
+            ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, false);
         if(!self) {
-            return TJS_E_INVALIDOBJECT;
+            return TJS_E_NATIVECLASSCRASH;
         }
 
-        // The four current NCB wrappers reject a missing delta before entering
-        // any load/progress side effect.
+        // Native-instance resolution precedes the lower-bound arity gate.
         if(numparams < 1) {
             return TJS_E_BADPARAMCOUNT;
         }
 
-        // The native wrapper performs no lazy load; objthis is the raw,
-        // call-scoped event-dispatch owner.
-        self->_currentDispatch = objthis;
-        detail::MotionTraceProgressScope motionTraceScope(self, objthis);
-
+        // Conversion happens before the bridge installs objthis. Therefore a
+        // conversion exception preserves the previous raw dispatch slot, while
+        // an exception in any downstream phase leaves objthis installed.
         const double delta = param[0]->AsReal();
-
-        const bool logoTraceEnabled = detail::logoChainTraceEnabled();
-        const bool logoSnapshotEnabled = detail::logoSnapshotMarkEnabled();
-        std::string motionPath;
-        if(logoTraceEnabled || logoSnapshotEnabled) {
-            // The optional Web sidecars are the only path consumers. Keep
-            // Variant-to-text conversion out of the native/default wrapper.
-            motionPath = self->matchedMotionPath();
-        }
-        const bool logoTraceEnabledForPath =
-            logoTraceEnabled &&
-            detail::logoChainTraceEnabledForPath(motionPath);
-        const bool logoSnapshotEnabledForPath =
-            logoSnapshotEnabled &&
-            detail::logoSnapshotMarkEnabledForPath(motionPath);
-        // 四参考 wrapper 入口无任何栈遍历/字符串构建。shortTJSStackTrace()
-        // 会走一遍 TJS 调用栈——必须先过路径门控
-        // (logoChainTraceLogf 内部的同一判定) 再求值，否则每帧每个 player 在所有构建上都
-        // 付出二进制不存在的开销，违背运行时行为复刻。
-        if(logoTraceEnabledForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "progressCompat.enter", "Player.progress",
-                self->_clampedEvalTime,
-                "deltaMs={:.3f} frameDt={:.6f} allplayingBefore={} nodesBefore={} stack={}",
-                delta, delta * kMotionFramesPerMillisecond,
-                self->_allplaying ? 1 : 0,
-                self->_nodes.size(), shortTJSStackTrace());
-        }
-
-        self->frameProgress(delta * kMotionFramesPerMillisecond);
-        if(logoTraceEnabledForPath) {
-            detail::logoChainTraceCheck(
-                motionPath, "progressCompat.dt", "Player.progress",
-                self->_clampedEvalTime,
-                fmt::format("speedMul*dt_ms*60/1000={:.6f}",
-                            self->_speedMul * delta *
-                                kMotionFramesPerMillisecond),
-                fmt::format("deltaTime={:.6f}", self->_deltaTime),
-                std::fabs(self->_deltaTime -
-                          self->_speedMul * delta *
-                              kMotionFramesPerMillisecond) < 0.000001,
-                "progressCompat dt->_deltaTime diverged from the four-reference core");
-        }
-
-        // Four-reference wrapper order: frameProgress -> updateLayers ->
-        // calcBounds -> dispatchPendingEvents. The node tree is assumed to have
-        // been built eagerly by play()/setMotion(); there is no lazy build here.
-        if(logoTraceEnabledForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "progressCompat.update", "Player.progress",
-                self->_clampedEvalTime,
-                "timelineCurrentTime={:.3f} pendingEvents={} nodes={}",
-                self->_clampedEvalTime, self->_pendingEvents.size(),
-                self->_nodes.size());
-        }
-        // The native bridge does not short-circuit this call for an empty node
-        // deque; updateLayers owns that boundary case.
-        self->updateLayers();
-        self->calcBounds();
-        if(logoTraceEnabledForPath) {
-            detail::logoChainTraceLogf(
-                motionPath, "progressCompat.exit", "Player.progress",
-                self->_clampedEvalTime,
-                "allplayingAfter={} nodesAfter={} bounds=({:.3f},{:.3f},{:.3f},{:.3f})",
-                self->_allplaying ? 1 : 0,
-                self->_nodes.size(), self->_boundsMinX, self->_boundsMinY,
-                self->_boundsMaxX, self->_boundsMaxY);
-        }
-
-        if(logoSnapshotEnabledForPath &&
-           motionPath.find("m2logo.mtn") != std::string::npos &&
-           self->_clampedEvalTime >= 0.0 && self->_clampedEvalTime <= 60.0) {
-            std::fprintf(stderr,
-                         "SNAPTIME motion=%s frame=%.3f playing=%d nodes=%zu\n",
-                         motionPath.c_str(), self->_clampedEvalTime,
-                         self->_allplaying ? 1 : 0,
-                         self->_nodes.size());
-        }
-
-        if(logoSnapshotEnabledForPath &&
-           motionPath.find("m2logo.mtn") != std::string::npos &&
-           self->_clampedEvalTime >= 30.0 && self->_clampedEvalTime <= 50.0) {
-            std::fprintf(stderr, "SHOTMARK motion=%s frame=%.3f\n",
-                         motionPath.c_str(), self->_clampedEvalTime);
-        }
-
-        self->dispatchPendingEvents_guess(self->_currentDispatch);
-        self->_currentDispatch = nullptr;
-
+        self->progressFrames_guess(
+            objthis, (delta * 60.0) / 1000.0);
         return TJS_S_OK;
     }
 

@@ -113,6 +113,13 @@ namespace motion {
         [[nodiscard]] tTJSVariant findMotion(tTJSVariant projectKey,
                                               ttstr path) const;
         [[nodiscard]] double random();
+        // Unregistered test-only owner injection. It keeps the production
+        // constructor expression and public NCB surface unchanged while
+        // making random()'s borrowed-dispatch lifetime directly observable.
+        void setRandomGeneratorForDifferentialTest_guess(
+            const tTJSVariant &generator) {
+            _randomGenerator = generator;
+        }
 
         static tjs_error setEmotePSBDecryptSeed(tTJSVariant *r, tjs_int count,
                                                 tTJSVariant **p,

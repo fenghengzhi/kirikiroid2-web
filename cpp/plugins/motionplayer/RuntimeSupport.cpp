@@ -375,7 +375,6 @@ namespace motion::detail {
             return;
         }
         player._nodes.emplace_back();
-        player._nodes.back().index = 0;
         player._nodes.back().parentIndex = 0;
     }
 

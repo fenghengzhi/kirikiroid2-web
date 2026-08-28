@@ -11,6 +11,8 @@
 #include "MeshPoint.h"
 #include "tjs.h"
 
+class tTJSNI_BaseLayer;
+
 namespace motion {
 
     struct SeparateLayerPayload_guess {
@@ -71,21 +73,6 @@ namespace motion {
         explicit SeparateLayerAdaptor(tTJSVariant targetLayer);
         ~SeparateLayerAdaptor();
 
-        // The four native callbacks copy arg0 when present, otherwise construct
-        // from a Void Variant, and ignore later arguments.  ncbind invokes this
-        // behind a pre-created non-sticky shell adaptor; its generated bridge
-        // owns rollback (native dtor + delete) when class-ID lookup/attach fails.
-        // No reference producer sets this class's adaptor sticky flag true.
-        static tjs_error factory(SeparateLayerAdaptor **result, tjs_int numparams,
-                                 tTJSVariant **param, iTJSDispatch2 *) {
-            tTJSVariant targetLayer;
-            if(numparams >= 1) {
-                targetLayer = *param[0];
-            }
-            *result = new SeparateLayerAdaptor(targetLayer);
-            return TJS_S_OK;
-        }
-
         iTJSDispatch2 *getOwner() const {
             return _owner.Type() == tvtObject ? _owner.AsObjectNoAddRef() : nullptr;
         }
@@ -116,15 +103,15 @@ namespace motion {
         // absolute.
         tTJSVariant resolveLayerOrdinal_guess(tjs_uint32 ordinal);
         void endLayerPass_guess();
-        static tjs_error assignCompat(tTJSVariant *result, tjs_int numparams,
-                                      tTJSVariant **param,
-                                      iTJSDispatch2 *objthis);
+        // Script-visible typed ncbind method. The generated wrapper requires
+        // one SeparateLayerAdaptor argument, performs strict native unboxing,
+        // clears the result to Void, and accepts surplus arguments.
+        void assign(const SeparateLayerAdaptor &source);
     private:
-        friend iTJSDispatch2 *ensurePrivateMotionGLL_guess(
+        friend tTJSNI_BaseLayer *ensurePrivateMotionGLL_guess(
             SeparateLayerAdaptor &sla);
 
         void clearPrivateRenderState();
-        tjs_error assignFromAdaptor_guess(const SeparateLayerAdaptor &source);
         tTJSVariant resolveLayerNodeInternal_guess(
             tjs_uint32 ordinal,
             const SeparateLayerPayload_guess &sourcePayload,
