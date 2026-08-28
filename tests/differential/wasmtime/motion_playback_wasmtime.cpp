@@ -166,6 +166,10 @@ void appendNumberArray(std::string &out, const std::array<T, N> &values) {
     out.push_back('[');
     for(size_t i = 0; i < N; ++i) {
         if(i) out.push_back(',');
+        if(!std::isfinite(static_cast<double>(values[i]))) {
+            out += "null";
+            continue;
+        }
         std::ostringstream os;
         os << std::setprecision(9) << values[i];
         out += os.str();

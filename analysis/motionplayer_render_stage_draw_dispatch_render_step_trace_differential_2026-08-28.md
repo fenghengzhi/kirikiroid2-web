@@ -1,5 +1,14 @@
 # motionplayer render-stage / draw-dispatch / render-step trace差分（MP-V05，2026-08-29终态更新）
 
+> **2026-08-29 CI 实跑纠正：** run `33206772913` 证明提交
+> `6a366f37` 接入的 active Android `--stage render_path` 不可执行。当前
+> Kirikiroid2 1.3.9 agent 自 `c85306fc` 起明确只支持 `trace_flatten`；文件中
+> 保留的 render-stage offsets 属于退役的 1.4.4 lane，尚未对 1.3.9 独立
+> rebase。失败 job `98969852903` 在请求七个未 rebase stage 时按设计 fail
+> closed。active workflow 已恢复为 Android `trace_flatten` 录制和基础 playback
+> compare；Wasmtime render-stage 只保留为单边诊断 artifact。下文第 3 节原先
+> 所称的 active paired render pipeline 已被这次实跑证伪，以本纠正为准。
+
 ## 1. 结论与状态
 
 `MP-V05` 的最终 disposition 为 `EVIDENCE_BLOCKED`（终态，但不是当前工作树的完整跨 lane PASS）。
@@ -40,9 +49,10 @@ run 550 / commit `5cc45b36...` 的 artifact API 又只有 playback oracle、reco
 先前只检查 run 550 和 2026-05-30 disabled workflow，遗漏了 run 540；“GitHub 上不存在 15 Hz
 Android partner”的结论已撤回。
 
-## 3. active workflow接线
+## 3. 已被 CI 证伪并撤回的 paired render workflow 接线
 
-本轮只改CI/测试接线，不改production语义：
+提交 `6a366f37` 曾尝试以下 CI/测试接线，但它把旧 1.4.4 render offsets
+误用于当前 1.3.9 oracle，因此不再是 active workflow：
 
 ### Wasmtime job
 
@@ -57,7 +67,7 @@ Android partner”的结论已撤回。
 
 两个case写入同一artifact root，由现有manifest merge逻辑合并；随后上传`manifest.json`和`events/**`。
 
-### Android job
+### Android job（已撤回）
 
 正常playback oracle成功后，逐case重置app/forward/logcat，再调用现有
 `run_motion_stage_oracle.py`：
@@ -72,7 +82,7 @@ Android partner”的结论已撤回。
 
 它使用已经运行的Redroid、harness和Frida，不引入新的binary fixture。
 
-### Compare job
+### Compare job（render 部分已撤回）
 
 compare job新增两组artifact download，并依次运行：
 
@@ -109,7 +119,8 @@ saveLayerImage路径冒充renderer输出。
   `python3 tests/differential/python/validate_motion_render_artifact.py --artifact-root
   tests/differential/artifacts/motion_playback_render_stages_wasmtime_20260829_v2`，结果
   `PASS: cases=2 frames=88 events=1472 images=176`；
-- 用PyYAML解析完整active workflow；
+- 用PyYAML解析当时的 workflow 只能证明 YAML 语法有效；run `33206772913`
+  随后证明其中 Android render-stage 能力契约无效；
 - 硬校验两组render artifact name各有一upload、一download；
 - 硬校验render-step和draw-dispatch comparator各只接线一次；
 - `py_compile`四个capture/compare Python入口；
@@ -193,7 +204,8 @@ motionplayer目录82个文件变化，故只能作历史诊断。
 - task status：`EVIDENCE_BLOCKED`（终态，但不是 PASS）；
 - slices：`MP-V05-WASMTIME-RENDER-STAGE-15HZ`、`MP-V05-GITHUB-RUN540-ANDROID-RENDER-15HZ`、
   `MP-V05-CURRENT-DRAW-DISPATCH-EVIDENCE-BLOCKED`；
-- active pipeline：IMPLEMENTED，静态/语法检查通过；
+- active pipeline：Android 只启用 `trace_flatten`；paired render pipeline 为
+  `EVIDENCE_BLOCKED`，必须先把 render offsets 独立 rebase 到 1.3.9；
 - current Wasmtime artifact：PASS_ARTIFACT_AUDIT，88 frames / 1472 events / 176 PNG；
 - GitHub 15 Hz Android artifact：run 540 存在，contemporaneous render-step compare PASS；
 - current-worktree paired draw-dispatch runs：0；

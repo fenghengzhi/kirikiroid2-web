@@ -1115,8 +1115,11 @@ def _read_render_probe_events(store, exports, memory) -> list[dict[str, Any]]:
         try:
             event = json.loads(line)
         except json.JSONDecodeError as exc:
+            start = max(0, exc.pos - 80)
+            end = min(len(line), exc.pos + 80)
             raise RuntimeError(
-                f"render probe JSONL decode failed at line {lineno}: {exc}"
+                f"render probe JSONL decode failed at line {lineno}: {exc}; "
+                f"fragment={line[start:end]!r}"
             ) from exc
         if not isinstance(event, dict):
             raise RuntimeError(
