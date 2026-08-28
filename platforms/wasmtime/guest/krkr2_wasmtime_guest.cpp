@@ -2,7 +2,7 @@
 //
 // This target keeps the guest-side ABI to startup/tick/error/framebuffer glue.
 // Browser and Emscripten host services are provided by the Python Wasmtime
-// runner; differential data is read by LLDB from guest frames.
+// runner; differential data is read from explicit guest trace exports.
 
 #include <cstdlib>
 #include <cstring>

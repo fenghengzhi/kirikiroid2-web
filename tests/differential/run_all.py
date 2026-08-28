@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Build and run every differential Wasmtime LLDB guest-debug family.
+"""Build and run every portable scalar Wasmtime differential family.
 
 Discovers families from `tests/differential/wasmtime/<family>_wasm.cpp` and
 reads build directives from the top comment block of each source:
 
     // @exports: _foo,_bar       required; em++ EXPORTED_FUNCTIONS list
     // @plugin-include           optional flag; adds -I<repo>/cpp/plugins
-    // @requires-lldb            optional documentation flag
 
-The ADB+Frida oracle is a separate lane — invoke the per-family
+The default execution lane uses explicit Wasm exports through a Wasmtime 44+
+CLI, so it does not inspect JIT-native CPU registers.  Interactive bytecode
+debugging is provided separately by ``python/run_wasm_guest_debug.py``.
+
+The ADB+Frida oracle is a separate lane; invoke the per-family
 ``run_<family>_adb.py`` scripts directly (see
 ``tests/differential/oracle_runner/README.md``).
 
 Usage:
-    run_all.py                              # build + run LLDB guest-debug harness
+    run_all.py                              # build + run all scalar families
     run_all.py --no-build                   # run without rebuilding .wasm
     run_all.py --family bezier_curve        # restrict to one family
 """
@@ -21,7 +24,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,30 +42,20 @@ DIRECTIVE_RE = re.compile(r"//\s*@([a-zA-Z0-9_-]+)(?::\s*(.+))?\s*$")
 
 class Family:
     def __init__(self, name: str, src: Path, exports: list[str],
-                 plugin_include: bool, requires_lldb: bool) -> None:
+                 plugin_include: bool) -> None:
         self.name = name
         self.src = src
         self.exports = exports
         self.plugin_include = plugin_include
-        self.requires_lldb = requires_lldb
 
     @property
     def wasm(self) -> Path:
         return WASM_DIR / f"{self.name}.wasm"
 
-    @property
-    def wasmtime_runner(self) -> Path:
-        return PYTHON_DIR / f"run_{self.name}_wasmtime.py"
 
-    @property
-    def spec_dir(self) -> Path:
-        return SPEC_ROOT / self.name
-
-
-def parse_directives(src: Path) -> tuple[list[str], bool, bool]:
+def parse_directives(src: Path) -> tuple[list[str], bool]:
     exports: list[str] = []
     plugin_include = False
-    requires_lldb = False
     for line in src.read_text(encoding="utf-8").splitlines():
         if not line.startswith("//"):
             if line.strip() and not line.strip().startswith("/*"):
@@ -73,20 +68,17 @@ def parse_directives(src: Path) -> tuple[list[str], bool, bool]:
             exports = [e.strip() for e in value.split(",") if e.strip()]
         elif key == "plugin-include":
             plugin_include = True
-        elif key == "requires-lldb":
-            requires_lldb = True
     if not exports:
         raise RuntimeError(f"{src}: missing `// @exports:` directive")
-    return exports, plugin_include, requires_lldb
+    return exports, plugin_include
 
 
 def discover_families() -> list[Family]:
     families: list[Family] = []
     for src in sorted(WASM_DIR.glob("*_wasm.cpp")):
         name = src.stem[:-len("_wasm")]
-        exports, plugin_include, requires_lldb = parse_directives(src)
-        families.append(Family(name, src, exports, plugin_include,
-                               requires_lldb))
+        exports, plugin_include = parse_directives(src)
+        families.append(Family(name, src, exports, plugin_include))
     if not families:
         raise RuntimeError(f"no *_wasm.cpp files under {WASM_DIR}")
     return families
@@ -95,7 +87,7 @@ def discover_families() -> list[Family]:
 def build(family: Family) -> None:
     exports_arg = "[" + ",".join(f"'{e}'" for e in family.exports) + "]"
     cmd = [
-        "em++", str(family.src),
+        os.environ.get("EMXX", "em++"), str(family.src),
         "-std=c++17", "-g3", "-O0", "--profiling-funcs",
         "-sSTANDALONE_WASM=1",
         f"-sEXPORTED_FUNCTIONS={exports_arg}",
@@ -108,15 +100,21 @@ def build(family: Family) -> None:
     subprocess.run(cmd, check=True)
 
 
-def run_wasmtime(family: Family) -> int:
-    if not family.wasmtime_runner.exists():
-        raise RuntimeError(f"missing runner: {family.wasmtime_runner}")
+def run_wasmtime_cli(families: list[Family], wasmtime: Path) -> int:
+    runner = PYTHON_DIR / "run_scalar_wasmtime_cli.py"
     cmd = [
-        sys.executable, str(family.wasmtime_runner),
-        "--spec-dir", str(family.spec_dir),
-        "--wasm", str(family.wasm),
+        sys.executable,
+        str(runner),
+        "--wasmtime", str(wasmtime),
+        "--wasm-dir", str(WASM_DIR),
+        "--spec-root", str(SPEC_ROOT),
     ]
-    print(f"[wasmtime] {family.name}", flush=True)
+    for family in families:
+        cmd += ["--family", family.name]
+    print(
+        "[wasmtime export diff] " + ", ".join(f.name for f in families),
+        flush=True,
+    )
     return subprocess.run(cmd).returncode
 
 
@@ -126,6 +124,12 @@ def main() -> int:
                         help="skip em++ compilation")
     parser.add_argument("--build-only", action="store_true",
                         help="build selected wasm families without running them")
+    parser.add_argument(
+        "--wasmtime",
+        type=Path,
+        default=(Path(value) if (value := shutil.which("wasmtime")) else None),
+        help="Wasmtime 44+ CLI (default: discover from PATH)",
+    )
     parser.add_argument("--family", action="append",
                         help="restrict to specific family (repeatable)")
     args = parser.parse_args()
@@ -144,13 +148,11 @@ def main() -> int:
 
     if args.build_only:
         return 0
-
-    failed = 0
-    for f in families:
-        if run_wasmtime(f) != 0:
-            failed += 1
-
-    return 1 if failed else 0
+    if args.wasmtime is None:
+        raise RuntimeError(
+            "Wasmtime CLI not found; install Wasmtime 44+ or pass --wasmtime"
+        )
+    return run_wasmtime_cli(families, args.wasmtime)
 
 
 if __name__ == "__main__":

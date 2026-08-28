@@ -35,7 +35,7 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/psb_rl_decompress_wasm.cpp
         -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_psb_rl_decompress','_get_compressed_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_psb_rl_decompress','_get_compressed_ptr','_get_decompressed_ptr','_get_decompressed_size','_run_psb_rl_decompress_direct']
         --no-entry
         -o ${PSB_RL_DECOMPRESS_WASM}
     DEPENDS
@@ -71,7 +71,7 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/local_transform_wasm.cpp
         -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_local_transform','_get_affine_in_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_local_transform','_get_affine_in_ptr','_get_affine_out_ptr','_run_local_transform_direct']
         --no-entry
         -o ${LOCAL_TRANSFORM_WASM}
     DEPENDS

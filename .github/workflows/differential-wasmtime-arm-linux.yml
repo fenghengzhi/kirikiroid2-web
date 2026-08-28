@@ -17,7 +17,6 @@ env:
   ANDROID_CMDLINE_TOOLS_VERSION: "11076708"
   LEGACY_NDK_BASENAME: "android-ndk-r17c"
   LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
-  LLVM_VERSION: "20"
 
 jobs:
   wasmtime-arm-linux:
@@ -28,7 +27,6 @@ jobs:
       EMSDK: ${{ github.workspace }}/.emsdk
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       LIBGL_ALWAYS_SOFTWARE: "1"
-      LD_LIBRARY_PATH: /usr/lib/llvm-20/lib/python3/dist-packages/lldb:/usr/lib/llvm-20/lib
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +50,6 @@ jobs:
             ca-certificates \
             cmake \
             git \
-            gnupg \
             libgl1-mesa-dev \
             libgl1-mesa-dri \
             libglfw3 \
@@ -69,90 +66,6 @@ jobs:
             wabt \
             wget \
             xvfb
-          sudo rm -f /usr/share/keyrings/apt.llvm.org.gpg
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/apt.llvm.org.gpg
-          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
-            | sudo tee /etc/apt/sources.list.d/apt.llvm.org.list
-          sudo apt-get update
-          sudo apt-get install -y --reinstall --no-install-recommends \
-            liblldb-${LLVM_VERSION} \
-            lldb-${LLVM_VERSION} \
-            python3-lldb-${LLVM_VERSION}
-
-      - name: Repair LLDB Python extension symlink
-        run: |
-          sudo LLVM_VERSION="${LLVM_VERSION}" python3 - <<'PY'
-          import importlib.machinery
-          import os
-          from pathlib import Path
-          import subprocess
-
-          llvm_version = os.environ["LLVM_VERSION"]
-          llvm_root = Path(f"/usr/lib/llvm-{llvm_version}")
-          lldb_python = subprocess.check_output(
-              [f"lldb-{llvm_version}", "-P"], text=True).strip()
-          package_dir = Path(lldb_python) / "lldb"
-          suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
-          extension = package_dir / ("_lldb" + suffix)
-          if extension.exists():
-              print(f"LLDB extension exists: {extension}")
-              raise SystemExit(0)
-          wrapper_roots = [
-              llvm_root / "lib/python3/dist-packages/lldb",
-              Path("/usr/lib/python3/dist-packages/lldb"),
-          ]
-          targets = [
-              candidate
-              for root in wrapper_roots
-              for candidate in sorted(root.glob("_lldb*.so"))
-              if candidate.exists()
-          ]
-          target = next((p for p in targets if p.exists()), None)
-          if target is None:
-              raise SystemExit("_lldb wrapper target not found")
-          if extension.exists() or extension.is_symlink():
-              extension.unlink()
-          extension.symlink_to(target)
-          print(f"linked {extension} -> {target}")
-          PY
-
-      - name: Repair LLDB server executable name
-        run: |
-          set -euo pipefail
-          sudo apt-get install -y --no-install-recommends "lldb-server-${LLVM_VERSION}" || true
-          server=""
-          for candidate in \
-            "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server" \
-            "$(command -v "lldb-server-${LLVM_VERSION}" || true)"
-          do
-            if [ -z "${candidate}" ]; then
-              continue
-            fi
-            resolved="$(readlink -f "${candidate}" || true)"
-            if [ -n "${resolved}" ] && [ -x "${resolved}" ]; then
-              server="${resolved}"
-              break
-            fi
-          done
-          if [ -z "${server}" ]; then
-            echo "lldb-server executable not found" >&2
-            ls -l /usr/bin/lldb-server* 2>/dev/null || true
-            find "/usr/lib/llvm-${LLVM_VERSION}" -name 'lldb-server*' -print || true
-            exit 1
-          fi
-          version="$("lldb-${LLVM_VERSION}" --version | sed -n 's/^lldb version //p' | awk '{print $1}' | head -n 1)"
-          if [ -z "${version}" ]; then
-            echo "failed to parse lldb version" >&2
-            "lldb-${LLVM_VERSION}" --version >&2
-            exit 1
-          fi
-          sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${version}"
-          sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${LLVM_VERSION}"
-          sudo ln -sf "${server}" "/usr/bin/lldb-server-${version}"
-          sudo ln -sf "${server}" "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server-${version}"
-          echo "lldb-server-${version} -> ${server}"
-          "${server}" --version || true
 
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
@@ -187,49 +100,10 @@ jobs:
           python3 -m pip install --break-system-packages \
             -r tests/differential/python/requirements-wasm.txt
 
-      - name: Probe LLDB Python
-        run: |
-          which python3
-          command -v "lldb-${LLVM_VERSION}"
-          "lldb-${LLVM_VERSION}" -P
-          python3 - <<'PY'
-          import importlib.machinery
-          import importlib.util
-          from pathlib import Path
-          import subprocess
-          import traceback
-
-          import os
-          llvm_version = os.environ["LLVM_VERSION"]
-          lldb_python = subprocess.check_output(
-              [f"lldb-{llvm_version}", "-P"], text=True).strip()
-          package_dir = Path(lldb_python) / "lldb"
-          print("lldb package dir:", package_dir)
-          print("extension suffixes:", importlib.machinery.EXTENSION_SUFFIXES)
-          print("lldb package files:",
-                [p.name for p in sorted(package_dir.glob("*_lldb*"))])
-          for path in sorted(package_dir.glob("_lldb*.so")):
-              for name in ("_lldb", "lldb._lldb"):
-                  print(f"trying extension load {name} from {path}")
-                  try:
-                      spec = importlib.util.spec_from_file_location(name, path)
-                      assert spec is not None and spec.loader is not None
-                      module = importlib.util.module_from_spec(spec)
-                      spec.loader.exec_module(module)
-                      print("extension load ok:", name, module)
-                  except Exception:
-                      traceback.print_exc()
-          PY
-          python3 - <<'PY'
-          import platform
-          import sys
-          sys.path.insert(0, "tests/differential/python")
-          from wasm_lldb_runner import load_lldb
-          lldb = load_lldb()
-          print("lldb:", lldb.SBDebugger)
-          print("python:", sys.executable)
-          print("platform:", sys.platform, platform.machine())
-          PY
+      - name: Setup Wasmtime 48 LTS
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: "48.0.0"
 
       - name: Cache vcpkg
         uses: actions/cache@v4
@@ -288,7 +162,7 @@ jobs:
         with:
           key: wasmtime-arm-linux-${{ runner.arch }}
 
-      - name: Build WASM + run LLDB guest-debug differential tests
+      - name: Build and run portable scalar Wasmtime tests
         run: |
           source "${EMSDK}/emsdk_env.sh"
           python3 tests/differential/run_all.py
@@ -324,7 +198,7 @@ jobs:
           fi
           cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
-      - name: Run motion_playback Wasmtime LLDB guest-debug
+      - name: Run motion_playback Wasmtime guest trace
         run: |
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
@@ -339,8 +213,7 @@ jobs:
               --record-render-stages \
               --record-render-step-checkpoints \
               --checkpoint-render-only \
-              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
-              --lldb-timeout 600
+              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime
 
       - name: Upload motion_playback Wasmtime traces
         uses: actions/upload-artifact@v4

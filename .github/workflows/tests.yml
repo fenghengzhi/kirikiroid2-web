@@ -6,145 +6,68 @@ on:
     branches: [web]
 
 env:
-  EMSDK_VERSION: "3.1.64"
+  EMSDK_VERSION: "4.0.23"
+  WASMTIME_VERSION: "48.0.0"
 
 jobs:
-  tests:
-    runs-on: ubuntu-latest
+  scalar-wasmtime:
+    name: Portable scalar Wasmtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     env:
-      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       EMSDK: ${{ github.workspace }}/.emsdk
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true
           submodules: recursive
 
-      # ── System deps ──
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bison ninja-build python3 nasm \
-            libxft-dev libxext-dev libxxf86vm-dev libx11-dev libxmu-dev \
-            libglu1-mesa-dev libgl2ps-dev libxi-dev libzip-dev libpng-dev \
-            libcurl4-gnutls-dev libfontconfig1-dev libsqlite3-dev libglew-dev \
-            libssl-dev libgtk-3-dev autoconf automake libtool pkg-config libltdl-dev
-
-      # ── vcpkg ──
-      - name: Setup vcpkg
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git ${{ env.VCPKG_ROOT }}
-          ${{ env.VCPKG_ROOT }}/bootstrap-vcpkg.sh
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: actions/setup-python@v5
         with:
-          path: ${{ env.VCPKG_ROOT }}/installed
-          key: vcpkg-linux-${{ hashFiles('vcpkg.json') }}
+          python-version: "3.12"
 
-      # ── Emscripten ──
-      - name: Cache Emscripten SDK
-        uses: actions/cache@v4
-        id: emsdk-cache
+      - name: Setup Wasmtime 48 LTS
+        uses: bytecodealliance/actions/wasmtime/setup@v1
         with:
-          path: ${{ env.EMSDK }}
-          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}
+          version: ${{ env.WASMTIME_VERSION }}
 
-      - name: Setup Emscripten SDK
-        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+      - name: Setup Emscripten SDK (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
-          git clone https://github.com/emscripten-core/emsdk.git ${{ env.EMSDK }}
-          ${{ env.EMSDK }}/emsdk install ${{ env.EMSDK_VERSION }}
-          ${{ env.EMSDK }}/emsdk activate ${{ env.EMSDK_VERSION }}
+          git clone https://github.com/emscripten-core/emsdk.git "${EMSDK}"
+          "${EMSDK}/emsdk" install "${EMSDK_VERSION}"
+          "${EMSDK}/emsdk" activate "${EMSDK_VERSION}"
+          echo "EM_CONFIG=${EMSDK}/.emscripten" >> "${GITHUB_ENV}"
+          echo "${EMSDK}" >> "${GITHUB_PATH}"
+          echo "${EMSDK}/upstream/emscripten" >> "${GITHUB_PATH}"
+          echo "${EMSDK}/upstream/bin" >> "${GITHUB_PATH}"
 
-      - name: Activate Emscripten SDK
+      - name: Setup Emscripten SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          source ${{ env.EMSDK }}/emsdk_env.sh
-          echo "EMSDK=${{ env.EMSDK }}" >> $GITHUB_ENV
-          echo "EM_CONFIG=${{ env.EMSDK }}/.emscripten" >> $GITHUB_ENV
-          echo "${{ env.EMSDK }}" >> $GITHUB_PATH
-          echo "${{ env.EMSDK }}/upstream/emscripten" >> $GITHUB_PATH
+          git clone https://github.com/emscripten-core/emsdk.git $env:EMSDK
+          & "$env:EMSDK\emsdk.bat" install $env:EMSDK_VERSION
+          & "$env:EMSDK\emsdk.bat" activate $env:EMSDK_VERSION
+          "EM_CONFIG=$env:EMSDK\.emscripten" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "EMXX=em++.bat" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $env:EMSDK | Out-File -FilePath $env:GITHUB_PATH -Append
+          "$env:EMSDK\upstream\emscripten" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "$env:EMSDK\upstream\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      # ── Python + wasmtime ──
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python differential deps
+      - name: Show portable toolchain
+        shell: bash
         run: |
-          pip install -r tests/differential/python/requirements-wasm.txt
+          python --version
+          wasmtime --version
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            em++.bat --version | head -n 2
+          else
+            em++ --version | head -n 2
+          fi
 
-      # ── ccache ──
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.18
-        with:
-          key: tests
-
-      # ── Unit tests (native Linux build) ──
-      - name: Configure native build
-        run: cmake --preset "Linux Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF
-
-      - name: Build native
-        run: cmake --build out/linux/debug
-
-      - name: Run unit tests
-        run: ctest --test-dir out/linux/debug --output-on-failure
-
-      # ── Differential tests (standalone WASM + wasmtime) ──
-      - name: Build WASM test targets
-        run: |
-          cd tests/differential/wasmtime
-          PLUGIN_PATH=${{ github.workspace }}/cpp/plugins
-
-          em++ geometry_hit_test_wasm.cpp -std=c++17 -O1 -I${PLUGIN_PATH} \
-            -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS="['_krkr2_hit_test_run']" \
-            --no-entry -o geometry_hit_test.wasm
-
-          em++ psb_rl_decompress_wasm.cpp -std=c++17 -O1 \
-            -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS="['_run_psb_rl_decompress','_get_compressed_ptr','_get_decompressed_ptr','_get_decompressed_size_ptr']" \
-            --no-entry -o psb_rl_decompress.wasm
-
-          em++ bezier_curve_wasm.cpp -std=c++17 -O1 \
-            -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS="['_run_bezier_curve','_get_curve_x_ptr','_get_curve_y_ptr','_get_result_ptr']" \
-            --no-entry -o bezier_curve.wasm
-
-          em++ local_transform_wasm.cpp -std=c++17 -O1 \
-            -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS="['_run_local_transform','_get_affine_in_ptr','_get_affine_out_ptr']" \
-            --no-entry -o local_transform.wasm
-
-          em++ position_interp_wasm.cpp -std=c++17 -O1 \
-            -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS="['_run_position_interp','_get_easing_x_ptr','_get_easing_y_ptr','_get_cp_x_ptr','_get_cp_y_ptr','_get_cp_t_ptr','_get_cp_seg_data_ptr','_get_cp_seg_sizes_ptr','_get_src_pos_ptr','_get_dst_pos_ptr','_get_out_pos_ptr']" \
-            --no-entry -o position_interp.wasm
-
-      - name: Run differential tests
-        run: |
-          python tests/differential/python/run_geometry_hit_test_wasmtime.py \
-            --spec-dir tests/differential/specs/geometry_hit_test \
-            --wasm tests/differential/wasmtime/geometry_hit_test.wasm
-
-          python tests/differential/python/run_psb_rl_decompress_wasmtime.py \
-            --spec-dir tests/differential/specs/psb_rl_decompress \
-            --wasm tests/differential/wasmtime/psb_rl_decompress.wasm
-
-          python tests/differential/python/run_bezier_curve_wasmtime.py \
-            --spec-dir tests/differential/specs/bezier_curve \
-            --wasm tests/differential/wasmtime/bezier_curve.wasm
-
-          python tests/differential/python/run_local_transform_wasmtime.py \
-            --spec-dir tests/differential/specs/local_transform \
-            --wasm tests/differential/wasmtime/local_transform.wasm
-
-          python tests/differential/python/run_position_interp_wasmtime.py \
-            --spec-dir tests/differential/specs/position_interp \
-            --wasm tests/differential/wasmtime/position_interp.wasm
-
-      # ── Motion playback (TJS startup chain + Wasmtime) ──
-      - name: Configure Wasmtime Headless Debug build
-        run: cmake --preset "Wasmtime Headless Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF -DKRKR2_WEB_DEBUG_ENABLE_ASAN=OFF
-
-      - name: Build motion playback Wasmtime target
-        run: cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
-
-      - name: Run motion playback state diff
-        run: python3 tests/differential/python/run_motion_playback_wasmtime.py --strict-missing-trace --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm
+      - name: Build and run all scalar Wasmtime families
+        run: python tests/differential/run_all.py

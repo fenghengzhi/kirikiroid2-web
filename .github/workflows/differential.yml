@@ -102,7 +102,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Wasmtime LLDB test dependencies
+      - name: Install Wasmtime guest-trace dependencies
         run: |
           brew update
           brew install autoconf automake bison cmake glfw libtool ninja pkg-config wabt zstd
@@ -191,7 +191,7 @@ jobs:
             -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
           cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
-      - name: Run motion_playback Wasmtime LLDB guest-debug
+      - name: Run motion_playback Wasmtime guest trace
         run: |
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
@@ -209,8 +209,7 @@ jobs:
               --record-render-stages \
               --record-render-step-checkpoints \
               --checkpoint-render-only \
-              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
-              --lldb-timeout 1200
+              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime
           done
 
       - name: Upload motion_playback Wasmtime traces

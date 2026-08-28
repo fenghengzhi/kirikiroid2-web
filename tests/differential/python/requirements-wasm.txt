@@ -1,4 +1,4 @@
-wasmtime
+wasmtime==48.0.0
 PyOpenGL
 glfw
 Pillow

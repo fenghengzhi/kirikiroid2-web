@@ -1,22 +1,69 @@
 #!/usr/bin/env python3
-"""Run geometry/Bezier/position scalar specs through a Wasmtime CLI.
+"""Run every scalar differential family through a Wasmtime CLI.
 
 This lane avoids embedding Wasmtime's JIT into a host Python process.  It uses
-the same standalone wasm modules and unchanged spec expectations.  The
-Bezier/position harnesses expose flattened scalar entry points solely so the
-CLI can pass all inputs without a cross-invocation memory mutation protocol.
+the same standalone wasm modules and unchanged spec expectations.  Each
+harness exposes a flattened scalar entry point so the CLI can pass all inputs
+without a cross-invocation linear-memory mutation protocol.  Requiring
+Wasmtime 44+ also guarantees that the same runtime has the portable guest
+gdbstub used by ``run_wasm_guest_debug.py`` for interactive bytecode debugging.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-FAMILIES = ("geometry_hit_test", "bezier_curve", "position_interp")
+FAMILIES = (
+    "geometry_hit_test",
+    "psb_rl_decompress",
+    "bezier_curve",
+    "local_transform",
+    "position_interp",
+)
+MINIMUM_GUEST_DEBUG_VERSION = (44, 0, 0)
+
+
+def find_wasmtime() -> Path | None:
+    value = shutil.which("wasmtime")
+    return Path(value) if value else None
+
+
+def wasmtime_version(wasmtime: Path) -> tuple[int, int, int]:
+    proc = subprocess.run(
+        [str(wasmtime), "--version"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"failed to query Wasmtime version ({proc.returncode})\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", proc.stdout)
+    if match is None:
+        raise RuntimeError(f"unrecognized Wasmtime version: {proc.stdout!r}")
+    return tuple(int(value) for value in match.groups())
+
+
+def require_guest_debug_wasmtime(wasmtime: Path) -> tuple[int, int, int]:
+    version = wasmtime_version(wasmtime)
+    if version < MINIMUM_GUEST_DEBUG_VERSION:
+        wanted = ".".join(str(value) for value in MINIMUM_GUEST_DEBUG_VERSION)
+        actual = ".".join(str(value) for value in version)
+        raise RuntimeError(
+            f"Wasmtime {actual} is too old; {wanted}+ is required for the "
+            "Guest/Wasm-only gdbstub debugging path"
+        )
+    return version
 
 
 def load_specs(spec_root: Path, family: str) -> list[dict]:
@@ -123,6 +170,88 @@ def run_bezier(wasmtime: Path, wasm: Path, specs: list[dict]) -> bool:
     return ok
 
 
+def run_local_transform(
+    wasmtime: Path, wasm: Path, specs: list[dict]
+) -> bool:
+    ok = True
+    for spec in specs:
+        order = spec["transformOrder"]
+        prefix = [
+            *spec["affine_in"],
+            1 if spec["flipX"] else 0,
+            1 if spec["flipY"] else 0,
+            spec["angle"],
+            spec["scaleX"],
+            spec["scaleY"],
+            spec["slantX"],
+            spec["slantY"],
+            *order,
+        ]
+        actual = [
+            invoke(
+                wasmtime,
+                wasm,
+                "run_local_transform_direct",
+                [*prefix, output_index],
+            )
+            for output_index in range(6)
+        ]
+        wanted = spec["expected"]
+        status = "ok" if actual == wanted else "mismatch"
+        print_result("local_transform", spec["id"], status, actual, wanted)
+        ok = ok and status == "ok"
+    return ok
+
+
+def pack_bytes64(values: list[int], offset: int) -> int:
+    value = 0
+    for index, byte in enumerate(values[offset:offset + 8]):
+        value |= int(byte) << (index * 8)
+    # Wasmtime's CLI accepts an i64 argument.  Preserve the same 64 raw bits
+    # when the top byte would otherwise produce an out-of-range positive int.
+    return value - (1 << 64) if value >= (1 << 63) else value
+
+
+def run_psb_rl_decompress(
+    wasmtime: Path, wasm: Path, specs: list[dict]
+) -> bool:
+    ok = True
+    for spec in specs:
+        compressed = spec["compressed"]
+        if len(compressed) > 16:
+            raise RuntimeError(
+                f"{spec['id']}: flattened PSB CLI ABI accepts at most 16 bytes"
+            )
+        prefix = [
+            len(compressed),
+            spec["element_count"],
+            spec["align"],
+            pack_bytes64(compressed, 0),
+            pack_bytes64(compressed, 8),
+        ]
+        output_size = int(invoke(
+            wasmtime,
+            wasm,
+            "run_psb_rl_decompress_direct",
+            [*prefix, -1],
+        ))
+        actual = [
+            int(invoke(
+                wasmtime,
+                wasm,
+                "run_psb_rl_decompress_direct",
+                [*prefix, output_index],
+            ))
+            for output_index in range(output_size)
+        ]
+        wanted = spec["expected"]
+        status = "ok" if actual == wanted else "mismatch"
+        print_result(
+            "psb_rl_decompress", spec["id"], status, actual, wanted)
+        ok = ok and status == "ok"
+    return ok
+
+
 def run_position(wasmtime: Path, wasm: Path, specs: list[dict]) -> bool:
     ok = True
     for spec in specs:
@@ -174,7 +303,7 @@ def print_result(family: str, case_id: str, status: str, actual, expected) -> No
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wasmtime", required=True, type=Path)
+    parser.add_argument("--wasmtime", default=find_wasmtime(), type=Path)
     parser.add_argument(
         "--family", action="append", choices=FAMILIES, required=True
     )
@@ -190,9 +319,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.wasmtime is None:
+        raise RuntimeError(
+            "Wasmtime CLI not found; install Wasmtime 44+ or pass --wasmtime"
+        )
+    require_guest_debug_wasmtime(args.wasmtime)
+
     runners = {
         "geometry_hit_test": run_geometry,
+        "psb_rl_decompress": run_psb_rl_decompress,
         "bezier_curve": run_bezier,
+        "local_transform": run_local_transform,
         "position_interp": run_position,
     }
     ok = True

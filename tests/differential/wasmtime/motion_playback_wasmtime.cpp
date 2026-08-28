@@ -4,7 +4,7 @@
 // exported test ABI, error buffer, framebuffer buffer, and MotionTraceWeb
 // linkage symbols. Cocos, Window, FS, thread, event behavior, and differential
 // trace collection must come from the normal engine sources plus
-// host-provided env/WASI imports and LLDB guest inspection.
+// host-provided env/WASI imports and guest-resident Wasm trace inspection.
 
 #include <algorithm>
 #include <array>
@@ -1166,7 +1166,7 @@ void appendLayerRawProbeEvent(motion::Player *player,
 }
 
 extern "C" __attribute__((noinline, used))
-void krkr2_lldb_motion_frame_begin(std::int32_t frameId,
+void krkr2_wasm_motion_frame_begin(std::int32_t frameId,
                                    const void *objthis,
                                    const motion::Player *topPlayer,
                                    std::int32_t playerCount) {
@@ -1179,12 +1179,12 @@ void krkr2_lldb_motion_frame_begin(std::int32_t frameId,
     g_motion_trace_frame_json += ",\"playerCount\":";
     g_motion_trace_frame_json += std::to_string(playerCount);
     g_motion_trace_frame_json +=
-        ",\"layout\":\"wasmtime-direct-guest\",\"layers\":[";
+        ",\"layout\":\"wasmtime-guest-trace\",\"layers\":[";
     g_motion_trace_first_layer = true;
 }
 
 extern "C" __attribute__((noinline, used))
-void krkr2_lldb_motion_layer_sample(std::int32_t frameId,
+void krkr2_wasm_motion_append_layer(std::int32_t frameId,
                                     std::int32_t index,
                                     std::uint64_t nodeFlags,
                                     std::uint64_t opacityBlend,
@@ -1243,7 +1243,7 @@ void krkr2_lldb_motion_layer_sample(std::int32_t frameId,
 }
 
 extern "C" __attribute__((noinline, used))
-void krkr2_lldb_motion_frame_end(std::int32_t frameId) {
+void krkr2_wasm_motion_frame_end(std::int32_t frameId) {
     (void)frameId;
     if(g_motion_trace_frame_json.empty()) return;
     g_motion_trace_frame_json += "]}\n";
@@ -1268,7 +1268,7 @@ void emitLayerSample(int frameId,
         (static_cast<std::uint64_t>(
              static_cast<std::uint32_t>(node.nodeType)) << 32) |
         static_cast<std::uint32_t>(flags);
-    krkr2_lldb_motion_layer_sample(
+    krkr2_wasm_motion_append_layer(
         frameId, flatIndex, nodeFlags, opacityBlend, accum.posX, accum.posY,
         accum.posZ, accum.angle, accum.scaleX, accum.scaleY, accum.slantX,
         accum.slantY);
@@ -1298,7 +1298,7 @@ void emitProgressSample(motion::Player *fallbackPlayer) {
     state.lastPostDrawLayerSamplePoint.clear();
     state.lastPostDrawCanvasTexture = nullptr;
     state.lastPostDrawCanvasSamplePoint.clear();
-    krkr2_lldb_motion_frame_begin(
+    krkr2_wasm_motion_frame_begin(
         frameId, state.objthis, topPlayer,
         static_cast<std::int32_t>(state.players.size()));
 
@@ -1311,7 +1311,7 @@ void emitProgressSample(motion::Player *fallbackPlayer) {
     } else {
         emitPlayerLayers(frameId, flatIndex, fallbackPlayer);
     }
-    krkr2_lldb_motion_frame_end(frameId);
+    krkr2_wasm_motion_frame_end(frameId);
 }
 
 template <typename Fn>

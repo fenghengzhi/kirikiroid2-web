@@ -10,7 +10,6 @@ import math
 import os
 import posixpath
 import shutil
-import subprocess
 import sys
 import struct
 import tempfile
@@ -44,10 +43,6 @@ from oracle_runner.motion_timing import (
     validate_simulation_contract,
 )
 
-DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
-DEFAULT_HOST_PYTHON = (
-    Path(DEFAULT_HOST_PYTHON_RAW) if DEFAULT_HOST_PYTHON_RAW else None
-)
 FRAMEBUFFER_SCHEMA = "motion-framebuffer-wasmtime-v1"
 FRAMEBUFFER_SOURCE = "wasmtime-port-saveLayerImage"
 FRAMEBUFFER_CAPTURE_SURFACE = (
@@ -114,13 +109,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--write-port-traces", type=Path, default=None,
                    help="Write normalized Wasmtime port frames per spec as "
                         "<id>.port.json into this directory")
-    p.add_argument("--lldb-timeout", type=float, default=600.0,
-                   help="Timeout for the LLDB Wasm guest tracer")
-    p.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path,
-                   help="Python interpreter LLDB should launch as host")
-    p.add_argument("--direct-guest", action="store_true",
-                   help="Read the guest's direct motion/render trace exports "
-                        "without LLDB breakpoint stops")
     p.add_argument("--record-framebuffer", action="store_true",
                    help="Save every Wasmtime motion_playback frame as PNG "
                         "artifacts and write a manifest.json")
@@ -1015,7 +1003,7 @@ def instantiate_module(wasmtime, wasm_path: Path, enable_gl: bool,
     config.wasm_threads = True
     config.shared_memory = True
     # The debug guest is roughly 150 MiB.  Its content digest is stable across
-    # the per-case LLDB/direct-driver runs, so reuse Wasmtime's compiled-module
+    # the per-case direct guest runs, so reuse Wasmtime's compiled-module
     # cache instead of recompiling it for every trace lane.
     config.cache = True
     engine = wasmtime.Engine(config)
@@ -1959,7 +1947,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
 
     return {
         "ok": True,
-        "runner": "motion-playback-wasmtime-lldb-driver",
+        "runner": "motion-playback-wasmtime-guest-trace",
         "framesDriven": ticks_driven,
         "motionTraceFrames": motion_trace_frames,
         "motionTraceEventCount": len(motion_trace_events),
@@ -1981,156 +1969,6 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     }
 
 
-def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
-                         spec_dir: Path,
-                         specs: list[dict],
-                         expected_frames: int,
-                         timeout: float,
-                         host_python: Path,
-                         framebuffer_dir: Path | None = None,
-                         render_artifact_dir: Path | None = None,
-                         record_render_step_checkpoints: bool = False,
-                         checkpoint_render_only: bool = False,
-                         record_layer_raw_probes: bool = False,
-                         record_save_layer_visual_readback_probes: bool = False,
-                         save_layer_visual_readback_frame_start: int = 0,
-                         save_layer_visual_readback_frame_count: int = 1,
-                         capture_window: FrameCaptureWindow,
-                         manifest_startup_xp3: Path | None = None
-                         ) -> tuple[list[dict], list[dict]]:
-    if host_python is None or not host_python.exists():
-        raise FileNotFoundError(f"host Python not found: {host_python}")
-    if not wasm_path.exists():
-        raise FileNotFoundError(
-            f"wasm module not found: {wasm_path}. Build with "
-            "`cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest`."
-        )
-    if not startup_xp3.exists():
-        raise FileNotFoundError(f"oracle bootstrap xp3 missing: {startup_xp3}")
-    with tempfile.TemporaryDirectory(prefix="krkr2-motion-wasmtime-lldb-") as td:
-        temp = Path(td)
-        trace_path = temp / "trace.json"
-        render_stage_path = temp / "render_stages.json"
-        driver_report = temp / "driver.json"
-        trace_spec_dir = temp / "specs"
-        trace_spec_dir.mkdir(parents=True, exist_ok=True)
-        for spec in specs:
-            spec_id = str(spec["id"])
-            (trace_spec_dir / f"{spec_id}.json").write_text(
-                json.dumps(spec, indent=2, ensure_ascii=True,
-                           allow_nan=False) + "\n",
-                encoding="utf-8",
-            )
-        tracer = REPO_ROOT / "tests" / "differential" / "python" / \
-            "wasm_lldb_motion_trace.py"
-        driver = REPO_ROOT / "tests" / "differential" / "python" / \
-            "wasmtime_motion_playback_driver.py"
-        tracer_python = (
-            ["xcrun", "python3"] if sys.platform == "darwin"
-            else [sys.executable]
-        )
-        cmd = [
-            *tracer_python,
-            str(tracer),
-            "--driver", str(driver),
-            "--host-python", str(host_python),
-            "--wasm", str(wasm_path),
-            "--startup-xp3", str(startup_xp3),
-            "--spec-dir", str(trace_spec_dir),
-            "--trace-out", str(trace_path),
-            "--driver-output", str(driver_report),
-            "--expected-frames", str(expected_frames),
-            "--capture-frame-start", str(capture_window.start),
-            "--capture-frame-count",
-            str(-1 if not capture_window.enabled else capture_window.count),
-            "--timeout", str(timeout),
-            "--repo-root", str(REPO_ROOT),
-        ]
-        if framebuffer_dir is not None:
-            cmd += [
-                "--record-framebuffer",
-                "--framebuffer-dir", str(framebuffer_dir),
-            ]
-            if manifest_startup_xp3 is not None:
-                cmd += [
-                    "--manifest-startup-xp3", str(manifest_startup_xp3),
-                ]
-        if render_artifact_dir is not None:
-            cmd += [
-                "--record-render-stages",
-                "--render-artifact-dir", str(render_artifact_dir),
-                "--render-stage-out", str(render_stage_path),
-            ]
-            if record_render_step_checkpoints:
-                cmd.append("--record-render-step-checkpoints")
-            if checkpoint_render_only:
-                cmd.append("--checkpoint-render-only")
-            if record_layer_raw_probes:
-                cmd.append("--record-layer-raw-probes")
-            if record_save_layer_visual_readback_probes:
-                cmd.append("--record-save-layer-visual-readback-probes")
-                cmd += [
-                    "--save-layer-visual-readback-frame-start",
-                    str(save_layer_visual_readback_frame_start),
-                    "--save-layer-visual-readback-frame-count",
-                    str(save_layer_visual_readback_frame_count),
-                ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(REPO_ROOT),
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout + 30.0,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"Wasmtime LLDB trace timed out after {timeout + 30.0:.1f}s\n"
-                f"stdout:\n{exc.stdout or ''}\nstderr:\n{exc.stderr or ''}"
-            ) from exc
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"Wasmtime LLDB tracer failed with exit code "
-                f"{proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n"
-                f"{proc.stderr}"
-            )
-        if not trace_path.exists():
-            raise RuntimeError(
-                "Wasmtime LLDB tracer did not write trace output\n"
-                f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-            )
-        try:
-            events = json.loads(trace_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Wasmtime LLDB trace JSON decode failed: {exc}\n"
-                f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-            ) from exc
-        render_events: list[dict[str, Any]] = []
-        if render_artifact_dir is not None:
-            if not render_stage_path.exists():
-                raise RuntimeError(
-                    "Wasmtime LLDB tracer did not write render stage output\n"
-                    f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-                )
-            try:
-                render_events = json.loads(
-                    render_stage_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"Wasmtime render stage JSON decode failed: {exc}\n"
-                    f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-                ) from exc
-    if not isinstance(events, list):
-        raise RuntimeError(f"Wasmtime LLDB trace root is not a list: {type(events)}")
-    if render_artifact_dir is not None and not isinstance(render_events, list):
-        raise RuntimeError(
-            f"Wasmtime render stage trace root is not a list: {type(render_events)}")
-    return events, render_events
-
-
 def run_direct_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                            specs: list[dict],
                            expected_frames: int,
@@ -2147,10 +1985,10 @@ def run_direct_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                            ) -> tuple[list[dict], list[dict]]:
     """Drive the same full guest and consume its explicit trace exports.
 
-    The direct lane is useful for render capture, where stopping LLDB once per
-    layer multiplies image-I/O runs into thousands of synchronous debugger
-    round trips.  Guest startup, virtual time, warmup, rendering, trace schema,
-    image collection, and later artifact normalization remain identical.
+    This is the architecture-neutral automated lane. Guest startup, virtual
+    time, warmup, rendering, trace schema, image collection, and artifact
+    normalization all execute inside the Wasm guest or through explicit host
+    imports; no native JIT register inspection is involved.
     """
     with tempfile.TemporaryDirectory(
         prefix="krkr2-motion-wasmtime-direct-"
@@ -3118,18 +2956,8 @@ def main(argv: list[str]) -> int:
             if (framebuffer_dir is not None or render_artifact_dir is not None)
             else None,
         }
-        if args.direct_guest:
-            port_events, render_events = run_direct_guest_trace(
-                wasm_path, trace_startup_xp3, **trace_kwargs)
-        else:
-            port_events, render_events = run_lldb_guest_trace(
-                wasm_path,
-                trace_startup_xp3,
-                spec_dir=spec_dir,
-                timeout=args.lldb_timeout,
-                host_python=args.host_python,
-                **trace_kwargs,
-            )
+        port_events, render_events = run_direct_guest_trace(
+            wasm_path, trace_startup_xp3, **trace_kwargs)
         port_frames_by_id = partition_port_frames(
             port_events, specs, mpb, capture_window)
         segment_order = mpb.segment_order_for_specs(specs)
@@ -3164,7 +2992,7 @@ def main(argv: list[str]) -> int:
         if args.write_port_traces is not None:
             write_port_traces(port_frames_by_id, args.write_port_traces)
     except Exception as exc:
-        print(f"FAIL: Wasmtime LLDB trace error: {exc}", file=sys.stderr)
+        print(f"FAIL: Wasmtime guest trace error: {exc}", file=sys.stderr)
         return 1
 
     failures = 0

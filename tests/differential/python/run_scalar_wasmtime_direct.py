@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Run scalar Wasmtime differential families without LLDB register sampling.
+"""Run scalar differential families through the Python Wasmtime embedding.
 
-The existing LLDB lane remains authoritative where its host architecture is
-supported.  This direct lane is for hosts such as x86_64 macOS: it invokes the
-same standalone modules and specs, reads only explicit harness result exports,
-and compares against the unchanged oracle-aligned expectations.
+This is an embedding fallback for environments without the Wasmtime CLI.  The
+portable CLI lane is authoritative because it shares a Wasmtime 44+ runtime
+with the Guest/Wasm-only debugger and avoids host-process JIT restrictions.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -20,7 +18,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FAMILIES = {
     "geometry_hit_test": "run_geometry_hit_test_wasmtime",
+    "psb_rl_decompress": "run_psb_rl_decompress_wasmtime",
     "bezier_curve": "run_bezier_curve_wasmtime",
+    "local_transform": "run_local_transform_wasmtime",
     "position_interp": "run_position_interp_wasmtime",
 }
 
@@ -92,8 +92,6 @@ def main() -> int:
         default=REPO_ROOT / "tests" / "differential" / "specs",
     )
     args = parser.parse_args()
-
-    os.environ["KRKR2_WASMTIME_DIRECT"] = "1"
 
     ok = True
     for family in args.family:
