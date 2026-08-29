@@ -40,6 +40,15 @@ class MotionRenderSemanticTests(unittest.TestCase):
             ],
         )
 
+    def test_libgame_render_runner_uses_startup_from_without_tjs_init(
+        self,
+    ) -> None:
+        source = (
+            DIFFERENTIAL_ROOT / "python" / "run_motion_stage_oracle.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("mpb.trigger_startup(engine, remote_game)", source)
+        self.assertNotIn("engine.tjs_init()", source)
+
     def test_android_agent_uses_139_render_entrypoints(self) -> None:
         source = (
             DIFFERENTIAL_ROOT

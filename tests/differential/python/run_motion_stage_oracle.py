@@ -1430,7 +1430,10 @@ def main(argv: list[str]) -> int:
                     render_case_frame_bases=render_case_frame_bases(
                         specs, mpb, capture_window),
                 )
-                engine.tjs_init()
+                # Kirikiroid2 1.3.9 is the libgame.so oracle.  Its harness
+                # deliberately rejects the old standalone-libkrkr2 TJS_INIT
+                # offsets; startupFrom below initializes the APK's real TJS
+                # engine and is the same proven path used by playback capture.
                 mpb.trigger_startup(engine, remote_game)
                 events = wait_for_stage_trace(
                     tracer,
