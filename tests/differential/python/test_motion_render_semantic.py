@@ -49,6 +49,27 @@ class MotionRenderSemanticTests(unittest.TestCase):
         self.assertIn("mpb.trigger_startup(engine, remote_game)", source)
         self.assertNotIn("engine.tjs_init()", source)
 
+    def test_android_render_events_receive_canonical_source(self) -> None:
+        split = stage_oracle.split_render_events_by_stage_and_case(
+            [{
+                "schema": "motion-render-stage-oracle-v1-event",
+                "stage": "draw_dispatch",
+                "kind": "draw_enter",
+                "frameId": 0,
+                "seq": 1,
+            }],
+            [{
+                "caseId": "case",
+                "firstFrameId": 0,
+                "lastFrameId": 0,
+                "firstSeq": 0,
+                "lastSeq": 2,
+            }],
+        )
+        event = split["draw_dispatch"]["case"][0]
+        self.assertEqual(event["caseId"], "case")
+        self.assertEqual(event["source"], stage_oracle.RENDER_SOURCE)
+
     def test_android_agent_uses_139_render_entrypoints(self) -> None:
         source = (
             DIFFERENTIAL_ROOT

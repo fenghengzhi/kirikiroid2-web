@@ -493,6 +493,7 @@ def split_render_events_by_stage_and_case(
         case_id = str(case_segments[case_index]["caseId"])
         cloned = dict(ev)
         cloned["caseId"] = case_id
+        cloned["source"] = RENDER_SOURCE
         out.setdefault(stage, {}).setdefault(case_id, []).append(cloned)
     return out
 
