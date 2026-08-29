@@ -1,13 +1,12 @@
 # motionplayer render-stage / draw-dispatch / render-step trace差分（MP-V05，2026-08-29终态更新）
 
-> **2026-08-29 CI 实跑纠正：** run `33206772913` 证明提交
-> `6a366f37` 接入的 active Android `--stage render_path` 不可执行。当前
-> Kirikiroid2 1.3.9 agent 自 `c85306fc` 起明确只支持 `trace_flatten`；文件中
-> 保留的 render-stage offsets 属于退役的 1.4.4 lane，尚未对 1.3.9 独立
-> rebase。失败 job `98969852903` 在请求七个未 rebase stage 时按设计 fail
-> closed。active workflow 已恢复为 Android `trace_flatten` 录制和基础 playback
-> compare；Wasmtime render-stage 只保留为单边诊断 artifact。下文第 3 节原先
-> 所称的 active paired render pipeline 已被这次实跑证伪，以本纠正为准。
+> **2026-08-29 后续状态：** run `33206772913` 仍然是提交 `6a366f37`
+> 误用旧 1.4.4 offsets 的有效失败证据，但它不再代表当前工作树能力。当前已从
+> 四份 1.3.9 参考二进制独立恢复 draw/prepare/commands/execute 边界，并把
+> active contract 收敛为四个跨平台语义 stage；Layer/Bitmap image/raw 路径仍
+> fail closed。当前实现、地址表与验证结果以
+> `analysis/motionplayer_render_path_semantic_oracle_1_3_9_2026-08-29.md`
+> 为准。本文其余内容保留为旧像素型 pipeline 的历史审计。
 
 ## 1. 结论与状态
 
@@ -204,8 +203,8 @@ motionplayer目录82个文件变化，故只能作历史诊断。
 - task status：`EVIDENCE_BLOCKED`（终态，但不是 PASS）；
 - slices：`MP-V05-WASMTIME-RENDER-STAGE-15HZ`、`MP-V05-GITHUB-RUN540-ANDROID-RENDER-15HZ`、
   `MP-V05-CURRENT-DRAW-DISPATCH-EVIDENCE-BLOCKED`；
-- active pipeline：Android 只启用 `trace_flatten`；paired render pipeline 为
-  `EVIDENCE_BLOCKED`，必须先把 render offsets 独立 rebase 到 1.3.9；
+- active pipeline：Android 启用 `trace_flatten` 和四阶段 semantic
+  `render_path`；旧像素型 render-step pipeline 仍为 `EVIDENCE_BLOCKED`；
 - current Wasmtime artifact：PASS_ARTIFACT_AUDIT，88 frames / 1472 events / 176 PNG；
 - GitHub 15 Hz Android artifact：run 540 存在，contemporaneous render-step compare PASS；
 - current-worktree paired draw-dispatch runs：0；

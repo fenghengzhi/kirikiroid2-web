@@ -126,9 +126,20 @@ runtimes share the same physical object layout.
   side uses a fallback hook or a derived field, the stage is diagnostic
   only until the timing and projection are made explicit.
 
-Only `trace_flatten` is enabled for the 1.3.9 Android oracle. The older staged
-and render diagnostics still require independent offset rebasing and fail
-closed when requested.
+The Kirikiroid2 1.3.9 Android oracle enables `trace_flatten` plus the rebased
+semantic `render_path` contract. `render_path` expands to exactly four
+platform-independent stages: `draw_dispatch`, `render_prepare`,
+`render_commands`, and `render_execute`. The Frida agent samples native
+function boundaries, but it exports route/step/event semantics rather than
+registers, pointers, native instructions, or pixels; the Wasmtime side exports
+the same event model from Guest C++ scopes. The paired comparator therefore
+does not depend on the host CPU architecture.
+
+Layer/Bitmap layout-dependent image checkpoints, raw probes, visual readback,
+and `layer_save` are deliberately outside the 1.3.9 semantic contract. The
+Android runner fails closed if one of those options is requested. The detailed
+four-binary address evidence and event mapping are recorded in
+`analysis/motionplayer_render_path_semantic_oracle_1_3_9_2026-08-29.md`.
 
 `trace_flatten` uses the `trace_flatten-semantic-v1` projection sampled at
 `progressCompat.phase3-end.pre-cleanup`. Its comparable layer fields are:

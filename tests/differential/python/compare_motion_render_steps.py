@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare motion_playback render flow and raw image checkpoints."""
+"""Compare motion_playback render semantics and optional image checkpoints."""
 
 from __future__ import annotations
 
@@ -59,7 +59,14 @@ EXPECTED_STAGE_KIND_SEQUENCES = {
         "apply_projection_enter",
         "apply_projection_leave",
     ),
+    "render_execute": (
+        "execute_enter",
+        "execute_leave",
+    ),
 }
+COMPARABLE_EXECUTE_KINDS = frozenset(
+    EXPECTED_STAGE_KIND_SEQUENCES["render_execute"])
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -76,10 +83,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Case id to compare; defaults to all oracle cases")
     p.add_argument("--allow-render-flow-diagnostics", action="store_true",
                    help="Report build-flow semantic mismatches without "
-                        "failing the PNG/hash compare")
+                        "failing the stage comparison")
     p.add_argument("--ignore-layer-save", action="store_true",
                    help="Do not compare fixture saveLayerImage initial/"
                         "post_draw PNGs; use direct render checkpoint PNGs")
+    p.add_argument(
+        "--semantic-only", action="store_true",
+        help="Compare platform-independent prepare/command/execute event "
+             "shape and build flow without loading native image artifacts")
     return p.parse_args(argv)
 
 
@@ -309,6 +320,15 @@ def execute_leaves(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [event for event in events if event.get("kind") == "execute_leave"]
 
 
+def comparable_execute_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        event for event in events
+        if event.get("kind") in COMPARABLE_EXECUTE_KINDS
+    ]
+
+
 def layer_save_images(events: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
     out: dict[tuple[str, int], dict[str, Any]] = {}
     for event in events:
@@ -469,6 +489,7 @@ def compare_case(
     expected_frames: int,
     allow_render_flow_diagnostics: bool = False,
     ignore_layer_save: bool = False,
+    semantic_only: bool = False,
 ) -> bool:
     oracle_prepare_events = load_events(
         oracle_root / "events" / "render_prepare" /
@@ -484,22 +505,29 @@ def compare_case(
         f"{case_id}.wasmtime.json")
     oracle_build_events = build_flow_leaves(oracle_command_events)
     wasmtime_build_events = build_flow_leaves(wasmtime_command_events)
-    oracle_execute = execute_leaves(load_events(
+    oracle_execute_events = comparable_execute_events(load_events(
         oracle_root / "events" / "render_execute" /
         f"{case_id}.oracle.json"))
-    wasmtime_execute = execute_leaves(load_events(
+    wasmtime_execute_events = comparable_execute_events(load_events(
         wasmtime_root / "events" / "render_execute" /
         f"{case_id}.wasmtime.json"))
-    oracle_layer_save = layer_save_images(load_events(
-        oracle_root / "events" / "layer_save" /
-        f"{case_id}.oracle.json"))
-    wasmtime_layer_save = layer_save_images(load_events(
-        wasmtime_root / "events" / "layer_save" /
-        f"{case_id}.wasmtime.json"))
+    oracle_execute = execute_leaves(oracle_execute_events)
+    wasmtime_execute = execute_leaves(wasmtime_execute_events)
+    if semantic_only:
+        oracle_layer_save: dict[tuple[str, int], dict[str, Any]] = {}
+        wasmtime_layer_save: dict[tuple[str, int], dict[str, Any]] = {}
+    else:
+        oracle_layer_save = layer_save_images(load_events(
+            oracle_root / "events" / "layer_save" /
+            f"{case_id}.oracle.json"))
+        wasmtime_layer_save = layer_save_images(load_events(
+            wasmtime_root / "events" / "layer_save" /
+            f"{case_id}.wasmtime.json"))
 
     first_mismatch: tuple[int, str, str, Any, Any] | None = None
     render_prepare_shape_mismatches = 0
     render_commands_shape_mismatches = 0
+    render_execute_shape_mismatches = 0
     build_flow_mismatches = 0
     execute_pre_mismatches = 0
     execute_post_mismatches = 0
@@ -516,7 +544,7 @@ def compare_case(
         "updateLayerAfterDrawPostImage",
         "postDrawImage",
     )
-    post_draw_checkpoint_enabled = any(
+    post_draw_checkpoint_enabled = not semantic_only and (any(
         decoded_image_hash(oracle_root, event.get("postDrawImage"), oracle_cache)
         is not None
         for event in oracle_execute
@@ -525,8 +553,8 @@ def compare_case(
                            wasmtime_cache)
         is not None
         for event in wasmtime_execute
-    )
-    execute_checkpoint_enabled = any(
+    ))
+    execute_checkpoint_enabled = not semantic_only and (any(
         decoded_image_hash(oracle_root, event.get(field), oracle_cache)
         is not None
         for event in oracle_execute
@@ -536,8 +564,8 @@ def compare_case(
         is not None
         for event in wasmtime_execute
         for field in checkpoint_fields
-    )
-    if ignore_layer_save and not post_draw_checkpoint_enabled:
+    ))
+    if not semantic_only and ignore_layer_save and not post_draw_checkpoint_enabled:
         first_mismatch = (
             0,
             "render_execute",
@@ -549,14 +577,17 @@ def compare_case(
     for stage, oracle_events, wasmtime_events in (
         ("render_prepare", oracle_prepare_events, wasmtime_prepare_events),
         ("render_commands", oracle_command_events, wasmtime_command_events),
+        ("render_execute", oracle_execute_events, wasmtime_execute_events),
     ):
         mismatch_count, stage_first = _compare_stage_kind_sequences(
             oracle_events, wasmtime_events,
             EXPECTED_STAGE_KIND_SEQUENCES.get(stage))
         if stage == "render_prepare":
             render_prepare_shape_mismatches = mismatch_count
-        else:
+        elif stage == "render_commands":
             render_commands_shape_mismatches = mismatch_count
+        else:
+            render_execute_shape_mismatches = mismatch_count
         if stage_first is not None and first_mismatch is None:
             index, field, oracle_value, wasmtime_value = stage_first
             first_mismatch = (
@@ -616,7 +647,8 @@ def compare_case(
                 update_layer_after_draw_pre_mismatches += 1
                 update_layer_after_draw_post_mismatches += 1
                 post_draw_mismatches += 1
-            if execute_checkpoint_enabled and first_mismatch is None:
+            if (semantic_only or execute_checkpoint_enabled) and \
+                    first_mismatch is None:
                 first_mismatch = (
                     index,
                     "render_execute",
@@ -719,7 +751,7 @@ def compare_case(
                         wasmtime_update_post,
                     )
 
-    if not ignore_layer_save:
+    if not semantic_only and not ignore_layer_save:
         layer_save_mismatches, layer_save_first = _compare_layer_save_images(
             oracle_root,
             wasmtime_root,
@@ -759,12 +791,15 @@ def compare_case(
             f"wasmtime={_value_summary(wasmtime_value)}")
 
     layer_save_summary = (
-        "ignored" if ignore_layer_save else str(layer_save_mismatches)
+        "semantic-only" if semantic_only
+        else "ignored" if ignore_layer_save
+        else str(layer_save_mismatches)
     )
     print(
         f"{case_id}: summary "
         f"render_prepare_shape_mismatch={render_prepare_shape_mismatches} "
         f"render_commands_shape_mismatch={render_commands_shape_mismatches} "
+        f"render_execute_shape_mismatch={render_execute_shape_mismatches} "
         f"build_flow_mismatch={build_flow_mismatches} "
         f"execute_pre_mismatch={execute_pre_mismatches} "
         f"execute_post_mismatch={execute_post_mismatches} "
@@ -827,6 +862,7 @@ def main(argv: list[str]) -> int:
             allow_render_flow_diagnostics=(
                 args.allow_render_flow_diagnostics),
             ignore_layer_save=args.ignore_layer_save,
+            semantic_only=args.semantic_only,
         ):
             all_ok = False
     return 0 if all_ok else 1

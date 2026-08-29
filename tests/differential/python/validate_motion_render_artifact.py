@@ -19,7 +19,6 @@ DEFAULT_REQUIRED_STAGES = (
     "render_prepare",
     "render_commands",
     "render_execute",
-    "layer_save",
 )
 
 
@@ -30,7 +29,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--require-stage", action="append", default=[],
         help="Stage that must contain events for every case; repeatable. "
-             "Defaults to draw/prepare/commands/execute/layer_save.")
+             "Defaults to draw/prepare/commands/execute.")
     return parser.parse_args(argv)
 
 
@@ -54,6 +53,10 @@ def validate_images(
     require(isinstance(images, dict), "manifest.images is not an object")
     cases = images.get("cases")
     require(isinstance(cases, list) and cases, "manifest.images.cases is empty")
+    semantic_only = images.get("semanticOnly") is True
+    if semantic_only:
+        require(images.get("captureSurfaces") == [],
+                "semantic-only artifact declares image capture surfaces")
 
     entries: dict[tuple[str, str, int], dict[str, Any]] = {}
     referenced_paths: set[Path] = set()
@@ -66,6 +69,9 @@ def validate_images(
         require(isinstance(frames, int) and frames >= 0,
                 f"{case_id}: invalid frames")
         require(isinstance(phases, dict), f"{case_id}: phases is not an object")
+        if semantic_only:
+            require(not phases,
+                    f"{case_id}: semantic-only artifact contains image phases")
         expected_frames = list(range(frames))
         for field in ("capturedLocalFrames", "requestedLocalFrames"):
             value = case.get(field)
@@ -117,6 +123,8 @@ def validate_images(
     expected_count = manifest.get("summary", {}).get("imageCount")
     require(expected_count == len(entries),
             f"manifest imageCount={expected_count!r}, decoded={len(entries)}")
+    if semantic_only:
+        require(not entries, "semantic-only artifact contains image entries")
     return entries, len(cases)
 
 
@@ -200,7 +208,9 @@ def validate_events(
         for stage in required_stages:
             require((stage, case_id) in seen_stage_cases,
                     f"missing required stage file: {case_id}/{stage}")
-    expected_count = manifest.get("summary", {}).get("renderEventCount")
+    manifest_summary = manifest.get("summary", {})
+    expected_count = manifest_summary.get(
+        "renderEventCount", manifest_summary.get("eventCount"))
     require(expected_count == total_events,
             f"manifest renderEventCount={expected_count!r}, actual={total_events}")
     return total_events

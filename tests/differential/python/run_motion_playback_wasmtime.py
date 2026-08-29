@@ -69,10 +69,6 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_prepare",
     "render_commands",
     "render_execute",
-    "private_motion_gll",
-    "layer_save",
-    "layer_raw_probe",
-    "layer_visual_readback",
 )
 
 
@@ -117,8 +113,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "tests/differential/artifacts/"
                         "motion_playback_framebuffer_wasmtime/<run-id>")
     p.add_argument("--record-render-stages", action="store_true",
-                   help="Save Wasmtime render_path stage artifacts: "
-                        "initial/post draw PNGs plus render stage JSON")
+                   help="Save platform-independent Wasmtime render_path "
+                        "semantic stage JSON. PNGs are collected only when "
+                        "an explicit checkpoint/probe option is enabled")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --record-render-stages, save execute_pre/"
                         "execute_post images around executeLayerRenderCommands "
@@ -1566,6 +1563,58 @@ def _collect_wasmtime_render_stage_capture(
     return image_manifest
 
 
+def _write_wasmtime_semantic_image_manifest(
+    render_artifact_dir: Path,
+    specs: list[dict[str, Any]],
+    *,
+    capture_window: FrameCaptureWindow,
+) -> dict[str, Any]:
+    """Write the image-schema compatibility envelope for semantic-only runs."""
+    from oracle_runner.adapters import motion_playback as mpb
+
+    render_artifact_dir.mkdir(parents=True, exist_ok=True)
+    specs_by_id = {str(spec["id"]): spec for spec in specs}
+    segment_order = mpb.segment_order_for_specs(specs_by_id)
+    cases: list[dict[str, Any]] = []
+    for case in captured_case_ranges(
+        specs_by_id, segment_order, capture_window,
+    ):
+        spec_id = str(case["caseId"])
+        spec = case["spec"]
+        captured_local_frames = list(case["capturedLocalFrames"])
+        cases.append({
+            "caseId": spec_id,
+            "mtnPath": spec.get("mtn_path"),
+            "chara": spec.get("chara"),
+            "label": spec.get("label"),
+            "frames": int(spec["frames"]),
+            "fullFrameIdRange": case["fullFrameIdRange"],
+            "capturedFrameIdRange": case["capturedFrameIdRange"],
+            "capturedLocalFrames": captured_local_frames,
+            "requestedLocalFrames": captured_local_frames,
+            "phases": {},
+        })
+
+    image_manifest = {
+        "guestCaptureRoot": None,
+        "captureSurfaces": [],
+        "semanticOnly": True,
+        "cases": cases,
+        "summary": {
+            "caseCount": len(cases),
+            "imageCount": 0,
+        },
+        **capture_window.manifest_fields(),
+    }
+    image_manifest_path = render_artifact_dir / "image_manifest.json"
+    image_manifest_path.write_text(
+        json.dumps(image_manifest, indent=2, ensure_ascii=True,
+                   allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return image_manifest
+
+
 def _collect_wasmtime_framebuffer_capture(
     bootstrap: WasmtimeBootstrapInfo,
     framebuffer_dir: Path,
@@ -1705,13 +1754,26 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     capture_window=capture_window)
                 summary["framebufferManifest"] = str(manifest)
             if render_artifact_dir is not None:
-                image_manifest = _collect_wasmtime_render_stage_capture(
-                    bootstrap, render_artifact_dir, specs,
-                    record_render_step_checkpoints=(
-                        record_render_step_checkpoints),
-                    checkpoint_render_only=checkpoint_render_only,
-                    render_stage_events_path=render_stage_out,
-                    capture_window=capture_window)
+                semantic_only = not any((
+                    record_render_step_checkpoints,
+                    checkpoint_render_only,
+                    record_layer_raw_probes,
+                    record_save_layer_visual_readback_probes,
+                ))
+                if semantic_only:
+                    image_manifest = _write_wasmtime_semantic_image_manifest(
+                        render_artifact_dir,
+                        specs,
+                        capture_window=capture_window,
+                    )
+                else:
+                    image_manifest = _collect_wasmtime_render_stage_capture(
+                        bootstrap, render_artifact_dir, specs,
+                        record_render_step_checkpoints=(
+                            record_render_step_checkpoints),
+                        checkpoint_render_only=checkpoint_render_only,
+                        render_stage_events_path=render_stage_out,
+                        capture_window=capture_window)
                 summary["renderStageImageManifest"] = image_manifest["summary"]
             return summary
         except Exception as exc:

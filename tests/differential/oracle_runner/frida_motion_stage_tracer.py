@@ -37,9 +37,6 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_prepare",
     "render_commands",
     "render_execute",
-    "layer_save",
-    "layer_raw_probe",
-    "layer_visual_readback",
 )
 
 
@@ -114,6 +111,13 @@ class FridaMotionStageTracer:
         self._script.load()
         self._api = self._script.exports_sync
         self._info = dict(self._api.setup())
+        advertised = tuple(self._info.get("renderStages") or ())
+        if advertised != RENDER_STAGES:
+            self.detach()
+            raise RuntimeError(
+                "Frida motion agent render capability mismatch: "
+                f"expected {RENDER_STAGES!r}, advertised {advertised!r}"
+            )
 
     def detach(self) -> None:
         if self._script is not None:

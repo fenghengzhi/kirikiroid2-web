@@ -1519,17 +1519,17 @@ MotionTraceRenderDrawScope::MotionTraceRenderDrawScope(
     diagnostics += ptrHex(argVariant);
     diagnostics += ",\"targetObject\":";
     diagnostics += ptrHex(targetObject);
-    diagnostics += ",\"sampling\":\"guest-cpp-drawCompat-0x6D5FB8\"}";
+    diagnostics += ",\"sampling\":\"guest-cpp-Player-draw\"}";
     appendRenderEvent(player, "draw_dispatch", "draw_enter",
-                      "Player::drawCompat_0x6D5FB8.enter", payload,
+                      "Player::draw.enter", payload,
                       diagnostics);
     motionTraceLayerRawProbe(
-        player, targetObject, "Player_drawCompat_0x6D5FB8.enter");
+        player, targetObject, "Player_draw.enter");
 }
 
 MotionTraceRenderDrawScope::~MotionTraceRenderDrawScope() {
     motionTraceLayerRawProbe(
-        _player, _targetObject, "Player_drawCompat_0x6D5FB8.leave");
+        _player, _targetObject, "Player_draw.leave");
     const char *route = _route ? _route : (_steps.empty() ? "no_target" : "failed");
     std::string payload = "\"route\":";
     appendJsonString(payload, route);
@@ -1563,9 +1563,9 @@ MotionTraceRenderDrawScope::~MotionTraceRenderDrawScope() {
     diagnostics += ptrHex(_argVariant);
     diagnostics += ",\"targetObject\":";
     diagnostics += ptrHex(_targetObject);
-    diagnostics += ",\"sampling\":\"guest-cpp-drawCompat-0x6D5FB8\"}";
+    diagnostics += ",\"sampling\":\"guest-cpp-Player-draw\"}";
     appendRenderEvent(_player, "draw_dispatch", "draw_leave",
-                      "Player::drawCompat_0x6D5FB8.leave", payload,
+                      "Player::draw.leave", payload,
                       diagnostics);
     auto &state = traceState();
     state.inRender = false;
@@ -1605,8 +1605,8 @@ void MotionTraceRenderDrawScope::emitStep(
     diagnostics += ptrHex(_argVariant);
     diagnostics += ",\"targetObject\":";
     diagnostics += ptrHex(_targetObject);
-    diagnostics += ",\"sampling\":\"guest-cpp-drawCompat-0x6D5FB8\"}";
-    std::string samplePoint = "Player::drawCompat_0x6D5FB8.";
+    diagnostics += ",\"sampling\":\"guest-cpp-Player-draw\"}";
+    std::string samplePoint = "Player::draw.";
     samplePoint += drawStep;
     appendRenderEvent(_player, "draw_dispatch", "draw_step",
                       samplePoint.c_str(), payload, diagnostics);
@@ -1684,7 +1684,7 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
         player, renderLayerObject, "execute_pre",
         "Player::executeLayerRenderCommands.enter.after-target-resolve");
     motionTraceLayerRawProbe(
-        player, renderLayerObject, "sub_6C7440.enter");
+        player, renderLayerObject, "Player::renderExecute.enter");
     appendRenderEvent(player, "render_execute", "execute_enter",
                       "Player::executeLayerRenderCommands.enter",
                       payload, diagnostics);
@@ -1692,7 +1692,7 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
 
 MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     motionTraceLayerRawProbe(
-        _player, _renderLayerObject, "sub_6C7440.leave");
+        _player, _renderLayerObject, "Player::renderExecute.leave");
     std::string payload;
     appendRenderItemsPayload(payload, _mainList, nullptr);
     payload += ",\"renderLayerObject\":";
@@ -2161,7 +2161,7 @@ void motionTraceRenderImageCheckpointAtFrame(Player *player,
     if(phase && std::strcmp(phase, "execute_post") == 0 &&
        traceState().accurateSlaRenderDepth > 0) {
         // Accurate-SLA execute_post matches Android's next DrawDevice upload,
-        // not the target Layer main image at sub_6C9CA8 leave.
+        // not the target Layer main image at the accurate-SLA renderer leave.
         return;
     }
 

@@ -2,6 +2,9 @@
 // Split from PlayerRender.cpp for maintainability.
 //
 #include "PlayerRenderInternal.h"
+#if defined(KRKR2_WASMTIME_HEADLESS)
+#include "MotionTraceWeb.h"
+#endif
 #include "MotionRenderBackend.h"
 #include "Platform.h"
 #include "PrivateMotionGLL.h"
@@ -1139,8 +1142,35 @@ namespace motion {
         static const bool accurateSla = isAccurateSlaRenderEnabled();
 
         if(accurateSla) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            // Test-only Guest instrumentation matching the Android Frida
+            // envelope at Player::renderAccurateSeparateLayerAdaptor.  It is
+            // absent from every production build and does not alter the
+            // four-reference renderer's control flow or object ownership.
+            {
+                auto *const renderTraceTarget =
+                    tryResolveLayerDispatch(sla->getTargetLayer());
+                struct AccurateSlaRenderTraceScope {
+                    Player *player;
+                    iTJSDispatch2 *target;
+                    AccurateSlaRenderTraceScope(Player *p, iTJSDispatch2 *t)
+                        : player(p), target(t) {
+                        detail::motionTraceBeginAccurateSlaRender(player, target);
+                    }
+                    ~AccurateSlaRenderTraceScope() {
+                        detail::motionTraceEndAccurateSlaRender(player, target);
+                    }
+                } accurateSlaRenderTrace{this, renderTraceTarget};
+                detail::MotionTraceRenderExecuteScope renderTrace(
+                    this, renderTraceTarget, false, mainList);
+                renderAccurateSeparateLayerAdaptor_guess(
+                    sla, mainList, auxList);
+                renderTrace.setResult(true);
+            }
+#else
             renderAccurateSeparateLayerAdaptor_guess(
                 sla, mainList, auxList);
+#endif
             updateAccurateSLAAfterDraw(sla->getTargetLayer());
         } else {
             auto *renderLayer = ensurePrivateMotionGLL_guess(*sla);

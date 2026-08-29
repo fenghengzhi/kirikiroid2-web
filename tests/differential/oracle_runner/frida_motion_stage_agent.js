@@ -1,13 +1,15 @@
-// Frida agent for the motion_playback Android oracle.  differential.yml uses
-// only the trace_flatten projection; the older staged/render diagnostics stay
-// in this file for reference but are not exposed until their offsets are
-// independently rebased to Kirikiroid2 1.3.9.
+// Frida agent for the Kirikiroid2 1.3.9 motion_playback Android oracle.
+// The active render_path surface is intentionally semantic-only: it samples
+// Player draw routing, prepared items, render-command construction and the
+// Canvas/accurate-SLA execution envelopes.  Optional Layer/Bitmap raw-image
+// probes remain disabled until those engine-internal offsets are independently
+// rebased and runtime-validated for 1.3.9.
 
 'use strict';
 
-// Kirikiroid2 1.3.9 Android arm64-v8a (libgame.so) offsets.  The remaining
-// staged-diagnostic offsets below belong to the retired 1.4.4 lane and are
-// deliberately not installed by the trace_flatten-only CI path.
+// Kirikiroid2 1.3.9 Android arm64-v8a (libgame.so) offsets.  MotionPlayer and
+// Debug.message entries below were mapped independently in all four 1.3.9
+// reference binaries; only the Android arm64 addresses are installed here.
 const PLAYER_PROGRESS_COMPAT_OFF = 0x6CFE78;
 const PLAYER_INIT_NON_EMOTE_OFF  = 0x6B365C;
 const PLAYER_PARSE_PARAM_OFF     = 0x6B1718;
@@ -16,26 +18,29 @@ const PLAYER_BIND_PARAM_OFF      = 0x6C4668;
 const PLAYER_EVALUATE_TIMELINE_OFF = 0x699AE4;
 const PLAYER_SUB_MOTION_OFF      = 0x6BE0C0;
 const PLAYER_PHASE3_LAST_OFF     = 0x6BD908;
-const PLAYER_DRAW_COMPAT_OFF     = 0x6D5FB8;
-const PLAYER_DRAW_D3D_OFF        = 0x6D5B90;
-const PLAYER_DRAW_SLA_OFF        = 0x6D5658;
-const PLAYER_SLA_RESOLVE_TARGET_OFF = 0x6D5948;
+const PLAYER_DRAW_COMPAT_OFF     = 0x6D3398;
+const PLAYER_DRAW_D3D_OFF        = 0x6D2F70;
+const PLAYER_DRAW_SLA_OFF        = 0x6D2A38;
 const PLAYER_RENDER_PREPARE_OFF  = 0x6D2544;
 const PLAYER_APPLY_PREPARED_PROJECTION_OFF = 0x6D2644;
 const PLAYER_BUILD_ITEMS_OFF     = 0x6BF714;
 const PLAYER_BUILD_COMMANDS_OFF  = 0x6C2208;
-const PLAYER_ACCURATE_SLA_RENDER_OFF = 0x6C9CA8;
-const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
+const PLAYER_ACCURATE_SLA_RENDER_OFF = 0x6C7088;
+const PLAYER_RENDER_EXECUTE_OFF  = 0x6C4820;
+const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CBBB8;
+const DEBUG_MESSAGE_OFF          = 0xA178BC;
+
+// Retired 1.4.4-only deep diagnostic addresses.  They are deliberately kept
+// out of installHook; naming them here documents why the corresponding helper
+// code must not be enabled by the semantic render_path capability.
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF = 0x6C8D74;
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_AFTER_OFF = 0x6C8D78;
-const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
 const SOFTWARE_OPERATE_RECT_HELPER_OFF = 0x85F718;
 const LAYER_FILL_RECT_OFF        = 0x80EBAC;
 const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
 const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
 const DRAW_DEVICE_UPLOAD_LAYER_TO_TEXTURE_OFF = 0x850528;
 const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
-const DEBUG_MESSAGE_OFF          = 0xA18FBC;
 // TVPContinuousEventDispatch calls TVPGetRoughTickCount32 @0xA2A4DC at
 // 0x8DECD0, then consumes the returned tick at 0x8DECD4.
 // Restrict the differential clock override to that one call edge: timers,
@@ -104,10 +109,12 @@ const RENDER_STAGES = [
     STAGE_RENDER_PREPARE,
     STAGE_RENDER_COMMANDS,
     STAGE_RENDER_EXECUTE,
-    STAGE_LAYER_SAVE,
-    STAGE_LAYER_RAW_PROBE,
-    STAGE_LAYER_VISUAL_READBACK,
 ];
+
+const SUPPORTED_STAGES = new Set([
+    STAGE_TRACE_FLATTEN,
+    ...RENDER_STAGES,
+]);
 
 const NODE_OFF = {
     parameterEntry: 8,
@@ -2022,6 +2029,13 @@ function setDrawRoute(ctx, route) {
     if (ctx && route) ctx.route = route;
 }
 
+function isDirectAdaptorRoute(ctx) {
+    return !!ctx && (
+        ctx.route === 'd3d_adaptor' ||
+        ctx.route === 'separate_layer_adaptor'
+    );
+}
+
 function emitDrawStep(ctx, drawStep, outcome, route, extra) {
     if (!ctx) return;
     const stepIndex = ctx.steps.length;
@@ -2046,7 +2060,7 @@ function emitDrawStep(ctx, drawStep, outcome, route, extra) {
         targetObject: ptrHex(ctx.targetObject),
         targetObjThis: ptrHex(ctx.targetObjThis),
         targetError: ctx.targetVariantError,
-    }, 'Player_drawCompat_0x6D5FB8.' + drawStep);
+    }, 'Player_draw_0x6D3398.' + drawStep);
 }
 
 function ensureDrawTargetCheckMisses(ctx) {
@@ -2923,7 +2937,7 @@ function enterAccurateSlaRenderExecute(ctx) {
     activeRenderExecuteContexts.push(ctx.executeCtx);
     sendLayerRawProbe(
         ctx.player, ctx.target, null,
-        'sub_6C9CA8.enter',
+        'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.enter',
         {},
         {
             addr: PLAYER_ACCURATE_SLA_RENDER_OFF,
@@ -2942,7 +2956,8 @@ function enterAccurateSlaRenderExecute(ctx) {
         checkpointTargetForDrawContext(ctx.drawCtx, ctx.target);
     sendRenderImageCheckpoint(
         ctx.player, checkpointTarget, 'execute_pre',
-        'sub_6C9CA8.enter.after-target-resolve', undefined, ctx.target);
+        'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.enter.after-target-resolve',
+        undefined, ctx.target);
     emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
         accurateSla: true,
     }, {
@@ -2962,7 +2977,7 @@ function enterAccurateSlaRenderExecute(ctx) {
         slaAdaptor: ptrHex(ctx.slaAdaptor),
         mainListPtr: ptrHex(ctx.mainList),
         auxListPtr: ptrHex(ctx.auxList),
-    }, 'sub_6C9CA8.enter');
+    }, 'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.enter');
 }
 
 function leaveAccurateSlaRenderExecute(ctx, retval) {
@@ -2989,10 +3004,10 @@ function leaveAccurateSlaRenderExecute(ctx, retval) {
         drawTarget: ctx.drawCtx ? ptrHex(ctx.drawCtx.targetObject) : null,
         targetMatchesDrawArg: ctx.targetMatchesDrawArg,
         slaAdaptor: ptrHex(ctx.slaAdaptor),
-    }, 'sub_6C9CA8.leave');
+    }, 'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.leave');
     sendLayerRawProbe(
         ctx.player, leaveTarget, null,
-        'sub_6C9CA8.leave',
+        'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.leave',
         {},
         {
             addr: PLAYER_ACCURATE_SLA_RENDER_OFF,
@@ -3011,9 +3026,11 @@ function leaveAccurateSlaRenderExecute(ctx, retval) {
         checkpointTargetForDrawContext(ctx.drawCtx, leaveTarget);
     sendRenderImageCheckpoint(
         ctx.player, leaveCheckpointTarget, 'execute_post',
-        'sub_6C9CA8.leave.before-return', undefined, leaveTarget);
+        'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.leave.before-return',
+        undefined, leaveTarget);
     scheduleExecutePostUploadCheckpoint(
-        ctx.player, 'sub_6C9CA8.leave.after-next-drawdevice-upload');
+        ctx.player,
+        'Player_renderAccurateSeparateLayerAdaptor_0x6C7088.leave.after-next-drawdevice-upload');
     if (leaveCheckpointTarget) {
         lastRenderLayerObject = leaveCheckpointTarget;
         lastSlaRenderTargetObject = leaveCheckpointTarget;
@@ -3157,159 +3174,13 @@ function installHook() {
     });
     ensureBase();
 
-    // differential.yml currently records only trace_flatten.  Stop here so
-    // no retired 1.4.4 diagnostic/render offsets are attached to libgame.so.
+    // Every render_path capture also carries the normalized frame stream used
+    // to segment the two fixtures and assign stable frame ids to render events.
+    installTraceFlattenHooks();
     if (enabledStages.size === 1 && stageEnabled(STAGE_TRACE_FLATTEN)) {
-        installTraceFlattenHooks();
         hooked = true;
         return;
     }
-
-    attachAt(DEBUG_MESSAGE_OFF, 'Debug_message', {
-        onEnter(args) {
-            const numParams = readArgInt(args[1]);
-            const argArray = args[2];
-            if (numParams === null || numParams < 1 || !argArray ||
-                ptr(argArray).isNull()) {
-                return;
-            }
-            const markerArg = readVariantArg(argArray, 0);
-            if (!markerArg.variant) return;
-            const marker = readVariantText(markerArg.variant);
-            if (marker.value !== '__krkr2_motion_post_draw') return;
-            let markerFrameId = postDrawFrameIdFromMarkerArgs(
-                argArray, numParams);
-            if (!Number.isInteger(markerFrameId) ||
-                !captureFrameEnabled(markerFrameId)) {
-                const tracedFrameId = renderFrameIdFor(null);
-                if (Number.isInteger(tracedFrameId) &&
-                    captureFrameEnabled(tracedFrameId)) {
-                    markerFrameId = tracedFrameId;
-                }
-            }
-            if (!Number.isInteger(markerFrameId) ||
-                !captureFrameEnabled(markerFrameId)) {
-                return;
-            }
-            if (sendStoredCanvasUploadCheckpoint(
-                    markerFrameId, marker.type)) {
-                return;
-            }
-            const snapshot = readFinalFramebufferSnapshot(markerFrameId);
-            if (!snapshot.diagnostics) {
-                snapshot.diagnostics = {};
-            }
-            snapshot.diagnostics.markerType = marker.type;
-            snapshot.diagnostics.sampleTiming =
-                'inside startup.tjs post_draw Debug.message before eglSwapBuffers';
-            sendFinalFramebufferCheckpoint(
-                markerFrameId, snapshot,
-                'startup.tjs.post_draw.after_onPaint.current-glReadPixels');
-        },
-    });
-
-    attachAt(DRAW_DEVICE_UPLOAD_LAYER_TO_TEXTURE_OFF,
-        'DrawDevice_UploadLayerToTexture', {
-        onEnter(args) {
-            rememberFullCanvasUpload(args[0]);
-        },
-    });
-
-    attachAt(PLAYER_PROGRESS_COMPAT_OFF, 'Player_progressCompat', {
-        onEnter(args) {
-            inCompat = true;
-            samplesInFrame = [];
-            capturedObjthis = args[3];
-            currentFrameId = frameCounter;
-        },
-        onLeave(retval) {
-            const objthis = capturedObjthis;
-            const samples = samplesInFrame;
-            const completedFrameId = currentFrameId;
-            const completedTopPlayer =
-                samples.length > 0 ? samples[0].player : capturedObjthis;
-            inCompat = false;
-            capturedObjthis = null;
-            currentFrameId = null;
-            lastCompletedFrameId = completedFrameId;
-            lastCompletedTopPlayer = completedTopPlayer;
-            lastRenderLayerObject = null;
-            lastDrawTargetObject = null;
-            lastSlaRenderTargetObject = null;
-            lastSlaRenderNativeLayer = null;
-
-            if (!recording || !stageEnabled(STAGE_TRACE_FLATTEN)) {
-                samplesInFrame = [];
-                return;
-            }
-
-            const flatLayers = [];
-            const diagnosticPlayers = [];
-            let layoutTag = 'pre-cleanup';
-            let walkError = null;
-            for (const sample of samples) {
-                const layerStart = flatLayers.length;
-                for (const l of sample.layers) {
-                    const out = Object.assign({}, l);
-                    out.index = flatLayers.length;
-                    flatLayers.push(out);
-                }
-                diagnosticPlayers.push({
-                    ptr: sample.player.toString(),
-                    layout: sample.layout || null,
-                    layerStart: layerStart,
-                    layerCount: sample.layers.length,
-                    error: sample.error || null,
-                });
-                if (sample.layout && sample.layout !== 'deque') {
-                    layoutTag = sample.layout;
-                }
-                walkError = walkError || sample.error;
-            }
-            emit(STAGE_TRACE_FLATTEN, 'frame', {
-                projection: TRACE_FLATTEN_PROJECTION,
-                samplePoint: TRACE_FLATTEN_SAMPLE_POINT,
-                frameId: completedFrameId,
-                playerCount: samples.length,
-                layers: flatLayers,
-                diagnostics: {
-                    objthis: objthis ? objthis.toString() : null,
-                    topPlayer: samples.length > 0 ? samples[0].player.toString() : null,
-                    layout: layoutTag,
-                    players: diagnosticPlayers,
-                    error: walkError,
-                },
-            });
-            frameCounter++;
-            samplesInFrame = [];
-        },
-    });
-
-    attachAt(PLAYER_PHASE3_LAST_OFF, 'Player_phase3_last', {
-        onEnter(args) {
-            this.player = args[0];
-        },
-        onLeave() {
-            if (!inCompat || !recording) return;
-            const player = this.player;
-            try {
-                const w = walkNodes(player, { strict: true });
-                samplesInFrame.push({
-                    player: player,
-                    layout: w.layout,
-                    layers: w.layers,
-                    error: w.error || null,
-                });
-            } catch (e) {
-                samplesInFrame.push({
-                    player: player,
-                    layout: 'sample-error',
-                    layers: [],
-                    error: String(e),
-                });
-            }
-        },
-    });
 
     attachAt(PLAYER_DRAW_COMPAT_OFF, 'Player_drawCompat', {
         onEnter(args) {
@@ -3323,7 +3194,7 @@ function installHook() {
             }
             sendLayerRawProbe(
                 this.player, this.drawCtx.targetObject, null,
-                'Player_drawCompat_0x6D5FB8.enter',
+                'Player_draw_0x6D3398.enter',
                 { drawId: this.drawCtx.drawId },
                 {
                     addr: PLAYER_DRAW_COMPAT_OFF,
@@ -3347,14 +3218,14 @@ function installHook() {
                     arg2: ptrHex(args[2]),
                     arg3: ptrHex(args[3]),
                 },
-            }, 'Player_drawCompat_0x6D5FB8.enter');
+            }, 'Player_draw_0x6D3398.enter');
         },
         onLeave() {
             sendLayerRawProbe(
                 this.player,
                 this.drawCtx ? this.drawCtx.targetObject : null,
                 null,
-                'Player_drawCompat_0x6D5FB8.leave',
+                'Player_draw_0x6D3398.leave',
                 {
                     drawId: this.drawCtx ? this.drawCtx.drawId : null,
                 },
@@ -3385,7 +3256,7 @@ function installHook() {
                     ? ptrHex(this.drawCtx.targetObjThis) : null,
                 targetError: this.drawCtx
                     ? this.drawCtx.targetVariantError : null,
-            }, 'Player_drawCompat_0x6D5FB8.leave');
+            }, 'Player_draw_0x6D3398.leave');
             finishDrawContext(this.drawCtx);
             leaveRenderContext(this.ctx);
         },
@@ -3413,17 +3284,6 @@ function installHook() {
         },
     });
 
-    attachAt(PLAYER_SLA_RESOLVE_TARGET_OFF, 'Player_slaResolveTarget', {
-        onLeave(retval) {
-            try {
-                if (retval && !retval.isNull() && rangeHasReadableBytes(retval, 8)) {
-                    lastSlaRenderTargetObject = retval;
-                    lastSlaRenderNativeLayer = retval;
-                }
-            } catch (e) {}
-        },
-    });
-
     attachAt(PLAYER_RENDER_PREPARE_OFF, 'Player_renderPrepare', {
         onEnter(args) {
             this.player = args[0];
@@ -3442,7 +3302,7 @@ function installHook() {
         onLeave(retval) {
             const ctx = currentDrawContextFor(this.player);
             const ok = readArgInt(retval) !== 0;
-            if (ctx) {
+            if (ctx && !isDirectAdaptorRoute(ctx)) {
                 ensureDrawTargetCheckMisses(ctx);
                 ctx.prepareCalled = true;
                 ctx.prepareOk = ok;
@@ -3490,7 +3350,7 @@ function installHook() {
         },
         onLeave(retval) {
             const ctx = currentDrawContextFor(this.player);
-            if (ctx) {
+            if (ctx && !isDirectAdaptorRoute(ctx)) {
                 emitDrawStep(ctx, 'apply_prepared_projection', 'done');
             }
             emitRender(STAGE_RENDER_PREPARE, 'apply_projection_leave', {
@@ -3621,15 +3481,9 @@ function installHook() {
                 auxList: this.auxList,
             };
             activeRenderExecuteContexts.push(this.executeCtx);
-            try {
-                if (this.target) {
-                    const fnPtr = ptr(this.target).readPointer().add(0x10).readPointer();
-                    ensureDirectOperateAffineFuncCallHook(fnPtr);
-                }
-            } catch (e) {}
             sendLayerRawProbe(
                 this.player, this.target, null,
-                'sub_6C7440.enter',
+                'Player_renderToCanvas_0x6C4820.enter',
                 {},
                 {
                     addr: PLAYER_RENDER_EXECUTE_OFF,
@@ -3645,7 +3499,8 @@ function installHook() {
                 checkpointTargetForDrawContext(this.drawCtx, this.target);
             sendRenderImageCheckpoint(
                 this.player, checkpointTarget, 'execute_pre',
-                'sub_6C7440.enter.after-target-resolve', undefined,
+                'Player_renderToCanvas_0x6C4820.enter.after-target-resolve',
+                undefined,
                 this.target);
             emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
                 renderLists: readRenderLists(this.mainList, this.auxList),
@@ -3665,7 +3520,7 @@ function installHook() {
                 targetMatchesDrawArg: this.targetMatchesDrawArg,
                 mainListPtr: ptrHex(this.mainList),
                 auxListPtr: ptrHex(this.auxList),
-            }, 'sub_6C7440.enter');
+            }, 'Player_renderToCanvas_0x6C4820.enter');
         },
         onLeave(retval) {
             const leaveTarget = this.target ||
@@ -3695,10 +3550,10 @@ function installHook() {
                 drawTarget: this.drawCtx
                     ? ptrHex(this.drawCtx.targetObject) : null,
                 targetMatchesDrawArg: this.targetMatchesDrawArg,
-            }, 'sub_6C7440.leave');
+            }, 'Player_renderToCanvas_0x6C4820.leave');
             sendLayerRawProbe(
                 this.player, leaveTarget, null,
-                'sub_6C7440.leave',
+                'Player_renderToCanvas_0x6C4820.leave',
                 {},
                 {
                     addr: PLAYER_RENDER_EXECUTE_OFF,
@@ -3716,9 +3571,11 @@ function installHook() {
                 checkpointTargetForDrawContext(this.drawCtx, leaveTarget);
             sendRenderImageCheckpoint(
                 this.player, leaveCheckpointTarget, 'execute_post',
-                'sub_6C7440.leave.before-return', undefined, leaveTarget);
+                'Player_renderToCanvas_0x6C4820.leave.before-return',
+                undefined, leaveTarget);
             scheduleExecutePostUploadCheckpoint(
-                this.player, 'sub_6C7440.leave.after-next-drawdevice-upload');
+                this.player,
+                'Player_renderToCanvas_0x6C4820.leave.after-next-drawdevice-upload');
             if (leaveCheckpointTarget) {
                 lastRenderLayerObject = leaveCheckpointTarget;
             }
@@ -3726,65 +3583,6 @@ function installHook() {
                 const idx = activeRenderExecuteContexts.lastIndexOf(this.executeCtx);
                 if (idx >= 0) activeRenderExecuteContexts.splice(idx, 1);
             }
-        },
-    });
-
-    attachAt(SOFTWARE_OPERATE_RECT_HELPER_OFF, 'SoftwareOperateRectHelper', {
-        onEnter(args) {
-            const ctx = currentRenderExecuteContext();
-            if (!ctx || !recording || !stageEnabled(STAGE_RENDER_EXECUTE)) {
-                return;
-            }
-            this.ctx = ctx;
-            this.method = args[1];
-            this.targetTexture = args[2];
-            this.sourceTexture = args[5];
-            try {
-                const methodVtable = readPointer(this.method, 0);
-                this.methodDoRender = readPointer(methodVtable, 96);
-                this.methodWorker = readPointer(methodVtable, 104);
-            } catch (e) {
-                this.methodDoRender = NULL;
-                this.methodWorker = NULL;
-            }
-            this.destRect = unpackRectPair(args[3], args[4]);
-            this.sourceRect = unpackRectPair(args[6], args[7]);
-            this.targetBefore = readTexturePixelSamples(this.targetTexture, [
-                [725, 693], [725, 694], [725, 695], [725, 696],
-                [725, 697], [726, 700], [726, 701],
-            ]);
-            this.sourceSamples = readTexturePixelSamples(this.sourceTexture, [
-                [0, 43], [1, 43], [2, 43], [3, 43],
-                [0, 49], [1, 49], [2, 49], [3, 49],
-                [0, 50], [1, 50], [2, 50], [3, 50],
-            ]);
-        },
-        onLeave(retval) {
-            const ctx = this.ctx;
-            if (!ctx) return;
-            emitRender(STAGE_RENDER_EXECUTE, 'software_affine_rect_helper', {
-                source: 'android-frida-software-affine-probe',
-                destRect: this.destRect,
-                sourceRect: this.sourceRect,
-                method: ptrHex(this.method),
-                methodDoRender: ptrHex(this.methodDoRender),
-                methodWorker: ptrHex(this.methodWorker),
-                targetTexture: ptrHex(this.targetTexture),
-                sourceTexture: ptrHex(this.sourceTexture),
-                tvpAlphaBlendD: ptrHex(ensureBase().add(TVP_ALPHA_BLEND_D_SLOT_OFF).readPointer()),
-                tvpAlphaBlendDo: ptrHex(ensureBase().add(TVP_ALPHA_BLEND_DO_SLOT_OFF).readPointer()),
-                targetSamplesBefore: this.targetBefore || [],
-                targetSamplesAfter: readTexturePixelSamples(this.targetTexture, [
-                    [725, 693], [725, 694], [725, 695], [725, 696],
-                    [725, 697], [726, 700], [726, 701],
-                ]),
-                sourceTextureSamples: this.sourceSamples || [],
-                retval: ptrHex(retval),
-            }, {
-                addr: SOFTWARE_OPERATE_RECT_HELPER_OFF,
-                player: ptrHex(ctx.player),
-                target: ptrHex(ctx.target),
-            }, 'sub_85F718.rectHelper');
         },
     });
 
@@ -3798,10 +3596,10 @@ function installHook() {
                 this.player, PLAYER_OFF.internalAssignRequested);
             sendRenderImageCheckpoint(
                 this.player, this.target, 'updateLayerAfterDraw_pre',
-                'updateLayerAfterDraw_0x6CE7D8.enter.after-target-resolve');
+                'Player_updateLayerAfterDraw_0x6CBBB8.enter.after-target-resolve');
             sendLayerRawProbe(
                 this.player, this.target, null,
-                'updateLayerAfterDraw_0x6CE7D8.enter',
+                'Player_updateLayerAfterDraw_0x6CBBB8.enter',
                 {
                     internalAssignRequested:
                         this.internalAssignRequested === true,
@@ -3817,10 +3615,10 @@ function installHook() {
         onLeave() {
             sendRenderImageCheckpoint(
                 this.player, this.target, 'updateLayerAfterDraw_post',
-                'updateLayerAfterDraw_0x6CE7D8.leave.before-return');
+                'Player_updateLayerAfterDraw_0x6CBBB8.leave.before-return');
             sendLayerRawProbe(
                 this.player, this.target, null,
-                'updateLayerAfterDraw_0x6CE7D8.leave',
+                'Player_updateLayerAfterDraw_0x6CBBB8.leave',
                 {
                     internalAssignRequested:
                         this.internalAssignRequested === true,
@@ -3844,6 +3642,11 @@ function installHook() {
                 { internalAssignRequested: this.internalAssignRequested });
         },
     });
+
+    // The active 1.3.9 capability ends at semantic render envelopes.  Do not
+    // fall through to the retained 1.4.4 Layer/Bitmap/raw-probe hooks below.
+    hooked = true;
+    return;
 
     attachAt(LAYER_FILL_RECT_OFF, 'Layer_fillRect', {
         onEnter(args) {
@@ -4126,13 +3929,26 @@ rpc.exports = {
     setup() {
         return {
             base: ensureBase().toString(),
+            oracle: 'Kirikiroid2-1.3.9-Android-arm64-v8a',
+            capability: 'motion-render-semantic-v1',
             stages: [STAGE_TRACE_FLATTEN],
-            renderStages: [],
+            renderStages: RENDER_STAGES.slice(),
             nodeStride: NODE_STRIDE,
             parameterEntryStride: PARAM_ENTRY_STRIDE,
             offsets: {
                 progressCompat: PLAYER_PROGRESS_COMPAT_OFF,
                 phase3Last: PLAYER_PHASE3_LAST_OFF,
+                draw: PLAYER_DRAW_COMPAT_OFF,
+                directD3D: PLAYER_DRAW_D3D_OFF,
+                directSLA: PLAYER_DRAW_SLA_OFF,
+                prepareRenderItems: PLAYER_RENDER_PREPARE_OFF,
+                applyProjection: PLAYER_APPLY_PREPARED_PROJECTION_OFF,
+                appendPreparedItems: PLAYER_BUILD_ITEMS_OFF,
+                buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
+                accurateSLARender: PLAYER_ACCURATE_SLA_RENDER_OFF,
+                canvasRender: PLAYER_RENDER_EXECUTE_OFF,
+                updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
+                debugMessage: DEBUG_MESSAGE_OFF,
                 continuousEventTickReturn:
                     TVP_CONTINUOUS_EVENT_TICK_RETURN_OFF,
                 getRoughTickCount32: TVP_GET_ROUGH_TICK_COUNT32_OFF,
@@ -4142,11 +3958,20 @@ rpc.exports = {
     startRecord(stageNames, options) {
         const requested = Array.isArray(stageNames) ? stageNames : ALL_STAGES;
         const unsupported = requested.filter(
-            (stage) => stage !== STAGE_TRACE_FLATTEN);
+            (stage) => !SUPPORTED_STAGES.has(stage));
         if (unsupported.length > 0) {
             throw new Error(
-                'Kirikiroid2 1.3.9 oracle supports only trace_flatten; ' +
-                'unrebased stages requested: ' + unsupported.join(', ')
+                'Kirikiroid2 1.3.9 semantic oracle does not expose: ' +
+                unsupported.join(', ')
+            );
+        }
+        if (options && (
+                options.recordRenderStepCheckpoints ||
+                options.recordLayerRawProbes ||
+                options.recordSaveLayerVisualReadbackProbes)) {
+            throw new Error(
+                'Kirikiroid2 1.3.9 render_path is semantic-only; ' +
+                'Layer/Bitmap image and raw probes are not rebased'
             );
         }
         enabledStages = new Set(requested);

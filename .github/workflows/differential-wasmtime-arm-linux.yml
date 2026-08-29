@@ -211,9 +211,9 @@ jobs:
               --skip-golden-diff \
               --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
               --record-render-stages \
-              --record-render-step-checkpoints \
-              --checkpoint-render-only \
               --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime
+          python3 tests/differential/python/validate_motion_render_artifact.py \
+            --artifact-root tests/differential/artifacts/motion_playback_render_stages_wasmtime
 
       - name: Upload motion_playback Wasmtime traces
         uses: actions/upload-artifact@v4
@@ -222,7 +222,7 @@ jobs:
           path: tests/differential/artifacts/motion_playback_wasmtime_traces/*.port.json
           if-no-files-found: error
 
-      - name: Upload motion_playback Wasmtime render-stage hashes
+      - name: Upload motion_playback Wasmtime semantic render stages
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-wasmtime-arm-linux-render-stages
@@ -621,10 +621,10 @@ jobs:
           python3 tests/differential/python/run_motion_stage_oracle.py \
             --serial "${ANDROID_SERIAL}" \
             --stage render_path \
-            --record-render-step-checkpoints \
-            --checkpoint-render-only \
             --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_oracle \
             --playback-timeout 300
+          python3 tests/differential/python/validate_motion_render_artifact.py \
+            --artifact-root tests/differential/artifacts/motion_playback_render_stages_oracle
 
       - name: Upload motion_playback oracle record logs
         if: always()
@@ -641,7 +641,7 @@ jobs:
           path: tests/differential/traces/motion_playback/*.oracle.json
           if-no-files-found: error
 
-      - name: Upload motion_playback oracle render-stage hashes
+      - name: Upload motion_playback oracle semantic render stages
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-oracle-render-stages
@@ -674,19 +674,19 @@ jobs:
           name: motion_playback-oracle-traces
           path: /tmp/motion_playback/oracle
 
-      - name: Download motion_playback Wasmtime render-stage hashes
+      - name: Download motion_playback Wasmtime semantic render stages
         uses: actions/download-artifact@v4
         with:
           name: motion_playback-wasmtime-arm-linux-render-stages
           path: /tmp/motion_playback/render/wasmtime
 
-      - name: Download motion_playback oracle render-stage hashes
+      - name: Download motion_playback oracle semantic render stages
         uses: actions/download-artifact@v4
         with:
           name: motion_playback-oracle-render-stages
           path: /tmp/motion_playback/render/oracle
 
-      - name: Compare fresh motion_playback traces and PNG hashes
+      - name: Compare fresh motion_playback traces and semantic render path
         run: |
           set +e
           python3 tests/differential/python/compare_motion_playback_traces.py \
@@ -700,22 +700,30 @@ jobs:
             --oracle-root /tmp/motion_playback/render/oracle \
             --wasmtime-root /tmp/motion_playback/render/wasmtime \
             --allow-render-flow-diagnostics \
-            --ignore-layer-save \
+            --semantic-only \
             2>&1 | tee /tmp/motion_playback/motion_render_steps_compare.txt
           render_compare_rc=${PIPESTATUS[0]}
+
+          python3 tests/differential/python/compare_motion_draw_dispatch.py \
+            --oracle-root /tmp/motion_playback/render/oracle \
+            --wasmtime-root /tmp/motion_playback/render/wasmtime \
+            2>&1 | tee /tmp/motion_playback/motion_draw_dispatch_compare.txt
+          draw_dispatch_compare_rc=${PIPESTATUS[0]}
           set -e
 
           echo "--- motion_playback markdown report ---"
           cat /tmp/motion_playback/motion_playback_compare.md || true
-          echo "--- motion_playback render PNG/hash report ---"
+          echo "--- motion_playback semantic render report ---"
           cat /tmp/motion_playback/motion_render_steps_compare.txt || true
+          echo "--- motion_playback draw-dispatch report ---"
+          cat /tmp/motion_playback/motion_draw_dispatch_compare.txt || true
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_playback_compare.md ]; then
             cat /tmp/motion_playback/motion_playback_compare.md >> "${GITHUB_STEP_SUMMARY}"
           fi
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_render_steps_compare.txt ]; then
             {
               echo ""
-              echo "# motion_playback Render PNG/Hash Compare"
+              echo "# motion_playback Semantic Render Compare"
               echo ""
               echo '```text'
               cat /tmp/motion_playback/motion_render_steps_compare.txt
@@ -723,7 +731,20 @@ jobs:
             } >> "${GITHUB_STEP_SUMMARY}"
           fi
 
-          if [ "${trace_compare_rc}" -ne 0 ] || [ "${render_compare_rc}" -ne 0 ]; then
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_draw_dispatch_compare.txt ]; then
+            {
+              echo ""
+              echo "# motion_playback Draw-Dispatch Compare"
+              echo ""
+              echo '```text'
+              cat /tmp/motion_playback/motion_draw_dispatch_compare.txt
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+          if [ "${trace_compare_rc}" -ne 0 ] \
+              || [ "${render_compare_rc}" -ne 0 ] \
+              || [ "${draw_dispatch_compare_rc}" -ne 0 ]; then
             exit 1
           fi
 
@@ -735,4 +756,5 @@ jobs:
           path: |
             /tmp/motion_playback/motion_playback_compare.md
             /tmp/motion_playback/motion_render_steps_compare.txt
+            /tmp/motion_playback/motion_draw_dispatch_compare.txt
           if-no-files-found: warn

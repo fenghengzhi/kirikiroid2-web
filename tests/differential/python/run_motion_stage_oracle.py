@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record staged Android libkrkr2 motion_playback oracle diagnostics."""
+"""Record staged Android 1.3.9 libgame motion_playback oracle diagnostics."""
 
 from __future__ import annotations
 
@@ -39,18 +39,15 @@ from oracle_runner.motion_timing import (
 
 
 SCHEMA = "motion-stage-oracle-v1"
-SOURCE = "android-frida-libkrkr2"
+SOURCE = "android-frida-libgame-1.3.9"
 RENDER_SCHEMA = "motion-render-stage-oracle-v1"
-RENDER_SOURCE = "android-frida-libkrkr2-render"
+RENDER_SOURCE = "android-frida-libgame-1.3.9-render-semantic"
 RENDER_PATH_STAGE = "render_path"
 RENDER_STAGES: tuple[str, ...] = (
     "draw_dispatch",
     "render_prepare",
     "render_commands",
     "render_execute",
-    "layer_save",
-    "layer_raw_probe",
-    "layer_visual_readback",
 )
 RENDER_STEP_CHECKPOINT_PHASES: tuple[str, ...] = (
     "execute_pre",
@@ -94,7 +91,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "motion_playback_render_stages/<run-id>)")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --stage render_path, capture execute_pre/"
-                        "execute_post Layer images around sub_6C7440 and "
+                        "execute_post Layer images around the renderer and "
                         "updateLayerAfterDraw_pre/post images around "
                         "updateLayerAfterDraw, plus true post_draw after "
                         "startup.tjs onPaint")
@@ -1123,7 +1120,7 @@ def add_oracle_execute_checkpoint_images(
     return image_manifest
 
 
-def checkpoint_only_image_manifest(
+def semantic_only_image_manifest(
     *,
     artifact_dir: Path,
     specs: list[dict[str, Any]],
@@ -1160,6 +1157,7 @@ def checkpoint_only_image_manifest(
     return {
         "remoteCaptureRoot": remote_capture_root,
         "captureSurfaces": [],
+        "semanticOnly": True,
         "cases": cases,
         "summary": {
             "caseCount": len(cases),
@@ -1317,6 +1315,17 @@ def main(argv: list[str]) -> int:
     startup_xp3 = Path(args.startup_xp3)
     stages = selected_stages(args.stage)
     render_path = args.stage == RENDER_PATH_STAGE
+    if render_path and (
+        args.record_render_step_checkpoints or
+        args.record_layer_raw_probes or
+        args.record_save_layer_visual_readback_probes
+    ):
+        print(
+            "Kirikiroid2 1.3.9 render_path is semantic-only; "
+            "Layer/Bitmap image and raw probes are not rebased",
+            file=sys.stderr,
+        )
+        return 2
     if args.record_render_step_checkpoints and not render_path:
         print("--record-render-step-checkpoints requires --stage render_path",
               file=sys.stderr)
@@ -1463,20 +1472,13 @@ def main(argv: list[str]) -> int:
 
         if render_path:
             assert render_artifact_dir is not None
-            if args.checkpoint_render_only:
-                image_manifest = checkpoint_only_image_manifest(
-                    artifact_dir=render_artifact_dir,
-                    specs=specs,
-                    case_segments=case_segments,
-                    remote_capture_root=remote_render_root,
-                    capture_window=capture_window,
-                )
-            else:
-                assert remote_render_root is not None
-                image_manifest = mpb._collect_render_stage_capture(
-                    args.serial, specs_by_id, render_artifact_dir,
-                    remote_render_root, timeout=args.playback_timeout,
-                    capture_window=capture_window)
+            image_manifest = semantic_only_image_manifest(
+                artifact_dir=render_artifact_dir,
+                specs=specs,
+                case_segments=case_segments,
+                remote_capture_root=remote_render_root,
+                capture_window=capture_window,
+            )
             if args.record_render_step_checkpoints:
                 image_manifest = add_oracle_execute_checkpoint_images(
                     artifact_dir=render_artifact_dir,
@@ -1496,7 +1498,7 @@ def main(argv: list[str]) -> int:
                 capture_window=capture_window,
                 startup_xp3=startup_xp3,
             )
-            if args.checkpoint_render_only and remote_render_root is not None:
+            if remote_render_root is not None:
                 mpb._adb_shell_root(args.serial, ["rm", "-rf",
                                                   remote_render_root])
             print(
