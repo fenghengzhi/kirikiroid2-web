@@ -118,7 +118,7 @@ semantic render-step comparator 会忽略两侧可能存在的 post-draw marker 
 - Emscripten full Guest 重编成功；
 - Frida JavaScript `node --check`；
 - 修改过的 Python 入口 `py_compile`；
-- semantic compare/artifact、timing、strict-oracle 单测共 16 项通过；
+- semantic compare/artifact、timing、strict-oracle 单测共 18 项通过；
 - 两个 full Guest case 写入同一 artifact root 后 validator 通过：88 帧、1384
   events、0 images；
 - `m2logo` 为 25 帧、439 events，`yuzulogo` 为 63 帧、945 events；
@@ -129,6 +129,42 @@ semantic render-step comparator 会忽略两侧可能存在的 post-draw marker 
   post-draw marker；
 - `git diff --check`。
 
-本机没有启动 Kirikiroid2 1.3.9 Android/Redroid + Frida 完整环境，因此当前工作树
-的 Android runtime artifact 和最终双侧 compare 仍需由 Actions 实跑确认。这里没有把
-四二进制静态地址证据或单侧 Wasmtime 成功表述成跨侧 PASS。
+本机没有启动 Kirikiroid2 1.3.9 Android/Redroid + Frida 完整环境；Android runtime
+和最终双侧结果使用下节的 GitHub Actions 实跑证据，不以本地静态检查代替。
+
+## GitHub Actions 验证
+
+commit `f9d8030626b93bf66b6fe32ffb2977b3c8be9289` 的
+[Differential Tests run 33240943350](https://github.com/fenghengzhi/kirikiroid2-web/actions/runs/33240943350)
+和 [Build Web run 33240943410](https://github.com/fenghengzhi/kirikiroid2-web/actions/runs/33240943410)
+均为 `success`。Differential 各 job：
+
+- `build-legacy-harness`：PASS；
+- `adb-frida`：PASS；Android semantic validator 为 2 cases / 88 frames /
+  1296 events / 0 images；
+- `wasmtime`：PASS；Guest semantic validator 为 2 cases / 88 frames /
+  1384 events / 0 images；
+- `motion-playback-compare`：PASS。
+
+双侧 compare 的实际结果：
+
+| compare | m2logo | yuzulogo |
+|---|---|---|
+| normalized playback | PASS，25 frames，无 mismatch | PASS，63 frames，无 mismatch |
+| prepare/commands/execute semantic shape | PASS，全部 mismatch count 为 0 | PASS，全部 mismatch count 为 0 |
+| draw-dispatch | PASS，25/25 `separate_layer_adaptor` | PASS，63/63 `separate_layer_adaptor` |
+
+同一 run 上传的核心 artifact：
+
+- Android semantic render：artifact `9711375592`，digest
+  `9e46ef8a356a4ec61462b2125c852aeebd4b485eb77e19319314ae86f262477a`；
+- Wasmtime semantic render：artifact `9711405645`，digest
+  `e1d5306ced2354a638d061d5e307427d28c1bdf66feceff0cbf6d2f8c9ca6048`；
+- compare report：artifact `9711408951`。
+
+在达到 PASS 前，CI 还暴露并修复了两个仅在真实 Android harness 路径可见的问题：
+
+1. commit `e44e656c` 移除了 libgame.so 明确拒绝的旧 standalone-libkrkr2
+   `TJS_INIT`，统一使用已验证的 `startupFrom` 启动链；
+2. commit `f9d80306` 在事件按 case 归一化时写入 canonical render `source`，使
+   event envelope 与 manifest source 一致并通过 fail-closed validator。
