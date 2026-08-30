@@ -3211,10 +3211,11 @@ void tTJSNI_WaveSoundBuffer::StartPlayAsync() {
         BufferPlaying = true;
     }
 
-    // Android StartPlay@0x972128 performs one FillL2 followed immediately by
-    // one FillBuffer, then repeats the refill-on-empty path for the remaining
-    // three buffers. Keep that UpdateFilterChain -> Decode -> FillBuffer order;
-    // only the edge between the operations becomes a Web continuation.
+    // Android arm64 StartPlay@0x971A28 performs one FillL2 followed
+    // immediately by one FillBuffer, then repeats the refill-on-empty path for
+    // the remaining three buffers. Keep that UpdateFilterChain -> Decode ->
+    // FillBuffer order; only the edge between operations becomes a Web
+    // continuation.
     ContinueStartPlayAsync(generation, 4, true);
 }
 
@@ -3233,6 +3234,7 @@ void tTJSNI_WaveSoundBuffer::ContinueStartPlayAsync(
                     if(generation == AsyncPlaybackGeneration) {
                         AsyncStartPending = false;
                         BufferPlaying = false;
+                        SetStatus(ssStop);
                     }
                 });
                 return;
@@ -3300,6 +3302,9 @@ void tTJSNI_WaveSoundBuffer::Play() {
 #ifdef __EMSCRIPTEN__
     if(AsyncOpenPending) {
         AsyncPlayPending = true;
+        // Native Play publishes ssPlay before returning to TJS. Preserve that
+        // observable contract while the browser file open continues.
+        SetStatus(ssPlay);
         return;
     }
 #endif
@@ -3314,6 +3319,9 @@ void tTJSNI_WaveSoundBuffer::Play() {
     StopPlay();
     TVPEnsurePrimaryBufferPlay();
     StartPlayAsync();
+    // Initial buffer filling is continuation-based on Web, but Play itself is
+    // synchronous from the script's point of view.
+    SetStatus(ssPlay);
 #else
 
     StopPlay();
@@ -3538,9 +3546,10 @@ void tTJSNI_WaveSoundBuffer::FinishOpenAsync(
         const bool play = AsyncPlayPending;
         AsyncOpenPending = false;
         AsyncPlayPending = false;
-        SetStatus(ssStop);
         if(play)
             Play();
+        else
+            SetStatus(ssStop);
     }
 
     context->Decoder.reset();
