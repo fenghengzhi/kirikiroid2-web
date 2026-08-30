@@ -90,7 +90,8 @@ elseif(WEB)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/vlfs.js)
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/vlfs.js
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/version_web_entrypoint.cmake)
     # WebAssembly.Memory 初始大小。ASan 的影子内存（覆盖整个地址空间的 1/8）+
     # redzone 把静态数据段顶得很高，wasm 模块声明的最小内存随之暴涨（非 ASan ~64MB，
     # ASan 实测需 ~843MB）。该值必须 >= wasm 声明的 min，否则 JS 创建的 Memory 页数
@@ -179,12 +180,23 @@ elseif(WEB)
     else()
         set(KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE "false")
     endif()
+    # One identity for every mutually dependent Web artifact. CI supplies the
+    # source SHA plus a unique run identity; local builds fall back to the
+    # configure timestamp.
+    # Restrict the value to URL/cache-key-safe characters because it is also
+    # embedded in query strings and the Service Worker cache name.
+    if(NOT DEFINED KRKR2_BUILD_VERSION OR KRKR2_BUILD_VERSION STREQUAL "")
+        string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
+    endif()
+    if(NOT KRKR2_BUILD_VERSION MATCHES "^[A-Za-z0-9._-]+$")
+        message(FATAL_ERROR
+            "KRKR2_BUILD_VERSION must contain only A-Z, a-z, 0-9, dot, underscore or hyphen")
+    endif()
+    message(STATUS "KrKr2 Web build version: ${KRKR2_BUILD_VERSION}")
     # PWA: only enabled for non-Debug builds
     if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-head.html KRKR2_PWA_HEAD)
         file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-sw.html KRKR2_PWA_SCRIPT)
-        # Generate build version timestamp for service worker cache busting
-        string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
         configure_file(
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
             ${CMAKE_CURRENT_BINARY_DIR}/sw.js
@@ -236,6 +248,19 @@ elseif(WEB)
             -DHTML=$<TARGET_FILE_DIR:${PROJECT_NAME}>/index.html
             -P ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sync_prealloc_memory.cmake
         COMMENT "Sync shell prealloc memory to emscripten-baked wasm min"
+        VERBATIM
+    )
+    # Emscripten expands {{{ SCRIPT }}} only at link time, so version its
+    # generated index.js tag afterwards. Module.locateFile in shell.html uses
+    # the same build id for index.wasm; this prevents an HTTP-cache mix of old
+    # glue and new Wasm before the Service Worker has taken control.
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DHTML=$<TARGET_FILE_DIR:${PROJECT_NAME}>/index.html
+            -DBUILD_VERSION=${KRKR2_BUILD_VERSION}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/version_web_entrypoint.cmake
+        COMMENT "Version Web entrypoint assets as one atomic build"
         VERBATIM
     )
 elseif(LINUX)

@@ -1,3 +1,23 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+# The HTML and engine entrypoints are build-versioned in index.html. Keep the
+# unversioned fallback URLs revalidated as well: a stale index.js combined with
+# a new index.wasm fails before main with a non-callable WebAssembly import.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+/index.js
+  Cache-Control: public, max-age=0, must-revalidate
+/index.wasm
+  Cache-Control: public, max-age=0, must-revalidate
+/index.worker.js
+  Cache-Control: public, max-age=0, must-revalidate
+/vlfs.js
+  Cache-Control: public, max-age=0, must-revalidate
+/assets.zip
+  Cache-Control: public, max-age=0, must-revalidate
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate

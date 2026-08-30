@@ -32,6 +32,7 @@ jobs:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       EMSDK: ${{ github.workspace }}/.emsdk
       BUILD_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+      BUILD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       KRKR2_WEB_SOURCE_MAP: ${{ (github.event_name == 'workflow_run' && startsWith(github.event.workflow_run.head_branch, 'dev/')) || (github.event_name != 'workflow_run' && startsWith(github.ref_name, 'dev/')) }}
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +120,7 @@ jobs:
             echo "CMake configure attempt $attempt/3" | tee -a /tmp/cmake-configure.log
             if cmake --preset "Web Release Config" \
               -DKRKR2_WEB_ENABLE_SOURCE_MAP="$KRKR2_WEB_SOURCE_MAP" \
+              -DKRKR2_BUILD_VERSION="$BUILD_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
               2>&1 | tee -a /tmp/cmake-configure.log; then
               configure_status=0
               break
@@ -143,6 +145,7 @@ jobs:
         run: |
           set -o pipefail
           cmake --build out/web/release 2>&1 | tee /tmp/cmake-build.log
+          node tests/web/web_release_asset_pair.test.mjs out/web/release
 
       - name: Upload logs on failure
         if: failure()

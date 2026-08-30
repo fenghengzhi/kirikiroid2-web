@@ -1,21 +1,22 @@
 /* KrKr2 Web — offline-capable service worker with precaching.
  *
- * BUILD_VERSION is replaced by CMake at configure time with a timestamp.
+ * BUILD_VERSION is replaced by CMake at configure time with a unique build id.
  * If not replaced (e.g. during development), falls back to a static string.
  * Changing this value triggers a new SW install and cache refresh. */
 var CACHE_VERSION = '@KRKR2_BUILD_VERSION@';
 if (CACHE_VERSION.charAt(0) === '@') CACHE_VERSION = 'dev-20260323';
 var CACHE_NAME = 'krkr2-v' + CACHE_VERSION;
+var ENGINE_ASSET_SUFFIX = '?v=' + encodeURIComponent(CACHE_VERSION);
 
 /* Assets to precache during install.
  * These are relative to the SW scope (same directory as sw.js). */
 var PRECACHE_ASSETS = [
     './',
     './index.html',
-    './index.js',
-    './index.wasm',
-    './assets.zip',
-    './vlfs.js',
+    './index.js' + ENGINE_ASSET_SUFFIX,
+    './index.wasm' + ENGINE_ASSET_SUFFIX,
+    './assets.zip' + ENGINE_ASSET_SUFFIX,
+    './vlfs.js' + ENGINE_ASSET_SUFFIX,
     './manifest.webmanifest',
     './pwa/icon-192.png',
     './pwa/icon-512.png'

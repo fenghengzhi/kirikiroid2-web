@@ -797,7 +797,7 @@
 
     <!-- JSZip 仅用于存档空间导入/导出；游戏加载已改为 VLFS 懒加载（vlfs.js） -->
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
-    <script src="vlfs.js?v=opfs-zip-cache-v2"></script>
+    <script src="vlfs.js?v=@KRKR2_BUILD_VERSION@"></script>
     <script>
         // Fix WebGL shader precision mismatch on mobile:
         // cocos2d-x injects uniforms (mat4/mat3) without explicit precision into both
@@ -882,7 +882,7 @@
         // --- 强制更新：注销全部 service worker + 清空 CacheStorage 后重载 ---
         // 兜底 SW 更新流程失效的场景（如旧版本 confirm 被关掉后卡住、缓存损坏）。
         // 只清应用缓存；存档在 IndexedDB / 存档空间里，不受影响。
-        // 顺序：先 unregister（重载导航即不被旧 SW 接管），后删 cache，再 reload；
+        // 顺序：先 unregister（重载导航即不被旧 SW 接管），后删 cache，再用唯一入口 URL 导航；
         // 重载后 pwa-sw.html 会重新注册 sw.js（浏览器对 sw.js 默认绕过 HTTP 缓存），
         // 新 SW 重新预缓存全部资源。
         var BUILD_VERSION = '@KRKR2_BUILD_VERSION@';
@@ -907,7 +907,13 @@
             steps.catch(function (e) {
                 console.warn('[PWA] force update cleanup failed:', e);
             }).then(function () {
-                window.location.reload();
+                // CacheStorage cleanup does not evict the browser's ordinary
+                // HTTP memory/disk cache. Navigate to a unique HTML URL so the
+                // new page can load its build-versioned JS/Wasm pair even when
+                // an older unversioned index.js still has a positive max-age.
+                var updateUrl = new URL(window.location.href);
+                updateUrl.searchParams.set('_krkr2_update', Date.now().toString(36));
+                window.location.replace(updateUrl.toString());
             });
         }
         document.getElementById('force-update-btn').addEventListener('click', function (e) {
@@ -1031,7 +1037,7 @@
         // （cocos CCFileUtils 经 krkr2_vlfs_read_all 桥访问），不驻留内存。
         var assetsLoaded = (async function() {
             await vlfsReady;
-            var resp = await fetch('assets.zip');
+            var resp = await fetch('assets.zip?v=@KRKR2_BUILD_VERSION@');
             if (!resp.ok) throw new Error('assets.zip HTTP ' + resp.status);
             var blob = await resp.blob();
             var r = await VLFS.registerZipBlob(blob, { stripPrefix: '' });
@@ -1077,6 +1083,13 @@
 
         var Module = {
             wasmMemory: preallocWasmMemory || undefined,
+            locateFile: function(path, prefix) {
+                if (path === 'index.wasm')
+                    return prefix + 'index.wasm?v=@KRKR2_BUILD_VERSION@';
+                if (path === 'index.worker.js')
+                    return prefix + 'index.worker.js?v=@KRKR2_BUILD_VERSION@';
+                return prefix + path;
+            },
             preRun: [function() {
                 FS.mkdir('/savedata');
                 applyRendererPreferenceFromUrl();
