@@ -3,6 +3,7 @@
 //
 #include "PlayerInternal.h"
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
+#include "MotionRenderBackend.h"
 #include "RenderManager.h"
 #include "SourceCache.h"
 #include "tjsUtils.h"
@@ -517,7 +518,9 @@ namespace motion {
                     static_cast<tjs_uint>(bin.size.w) << 2;
                 // Each record writes metadata, uploads its own packed sub-rect,
                 // and frees its BGRA buffer before advancing.
-                auto *texture = TVPGetRenderManager()->CreateTexture2D(
+                auto *renderManager =
+                    render_backend_guess::getPrivateOpenGLRenderManager_guess();
+                auto *texture = renderManager->CreateTexture2D(
                     nullptr, signedW32(atlasStride),
                     static_cast<unsigned int>(bin.size.w),
                     static_cast<unsigned int>(bin.size.h),

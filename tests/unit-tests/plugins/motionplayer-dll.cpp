@@ -5663,6 +5663,7 @@ namespace {
             int flags) override {
             (void)format;
             (void)flags;
+            ++rawTextureCreateCalls;
             return new HeadlessD3DTexture(
                 pixels, pitch, width, height);
         }
@@ -5699,6 +5700,7 @@ namespace {
             const tRenderTexQuadArray &) override {}
 
         iTVPRenderManager *delegate;
+        int rawTextureCreateCalls = 0;
     };
 
     struct CaptureCurrentTargetReplacementLayerDispatch final
@@ -12880,6 +12882,20 @@ TEST_CASE("KRKR D3D source path builds and uploads the production atlas") {
     ensureTVPGLInitialized();
     setEmoteSeed();
 
+    // The native atlas producer allocates through Motion's private OpenGL
+    // manager. Keep this headless test on the software-backed probe while
+    // asserting that the producer did not fall back to TVPGetRenderManager().
+    HeadlessD3DRenderManager privateRenderManager(TVPGetRenderManager());
+    motion::render_backend_guess::
+        setPrivateOpenGLRenderManagerForDifferentialTest_guess(
+            &privateRenderManager);
+    struct PrivateManagerOverrideRestorer {
+        ~PrivateManagerOverrideRestorer() {
+            motion::render_backend_guess::
+                setPrivateOpenGLRenderManagerForDifferentialTest_guess(nullptr);
+        }
+    } privateManagerOverrideRestorer;
+
     const auto motionPath = motionFixturePath();
     motion::ResourceManager manager;
     (void)manager.load(motionPath);
@@ -12940,6 +12956,7 @@ TEST_CASE("KRKR D3D source path builds and uploads the production atlas") {
     }
 
     REQUIRE(mixedAlpha != nullptr);
+    REQUIRE(privateRenderManager.rawTextureCreateCalls > 0);
     REQUIRE(motion::detail::narrow(mixedAlpha->path).rfind("src/", 0) == 0);
     REQUIRE(mixedAlpha->texture != nullptr);
 }

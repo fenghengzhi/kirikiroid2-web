@@ -11,8 +11,10 @@ texture page 创建、persistent KRKR map publication、逆序销毁、异常泄
 
 此前 `Player_findSourceForNode` 报告只闭合 spec-1 调用条件、成功/失败 handoff；D3D source
 getter 报告只闭合 render-time caller 与 cache 消费。它们不能替代本 helper 内部总账。
-本轮 fresh 完整证据表明本地 `PlayerResource.cpp`、`ResourceManager.h/.cpp` 和 bundled
-`imagepacker.cpp` 已逐项匹配，无需再修改运行语义。
+本轮 fresh 完整证据闭合了主体算法。2026-08-30 的运行时故障复核进一步确认，旧报告在
+`CreateTexture2D` 处遗漏了 receiver：四端都先取得 Motion 私有 OpenGL manager；本地当时
+错误地使用了默认 manager。修正证据见
+`motionplayer_krkr_atlas_private_gl_manager_four_binary_2026-08-30.md`。
 
 ## 2. 四端函数映射与完整指令
 
@@ -99,7 +101,8 @@ if cached miss:
     bins = []
     ignore ImagePacker.pack(rectPointers, TVPMaxTextureSize, bins) result
     for bin in bins:
-        texture = CreateTexture2D(null, bin.width*4, bin.width, bin.height)
+        texture = getPrivateOpenGLRenderManager().CreateTexture2D(
+            null, bin.width*4, bin.width, bin.height)
         for rect in bin.rects:
             iconNode = rect.record.iconNode
             entry = module.krkrSourceEntries[wide(rect.record.sourceKey)]
