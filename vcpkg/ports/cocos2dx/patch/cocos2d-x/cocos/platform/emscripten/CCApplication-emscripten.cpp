@@ -17,8 +17,9 @@ static bool s_mainLoopRunning = false;
 
 // VirtualLazyFS(JSPI): tick 必须是具名导出且列入 -sJSPI_EXPORTS，emscripten
 // glue 的 getWasmTableEntry 才会给该函数指针包 WebAssembly.promising，使
-// tick 内的文件读（EM_ASYNC_JS）可以挂起。挂起期间 RAF 仍会触发下一帧
-// （实测 100ms 挂起期间 12 次），引擎不可重入 —— 用守卫跳过这些帧。
+// tick 内的文件读（EM_ASYNC_JS）可以挂起。用户 JS library 的 Promise-aware
+// scheduler 会等原 tick 完成后再请求下一帧；这里仍保留守卫，防止 RAF 之外的
+// 非预期调用路径重入同一个引擎主循环。
 static bool s_inTick = false;
 
 extern "C" EMSCRIPTEN_KEEPALIVE void krkr2_main_loop_tick(void *arg) {

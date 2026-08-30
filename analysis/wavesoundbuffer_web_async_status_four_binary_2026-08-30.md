@@ -1,5 +1,9 @@
 # WaveSoundBuffer Web 异步播放状态四参考联合分析（2026-08-30）
 
+> 后续修订：本文记录的是 `320623a5` 的“提前发布状态”修复及其回归结果。当前实现已按
+> 方案二改为 Promise-aware 主循环，并恢复 TJS `open()` / `play()` 的同步返回语义；
+> 详见 `wavesoundbuffer_jspi_sync_semantics_four_binary_2026-08-30.md`。
+
 ## 现象与脚本调用链
 
 游戏 `KRkr高压_千恋万花.zip` 的年龄提示流程在 `main/custom.ks` 中依次执行三次：

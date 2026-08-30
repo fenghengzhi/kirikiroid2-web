@@ -13,9 +13,27 @@
 // CCApplication-emscripten.cpp），故此处无条件包 promising——与 Chrome 下
 // getWasmTableEntry 命中身份比较后的行为完全一致，对 V8 无行为变化。
 addToLibrary({
-  emscripten_set_main_loop_arg__deps: ['$setMainLoop'],
+  emscripten_set_main_loop_arg__deps: [
+    '$setMainLoop', '$MainLoop', '$handleException'
+  ],
   emscripten_set_main_loop_arg: (func, arg, fps, simulateInfiniteLoop) => {
     var wrappedTick = WebAssembly.promising(wasmTable.get(func));
+    // Emscripten's stock MainLoop.runIter intentionally discards the callback
+    // return value and schedules the next RAF immediately. A JSPI export,
+    // however, returns a Promise whenever its Wasm stack can suspend. Keep the
+    // Promise beside the scheduler so the next frame is requested only after
+    // the original tick has resumed and fully returned.
+    var promiseState = MainLoop.__krkr2PromiseAwareSchedulerState;
+    if (!promiseState) {
+      promiseState = {
+        pending: null,
+        waiting: null,
+        target: null,
+        wrapper: null,
+      };
+      MainLoop.__krkr2PromiseAwareSchedulerState = promiseState;
+      globalThis.__krkr2MainLoopPromiseState = promiseState;
+    }
     // Browser-only frame-pump policy. Keep RAF as the sole scheduler, but use
     // its display-synchronised timestamp to limit how often the WASM main loop
     // runs. The target defaults to 15 FPS and can be overridden with
@@ -46,13 +64,21 @@ addToLibrary({
       });
     }
 
+    var runTick = () => {
+      var promise = wrappedTick(arg);
+      if (promise && typeof promise.then === 'function') {
+        promiseState.pending = promise;
+      }
+      return promise;
+    };
+
     var iterFunc = () => {
       var timestamp = globalThis.__tvpRafT;
       if (!(timestamp >= 0)) timestamp = performance.now();
 
       if (lastRafTimestamp < 0) {
         lastRafTimestamp = timestamp;
-        return wrappedTick(arg);
+        return runTick();
       }
 
       var elapsed = timestamp - lastRafTimestamp;
@@ -60,7 +86,7 @@ addToLibrary({
       if (!(elapsed >= 0) || elapsed > 1000) {
         // Do not replay frames accumulated while the tab was suspended.
         accumulatedTime = 0;
-        return wrappedTick(arg);
+        return runTick();
       }
 
       accumulatedTime += elapsed;
@@ -71,9 +97,48 @@ addToLibrary({
       // additional whole frames accumulated during a stall.
       accumulatedTime = Math.max(0, accumulatedTime - frameInterval);
       accumulatedTime %= frameInterval;
-      return wrappedTick(arg);
+      return runTick();
     };
     setMainLoop(iterFunc, fps, simulateInfiniteLoop, arg);
+
+    if (!promiseState.wrapper) {
+      promiseState.target = MainLoop.scheduler;
+      promiseState.wrapper = () => {
+        var pending = promiseState.pending;
+        if (!pending) {
+          var target = promiseState.target;
+          if (target) target();
+          return;
+        }
+        if (promiseState.waiting === pending) return;
+
+        promiseState.waiting = pending;
+        Promise.resolve(pending).then(() => {
+          if (promiseState.pending === pending) promiseState.pending = null;
+          if (promiseState.waiting === pending) promiseState.waiting = null;
+          // Use the current scheduler target: set_main_loop_timing, pause and
+          // resume are allowed to replace it while the tick is suspended.
+          if (MainLoop.func && MainLoop.scheduler) MainLoop.scheduler();
+        }, (error) => {
+          if (promiseState.pending === pending) promiseState.pending = null;
+          if (promiseState.waiting === pending) promiseState.waiting = null;
+          handleException(error);
+        });
+      };
+
+      // Preserve Emscripten's public scheduler slot while interposing on all
+      // future assignments. In particular, emscripten_set_main_loop_timing()
+      // can switch the underlying RAF/timeout function without bypassing the
+      // Promise-aware gate.
+      Object.defineProperty(MainLoop, 'scheduler', {
+        configurable: true,
+        enumerable: true,
+        get: () => promiseState.target ? promiseState.wrapper : null,
+        set: (scheduler) => {
+          promiseState.target = scheduler;
+        },
+      });
+    }
   },
 
   // Browser-only policy boundary.  Android's OpenAL/Oboe device starts

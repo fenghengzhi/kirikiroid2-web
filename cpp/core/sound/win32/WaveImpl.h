@@ -179,9 +179,10 @@ private:
     std::atomic<tjs_uint64> AsyncPlaybackGeneration;
     std::atomic<tjs_uint64> AsyncFillGeneration;
     std::atomic<bool> AsyncOpenPending;
-    std::atomic<bool> AsyncPlayPending;
     std::atomic<bool> AsyncStartPending;
     std::atomic<bool> AsyncFillPending;
+    struct tAsyncPlayContext;
+    std::shared_ptr<tAsyncPlayContext> AsyncPlayContext;
 #endif
     tjs_uint8 *VisBuffer; // buffer for visualization
     tjs_int *L2BufferDecodedSamplesInUnit;
@@ -233,10 +234,15 @@ public:
 private:
     void StartPlay();
 #ifdef __EMSCRIPTEN__
-    void StartPlayAsync();
-    void ContinueStartPlayAsync(tjs_uint64 generation, int remaining,
-                                bool firstwrite);
-    void FinishStartPlayAsync(tjs_uint64 generation);
+    std::shared_ptr<tAsyncPlayContext> StartPlayAsync();
+    void ContinueStartPlayAsync(
+        const std::shared_ptr<tAsyncPlayContext> &context, int remaining,
+        bool firstwrite);
+    void FinishStartPlayAsync(
+        const std::shared_ptr<tAsyncPlayContext> &context);
+    void CompleteStartPlayAsync(
+        const std::shared_ptr<tAsyncPlayContext> &context, bool started,
+        std::exception_ptr error = nullptr);
 #endif
 
     void StopPlay();
