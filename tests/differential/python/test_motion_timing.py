@@ -153,6 +153,21 @@ class MotionTimingTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             provider.advance_simulation_time(float("nan"))
 
+    def test_wasmtime_links_but_rejects_web_wave_continuations(self) -> None:
+        provider = WasmtimeEnvProvider(REPO_ROOT)
+        for name in (
+            "TVPCompleteWaveSoundContinuation",
+            "__asyncjs__TVPWaitWaveSoundContinuation",
+        ):
+            with self.subTest(name=name):
+                callback = provider._callback_for(name, object())
+                self.assertIsNotNone(callback)
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Web WaveSound JSPI continuation reached",
+                ):
+                    callback(None, 1)
+
     def test_selects_unique_ordered_fixture_segments_around_noise(self) -> None:
         noise_before = self._segment(2, "noise-before")
         yuzu = self._segment(

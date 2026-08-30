@@ -391,6 +391,10 @@ class WasmtimeEnvProvider:
             return lambda caller, *args: self._emscripten_get(
                 name, func_type, caller, *args)
         exact = {
+            "TVPCompleteWaveSoundContinuation":
+                self._unsupported_web_wave_sound_continuation,
+            "__asyncjs__TVPWaitWaveSoundContinuation":
+                self._unsupported_web_wave_sound_continuation,
             "TVPWebAudioDecodeStartJS": self._web_audio_decode_start,
             "emscripten_asm_const_int": self._asm_const_int,
             "emscripten_asm_const_int_sync_on_main_thread":
@@ -463,6 +467,20 @@ class WasmtimeEnvProvider:
     def _return_minus_one(self, _func_type: Any, _caller: Any,
                           *args: Any) -> int:
         return -1
+
+    def _unsupported_web_wave_sound_continuation(
+            self, _func_type: Any, _caller: Any, *args: Any) -> None:
+        del args
+        # These imports suspend/resume a browser JSPI stack.  The motion
+        # differential fixture does not exercise WaveSoundBuffer open/play,
+        # but the shared core_sound_module still contributes the imports to
+        # the full guest.  Make them linkable without pretending Wasmtime can
+        # provide their asynchronous browser semantics; fail closed if the
+        # fixture ever reaches either edge.
+        raise RuntimeError(
+            "Web WaveSound JSPI continuation reached in Wasmtime headless "
+            "guest"
+        )
 
     def _asm_const_double(self, _func_type: Any, _caller: Any,
                           *args: Any) -> float:
