@@ -706,33 +706,33 @@ public:
         }
         // --- byte/DWORD 选项：按二进制顺序直接执行 TJS variant 真值转换 ---
         if(dict.checkVariant(TJS_W("vertical"), v))
-            _vertical = (bool)v;
+            _vertical = v.operator bool();
         if(dict.checkVariant(TJS_W("kinsoku_max"), v))
-            _kinsokuMax = (bool)v ? 1 : 0;
+            _kinsokuMax = v.operator bool() ? 1 : 0;
         if(dict.checkVariant(TJS_W("word_break"), v))
-            _wordBreak = (bool)v;
+            _wordBreak = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_color"), v))
-            _ignoreColor = (bool)v;
+            _ignoreColor = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_size"), v))
-            _ignoreSize = (bool)v;
+            _ignoreSize = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_delay"), v))
-            _ignoreDelay = (bool)v;
+            _ignoreDelay = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_over"), v))
-            _ignoreOverY = (bool)v;
+            _ignoreOverY = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_overy"), v))
-            _ignoreOverY = (bool)v;             // 后出现的同义键覆盖 ignore_over。
+            _ignoreOverY = v.operator bool();   // 后出现的同义键覆盖 ignore_over。
         if(dict.checkVariant(TJS_W("ignore_overx"), v))
-            _ignoreOverX = (bool)v;
+            _ignoreOverX = v.operator bool();
         if(dict.checkVariant(TJS_W("width_time_scale"), v))
-            _widthTimeScale = (bool)v;
+            _widthTimeScale = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_ruby"), v))
-            _ignoreRuby = (bool)v;
+            _ignoreRuby = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_type"), v))
-            _ignoreType = (bool)v;
+            _ignoreType = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_face"), v))
-            _ignoreFace = (bool)v;
+            _ignoreFace = v.operator bool();
         if(dict.checkVariant(TJS_W("ignore_style"), v))
-            _ignoreStyle = (bool)v;
+            _ignoreStyle = v.operator bool();
     }
     // setDefault：(dict) → default* 字段（face/字号族/颜色族/对齐/间距）。
     void setDefault(tTJSVariant dictVar) {
@@ -752,7 +752,7 @@ public:
             _defaultFaceIndex = resolveFaceIndex(faceName);
         }
         if(dict.checkVariant(TJS_W("bold"), v))
-            _defaultBold = (bool)v;
+            _defaultBold = v.operator bool();
         // fontsize 存在时，把缺省 big/small/ruby 字号回填为同一值。
         bool hasFontsize = dict.checkVariant(TJS_W("fontsize"), v);
         if(hasFontsize) {
@@ -777,13 +777,13 @@ public:
         if(dict.checkVariant(TJS_W("color"), v))
             _defaultChColor = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("shadow"), v))
-            _defaultShadow = (bool)v;
+            _defaultShadow = v.operator bool();
         if(dict.checkVariant(TJS_W("shadowcolor"), v))
             _defaultShadowColor = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("shadowdiff"), v))
             _defaultShadowDiff = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("edge"), v))
-            _defaultEdge = (bool)v;
+            _defaultEdge = v.operator bool();
         if(dict.checkVariant(TJS_W("edgecolor"), v))
             _defaultEdgeColor = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("linespacing"), v))
@@ -824,7 +824,7 @@ public:
             }
         }
         if(dict.checkVariant(TJS_W("bold"), v)) {
-            bool b = (bool)v;
+            bool b = v.operator bool();
             if(_curBold != b) {
                 _curBold = b;
                 changed = true;
@@ -847,13 +847,13 @@ public:
         if(dict.checkVariant(TJS_W("color"), v))
             _curChColor = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("shadow"), v))
-            _curShadow = (bool)v;
+            _curShadow = v.operator bool();
         if(dict.checkVariant(TJS_W("shadowcolor"), v))
             _curShadowColor = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("shadowdiff"), v))
             _curShadowDiff = (tjs_uint32)v.AsInteger();
         if(dict.checkVariant(TJS_W("edge"), v))
-            _curEdge = (bool)v;
+            _curEdge = v.operator bool();
         if(dict.checkVariant(TJS_W("edgecolor"), v))
             _curEdgeColor = (tjs_uint32)v.AsInteger();
         if(changed)
@@ -1066,7 +1066,7 @@ public:
             if(numparams < 5)
                 continueRender_guess = false;
             else
-                continueRender_guess = (bool)*param[4];
+                continueRender_guess = param[4]->operator bool();
         }
         bool ok;
         {
