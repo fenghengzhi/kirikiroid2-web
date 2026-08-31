@@ -40,23 +40,50 @@
       }
     }
     </script>
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-X4FRTWKHGR"></script>
+    <script>
+        // URL credentials are requested for unattended WebDAV startup. Capture
+        // them before analytics starts, then immediately remove them
+        // from the visible URL and subsequent referrers. The initial document
+        // request may still be recorded by the serving HTTP infrastructure.
+        (function() {
+            try {
+                var params = new URLSearchParams(window.location.search);
+                var username = params.get('webdavUsername');
+                var password = params.get('webdavPassword');
+                if (username === null && password === null) return;
+                window.__krkr2WebDavCredentials = {
+                    username: username || '', password: password || ''
+                };
+                params.delete('webdavUsername');
+                params.delete('webdavPassword');
+                var query = params.toString();
+                history.replaceState(history.state, '', window.location.pathname +
+                    (query ? '?' + query : '') + window.location.hash);
+            } catch (e) {}
+        })();
+    </script>
+    <!-- Google tag (gtag.js); disabled while WebDAV credentials are in memory. -->
     <script>
         window.dataLayer = window.dataLayer || [];
         function gtag(){dataLayer.push(arguments);}
-        gtag('js', new Date());
-
-        gtag('config', 'G-X4FRTWKHGR');
+        if (!window.__krkr2WebDavCredentials) {
+            var gtagScript = document.createElement('script');
+            gtagScript.async = true;
+            gtagScript.src =
+                'https://www.googletagmanager.com/gtag/js?id=G-X4FRTWKHGR';
+            document.head.appendChild(gtagScript);
+            gtag('js', new Date());
+            gtag('config', 'G-X4FRTWKHGR');
+        }
     </script>
 @KRKR2_PWA_HEAD@
     <script>
         (function() {
             try {
                 var params = new URLSearchParams(window.location.search);
-                // Auto-load mode (?xp3= / ?game=): hide the static landing content
+                // Auto-load mode (?xp3= / ?game= / ?webdavUrl=): hide the static landing content
                 // before first paint; the loading overlay takes over instead.
-                if (params.get('xp3') || params.get('game')) {
+                if (params.get('xp3') || params.get('game') || params.get('webdavUrl')) {
                     document.documentElement.classList.add('krkr2-autoload');
                 }
                 if (params.get('debugEarlyLogs') === '1') {
@@ -760,6 +787,7 @@
                 <ul>
                     <li>Load <code>.xp3</code> game archives via drag &amp; drop, file picker, or folder upload</li>
                     <li>Extract and run games packaged as <code>.zip</code> archives</li>
+                    <li>Load game directories from authenticated WebDAV storage</li>
                     <li>Direct directory access on Chromium browsers via the File System Access API</li>
                     <li>Persistent save data in named save spaces, backed by IndexedDB</li>
                     <li>Export and import save data as <code>.zip</code> for backup or device transfer</li>
@@ -774,6 +802,7 @@
                     <li>Choose or create a save space when prompted — your saves persist between sessions in the browser.</li>
                 </ol>
                 <p>You can also auto-load a game via URL parameters: <code>?xp3=&lt;url&gt;</code> loads a single archive, and <code>?game=&lt;url&gt;</code> loads a ZIP-packaged game directory. Use <code>loadMode=eager</code> (default) to download and prepare remote resources up front, or <code>loadMode=lazy</code> to fetch them on first access when the server supports HTTP Range.</p>
+                <p>For WebDAV, use <code>?webdavUrl=&lt;collection-url&gt;&amp;webdavUsername=&lt;user&gt;&amp;webdavPassword=&lt;password&gt;</code>. Add <code>webdavWrite=1</code> to upload save files back to WebDAV; writing is disabled by default. Credentials use HTTP Basic authentication and are removed from the address bar immediately, but the initial page request can still be recorded by HTTP infrastructure.</p>
 
                 <h3>Browser requirements</h3>
                 <p>A modern browser with WebAssembly and WebGL support is required. The site is served with <code>Cross-Origin-Opener-Policy</code> and <code>Cross-Origin-Embedder-Policy</code> headers to enable <code>SharedArrayBuffer</code> and multi-threading. Tested on recent Chrome, Edge, Firefox, and Safari (desktop and mobile).</p>
@@ -963,6 +992,45 @@
 
         // --- File System Access API state ---
         var hostDirHandle = null;
+        var webdavWriteChain = Promise.resolve();
+        let webdavContext = null;
+
+        function isSaveStoragePath(path) {
+            return path.startsWith('/savedata/') || path.startsWith('/save/') ||
+                path.indexOf('/savedata/') >= 0 || path.indexOf('/save/') >= 0;
+        }
+
+        function queueWebDavSaveWrite(path, data) {
+            var context = webdavContext;
+            if (!context || !context.writeEnabled) return;
+            var copy = data.slice();
+            webdavWriteChain = webdavWriteChain.then(function() {
+                return VLFS.writeWebDavFile(
+                    context.rootUrl, context.requestHeaders, path, copy,
+                    context.knownDirs);
+            }).then(function() {
+                console.log('[webdav] save uploaded: ' + path);
+            }).catch(function(err) {
+                // 吞掉本次错误以保持队列可继续处理后续存档写入；本地 overlay
+                // 与可选 IDB 副本仍然保留。
+                console.warn('[webdav] save upload FAILED: ' + path +
+                             ' - ' + err.message);
+            });
+        }
+
+        function queueWebDavSaveDelete(path) {
+            var context = webdavContext;
+            if (!context || !context.writeEnabled) return;
+            webdavWriteChain = webdavWriteChain.then(function() {
+                return VLFS.deleteWebDavFile(
+                    context.rootUrl, context.requestHeaders, path);
+            }).then(function() {
+                console.log('[webdav] save deleted: ' + path);
+            }).catch(function(err) {
+                console.warn('[webdav] save delete FAILED: ' + path +
+                             ' - ' + err.message);
+            });
+        }
 
         // --- VirtualLazyFS 初始化（创建独立 OPFS 会话、保留完整 ZIP 缓存）---
         // 必须在取得跨标签页单例锁后才接触 OPFS。冲突页让此 Promise 保持
@@ -977,15 +1045,17 @@
         // VLFS 写关闭钩子：统一持久化链路（取代旧 fsafs_flush_file）。
         // 1) MEMFS 小文件镜像 —— 兼容遗留 fopen 直读（GlobalConfigManager 等）；
         // 2) IndexedDB write-through —— 存档空间持久化；
-        // 3) FSA 主机目录回写 —— 用户经 showDirectoryPicker 加载时同步回硬盘。
+        // 3) 可选 WebDAV 存档回写；4) FSA 主机目录回写。
         VLFS.onWriteClose = function(path, data) {
             if (data.length <= 8 * 1024 * 1024 && typeof FS !== 'undefined') {
                 try { writeFileToFS(path, data); } catch (e) {}
             }
             // 游戏可能把存档写在游戏目录内的 savedata/ 下（如千恋万花
             // mainwindow.tjs checkSave），一并纳入 IDB 持久化
-            var isSavePath = path.startsWith('/savedata/') || path.startsWith('/save/') ||
-                path.indexOf('/savedata/') >= 0;
+            var isSavePath = isSaveStoragePath(path);
+            if (isSavePath && webdavContext && webdavContext.writeEnabled) {
+                queueWebDavSaveWrite(path, data);
+            }
             if (!Module._hostDirHandle) {
                 if (Module._saveSpaceId && isSavePath) idbSaveFile(path, data);
                 return;
@@ -1013,6 +1083,13 @@
                     console.warn('[vlfs] FSA write-back FAILED: ' + path + ' - ' + err.message);
                 }
             }, 0);
+        };
+
+        VLFS.onUnlink = function(path) {
+            if (isSaveStoragePath(path) && webdavContext &&
+                webdavContext.writeEnabled) {
+                queueWebDavSaveDelete(path);
+            }
         };
 
         // Keep native dialog behavior, but mirror alert/confirm content
@@ -1124,7 +1201,7 @@
             setStatus: function(text) {
                 if (!text) {
                     loadingOverlay.classList.add('hidden');
-                    if (!gameFileReady && !xp3Url && !gameZipUrl) {
+                    if (!gameFileReady && !xp3Url && !gameZipUrl && !webdavUrl) {
                         showFilePicker();
                     }
                     return;
@@ -1199,8 +1276,21 @@
         var urlParams = searchUrlParams;
         var xp3Url = urlParams.get('xp3');
         var gameZipUrl = urlParams.get('game');
+        var webdavUrl = urlParams.get('webdavUrl');
         var entryXp3 = urlParams.get('entry');
         var loadMode = normalizeLoadModeUrlParam(urlParams.get('loadMode'));
+        var webdavWrite = normalizeBooleanUrlParam(
+            urlParams.get('webdavWrite'), false, 'webdavWrite');
+        let webdavCredentials = window.__krkr2WebDavCredentials;
+        const webdavRequestHeaders = {};
+        if (webdavCredentials) {
+            webdavRequestHeaders.Authorization = makeBasicAuthHeader(
+                webdavCredentials.username, webdavCredentials.password);
+            webdavCredentials.username = '';
+            webdavCredentials.password = '';
+            webdavCredentials = null;
+            window.__krkr2WebDavCredentials = null;
+        }
         var rendererUrlParam = normalizeRendererUrlParam(urlParams.get('renderer'));
         var localZipPickerEnabled = @KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE@ || urlParams.has('pickZip');
 
@@ -1210,6 +1300,26 @@
             if (value === 'eager' || value === 'lazy') return value;
             console.warn('[loader] Ignoring unsupported URL loadMode:', value);
             return 'eager';
+        }
+
+        function normalizeBooleanUrlParam(value, fallback, name) {
+            if (value === null || value === '') return fallback;
+            value = String(value).trim().toLowerCase();
+            if (value === '1' || value === 'true' || value === 'yes' || value === 'on')
+                return true;
+            if (value === '0' || value === 'false' || value === 'no' || value === 'off')
+                return false;
+            console.warn('[loader] Ignoring unsupported URL ' + name + ':', value);
+            return fallback;
+        }
+
+        function makeBasicAuthHeader(username, password) {
+            var bytes = new TextEncoder().encode(
+                String(username || '') + ':' + String(password || ''));
+            var binary = '';
+            for (var i = 0; i < bytes.length; i++)
+                binary += String.fromCharCode(bytes[i]);
+            return 'Basic ' + btoa(binary);
         }
 
         function normalizeRendererUrlParam(value) {
@@ -1620,8 +1730,16 @@
 
                     var btn = document.createElement('button');
                     btn.className = 'xp3-item';
-                    btn.innerHTML = '<div class="xp3-name">' + name + '</div>' +
-                        (relDir ? '<div class="xp3-dir">' + relDir + '</div>' : '');
+                    var nameEl = document.createElement('div');
+                    nameEl.className = 'xp3-name';
+                    nameEl.textContent = name;
+                    btn.appendChild(nameEl);
+                    if (relDir) {
+                        var dirEl = document.createElement('div');
+                        dirEl.className = 'xp3-dir';
+                        dirEl.textContent = relDir;
+                        btn.appendChild(dirEl);
+                    }
                     btn.addEventListener('click', function() {
                         selectorEl.classList.remove('visible');
                         callback(path);
@@ -1677,8 +1795,8 @@
 
         // 流式下载为 Blob，带进度且 JS 堆峰值有界：每 64MB 块段合并为
         // 段 Blob（Blob 拼接引用而非复制），下载中堆驻留 ≤64MB。
-        async function fetchBlobWithProgress(url, onProgress) {
-            var resp = await fetch(url);
+        async function fetchBlobWithProgress(url, onProgress, requestHeaders) {
+            var resp = await fetch(url, { headers: requestHeaders || {} });
             if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
             var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
             if (!resp.body) return await resp.blob();
@@ -1762,6 +1880,67 @@
                 statusElement.textContent = 'Download failed: ' + err.message;
                 progressFill.style.width = '0%';
                 console.error('fetchXp3FromUrl error:', err);
+                showFilePicker();
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        // ?webdavUrl=：将远程 collection 映射到 VLFS 根目录。loadMode=eager
+        // 预下载全部文件；lazy 只注册 URL/尺寸，首次读取时再请求文件内容。
+        async function fetchWebDavGame(rootUrl, entryFile) {
+            loadingOverlay.classList.remove('hidden');
+            statusElement.textContent = 'Scanning WebDAV directory...';
+            progressFill.style.width = '0%';
+            try {
+                await vlfsReady;
+                var eagerFiles = loadMode === 'eager';
+                var reg = await VLFS.registerWebDav(
+                    rootUrl, webdavRequestHeaders, {
+                        eagerFiles: eagerFiles,
+                        onProgress: function(phase, done, total, path) {
+                            if (phase === 'scan') {
+                                progressFill.style.width =
+                                    Math.min(25, 5 + done) + '%';
+                                statusElement.textContent =
+                                    'Scanning WebDAV (' + done + ' directories) ' +
+                                    (path || '/');
+                            } else if (phase === 'download') {
+                                var pct = total ? Math.round(done / total * 75) : 0;
+                                progressFill.style.width = (25 + pct) + '%';
+                                statusElement.textContent =
+                                    'Downloading WebDAV files (' + done + '/' +
+                                    total + ') ' + String(path || '').substring(1);
+                            }
+                        }
+                    });
+
+                webdavContext = {
+                    rootUrl: reg.rootUrl,
+                    requestHeaders: reg.requestHeaders,
+                    knownDirs: reg.knownDirs,
+                    writeEnabled: webdavWrite
+                };
+                console.log('[webdav] registered: ' + reg.paths.length +
+                            ' files, ' + reg.xp3Paths.length + ' xp3, loadMode=' +
+                            loadMode + ', write=' + webdavWrite);
+                progressFill.style.width = '100%';
+                statusElement.textContent = 'Starting game...';
+
+                if (entryFile) {
+                    var entryLower = entryFile.toLowerCase();
+                    var matched = reg.xp3Paths.find(function(path) {
+                        return path.substring(path.lastIndexOf('/') + 1)
+                            .toLowerCase() === entryLower;
+                    });
+                    if (matched) Module._startupXp3Path = matched;
+                    startGame();
+                } else {
+                    checkAndStartGame(reg.xp3Paths, '');
+                }
+            } catch (err) {
+                statusElement.textContent = 'WebDAV failed: ' + err.message;
+                progressFill.style.width = '0%';
+                console.error('fetchWebDavGame error:', err);
                 showFilePicker();
                 loadingOverlay.classList.add('hidden');
             }
@@ -1872,7 +2051,11 @@
             }
         }
 
-        if (gameZipUrl) {
+        if (webdavUrl) {
+            autoSelectSpace().then(function() {
+                fetchWebDavGame(webdavUrl, entryXp3);
+            });
+        } else if (gameZipUrl) {
             autoSelectSpace().then(function() { fetchAndExtractZip(gameZipUrl, entryXp3); });
         } else if (xp3Url) {
             autoSelectSpace().then(function() { fetchXp3FromUrl(xp3Url); });

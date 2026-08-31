@@ -62,6 +62,123 @@
         return p.substring(p.lastIndexOf('/') + 1);
     }
 
+    function cloneRequestHeaders(headers) {
+        var out = {};
+        if (!headers) return out;
+        new Headers(headers).forEach(function(value, name) {
+            out[name] = value;
+        });
+        return out;
+    }
+
+    function normalizeWebDavRootUrl(value) {
+        var base = typeof document !== 'undefined' ? document.baseURI :
+            (typeof location !== 'undefined' ? location.href : undefined);
+        var url = new URL(value, base);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:')
+            throw new Error('webdav: URL must use http or https');
+        if (url.username || url.password)
+            throw new Error('webdav: use username/password parameters, not URL userinfo');
+        url.hash = '';
+        if (!url.pathname.endsWith('/')) url.pathname += '/';
+        return url.toString();
+    }
+
+    function normalizeWebDavRelativePath(value) {
+        value = String(value || '').replace(/\\/g, '/');
+        var input = value.split('/');
+        var parts = [];
+        for (var i = 0; i < input.length; i++) {
+            var part = input[i];
+            if (!part || part === '.') continue;
+            if (part === '..') throw new Error('webdav: parent path is not allowed');
+            parts.push(part);
+        }
+        return parts.join('/');
+    }
+
+    function webDavResourceUrl(rootUrl, relativePath, isDir) {
+        var url = new URL(normalizeWebDavRootUrl(rootUrl));
+        var relative = normalizeWebDavRelativePath(relativePath);
+        if (relative) {
+            var encoded = relative.split('/').map(function(part) {
+                return encodeURIComponent(part);
+            }).join('/');
+            url.pathname += encoded;
+        }
+        if (isDir && !url.pathname.endsWith('/')) url.pathname += '/';
+        return url.toString();
+    }
+
+    function webDavRelativePathFromHref(rootUrl, href) {
+        var root = new URL(normalizeWebDavRootUrl(rootUrl));
+        var resource = new URL(href, root);
+        var rootPath = root.pathname;
+        var resourcePath = resource.pathname;
+        if (resourcePath === rootPath.substring(0, rootPath.length - 1)) return '';
+        if (!resourcePath.startsWith(rootPath)) return null;
+        var encoded = resourcePath.substring(rootPath.length);
+        var rawParts = encoded.split('/').filter(Boolean);
+        var parts = [];
+        try {
+            for (var i = 0; i < rawParts.length; i++) {
+                var part = decodeURIComponent(rawParts[i]);
+                if (!part || part === '.' || part === '..' || part.indexOf('/') >= 0)
+                    return null;
+                parts.push(part);
+            }
+        } catch (e) {
+            return null;
+        }
+        return parts.join('/');
+    }
+
+    async function webDavPropfind(url, requestHeaders, depth) {
+        var headers = cloneRequestHeaders(requestHeaders);
+        headers.depth = depth;
+        headers['content-type'] = 'application/xml; charset=utf-8';
+        var body = '<?xml version="1.0" encoding="utf-8"?>' +
+            '<D:propfind xmlns:D="DAV:"><D:prop>' +
+            '<D:resourcetype/><D:getcontentlength/>' +
+            '</D:prop></D:propfind>';
+        var response = await fetch(url, {
+            method: 'PROPFIND', headers: headers, body: body
+        });
+        if (!response.ok)
+            throw new Error('webdav PROPFIND ' + url + ': ' + response.status);
+        return await response.text();
+    }
+
+    function parseWebDavMultiStatus(xml, rootUrl) {
+        var doc = new DOMParser().parseFromString(xml, 'application/xml');
+        if (doc.getElementsByTagName('parsererror').length)
+            throw new Error('webdav: invalid PROPFIND XML response');
+        var responses = doc.getElementsByTagNameNS('*', 'response');
+        var out = [];
+        for (var i = 0; i < responses.length; i++) {
+            var hrefNodes = responses[i].getElementsByTagNameNS('*', 'href');
+            if (!hrefNodes.length) continue;
+            var relative = webDavRelativePathFromHref(
+                rootUrl, hrefNodes[0].textContent.trim());
+            if (relative === null) continue;
+            var isDir = responses[i].getElementsByTagNameNS(
+                '*', 'collection').length > 0;
+            var size = isDir ? 0 : -1;
+            var sizeNodes = responses[i].getElementsByTagNameNS(
+                '*', 'getcontentlength');
+            for (var s = 0; s < sizeNodes.length; s++) {
+                var parsed = parseInt(sizeNodes[s].textContent.trim(), 10);
+                if (Number.isFinite(parsed) && parsed >= 0) size = parsed;
+                if (size >= 0) break;
+            }
+            out.push({
+                path: relative, isDir: isDir, size: size,
+                url: webDavResourceUrl(rootUrl, relative, isDir)
+            });
+        }
+        return out;
+    }
+
     var VLFS = {
         _entries: new Map(),     // path → entry
         _lowerIndex: new Map(),  // lowercased path → canonical path（文件与目录都收录）
@@ -78,6 +195,8 @@
         _statsMiss: 0,
         // 写关闭钩子：shell.html 赋值，做 IDB write-through + MEMFS 小文件镜像
         onWriteClose: null,
+        // 删除钩子：WebDAV 可选存档同步使用；默认无外部副作用。
+        onUnlink: null,
 
         // ---------- 生命周期 ----------
 
@@ -308,11 +427,155 @@
             return e;
         },
 
-        registerRemote(path, url, size, supportsRanges) {
+        registerRemote(path, url, size, supportsRanges, requestHeaders) {
             return this._register(path, {
                 kind: supportsRanges ? 'remote' : 'blob',
-                size: size, url: url, blob: null
+                size: size, url: url, blob: null,
+                requestHeaders: cloneRequestHeaders(requestHeaders)
             });
+        },
+
+        /*
+         * 递归枚举 WebDAV collection 并映射到 VLFS 根目录。
+         * eagerFiles=true 时先下载全部文件为 Blob；否则只注册 URL、尺寸和
+         * 认证头，首次读取时通过 Range（或一次完整 Blob 降级）供数。
+         */
+        async registerWebDav(rootUrl, requestHeaders, opts) {
+            opts = opts || {};
+            rootUrl = normalizeWebDavRootUrl(rootUrl);
+            var headers = cloneRequestHeaders(requestHeaders);
+            var knownDirs = new Set(['']);
+            var visitedDirs = new Set();
+            var queuedDirs = new Set(['']);
+            var queue = [''];
+            var files = [];
+            var seenFiles = new Set();
+
+            while (queue.length) {
+                var currentDir = queue.shift();
+                queuedDirs.delete(currentDir);
+                if (visitedDirs.has(currentDir)) continue;
+                visitedDirs.add(currentDir);
+                if (visitedDirs.size > 10000)
+                    throw new Error('webdav: too many collections');
+
+                var collectionUrl = webDavResourceUrl(rootUrl, currentDir, true);
+                var xml = await webDavPropfind(collectionUrl, headers, '1');
+                var children = parseWebDavMultiStatus(xml, rootUrl);
+                for (var i = 0; i < children.length; i++) {
+                    var child = children[i];
+                    if (child.path === currentDir) continue; // collection 自身
+                    if (child.isDir) {
+                        knownDirs.add(child.path);
+                        if (!visitedDirs.has(child.path) && !queuedDirs.has(child.path)) {
+                            queue.push(child.path);
+                            queuedDirs.add(child.path);
+                        }
+                    } else if (!seenFiles.has(child.path)) {
+                        seenFiles.add(child.path);
+                        files.push(child);
+                        if (files.length > 100000)
+                            throw new Error('webdav: too many files');
+                    }
+                }
+                if (opts.onProgress)
+                    opts.onProgress('scan', visitedDirs.size, 0, currentDir);
+            }
+
+            // VLFS 读路径需要已知尺寸；通常来自 DAV:getcontentlength，缺失时
+            // 对单个文件补 HEAD，避免把 size=-1 误判为 EOF。
+            for (var s = 0; s < files.length; s++) {
+                if (files[s].size >= 0) continue;
+                var head = await fetch(files[s].url, {
+                    method: 'HEAD', headers: cloneRequestHeaders(headers)
+                });
+                if (!head.ok)
+                    throw new Error('webdav HEAD ' + files[s].path + ': ' + head.status);
+                files[s].size = parseInt(
+                    head.headers.get('Content-Length') || '-1', 10);
+                if (files[s].size < 0 || !Number.isFinite(files[s].size))
+                    throw new Error('webdav: missing size for ' + files[s].path);
+            }
+
+            for (var dirPath of knownDirs)
+                this._ensureDirNode(dirPath ? '/' + dirPath : '/');
+
+            var paths = [], xp3Paths = [];
+            for (var f = 0; f < files.length; f++) {
+                var item = files[f];
+                var fsPath = normPath('/' + item.path);
+                if (opts.eagerFiles) {
+                    if (opts.onProgress)
+                        opts.onProgress('download', f, files.length, fsPath);
+                    var resp = await fetch(item.url, {
+                        headers: cloneRequestHeaders(headers)
+                    });
+                    if (!resp.ok)
+                        throw new Error('webdav GET ' + item.path + ': ' + resp.status);
+                    this.registerBlobFile(fsPath, await resp.blob());
+                } else {
+                    // 先乐观尝试 Range；若服务器返回 200，_readSource 会把
+                    // 完整响应缓存成 Blob，保证每个文件至多完整下载一次。
+                    this.registerRemote(fsPath, item.url, item.size, true, headers);
+                }
+                paths.push(fsPath);
+                if (fsPath.toLowerCase().endsWith('.xp3')) xp3Paths.push(fsPath);
+            }
+            if (opts.onProgress && opts.eagerFiles && files.length)
+                opts.onProgress('download', files.length, files.length, '');
+
+            return {
+                rootUrl: rootUrl, requestHeaders: headers,
+                knownDirs: knownDirs, paths: paths, xp3Paths: xp3Paths
+            };
+        },
+
+        // 将一个 VLFS 路径回写到 WebDAV；缺失的父 collection 逐级 MKCOL。
+        async writeWebDavFile(rootUrl, requestHeaders, path, data, knownDirs) {
+            rootUrl = normalizeWebDavRootUrl(rootUrl);
+            var headers = cloneRequestHeaders(requestHeaders);
+            var relative = normalizeWebDavRelativePath(path);
+            if (!relative) throw new Error('webdav: empty write path');
+            var parts = relative.split('/');
+            parts.pop();
+            var current = '';
+            knownDirs = knownDirs || new Set(['']);
+
+            for (var i = 0; i < parts.length; i++) {
+                current = current ? current + '/' + parts[i] : parts[i];
+                if (knownDirs.has(current)) continue;
+                var dirUrl = webDavResourceUrl(rootUrl, current, true);
+                var mkcol = await fetch(dirUrl, {
+                    method: 'MKCOL', headers: cloneRequestHeaders(headers)
+                });
+                if (!mkcol.ok && mkcol.status !== 405)
+                    throw new Error('webdav MKCOL ' + current + ': ' + mkcol.status);
+                knownDirs.add(current);
+            }
+
+            var putHeaders = cloneRequestHeaders(headers);
+            putHeaders['content-type'] = 'application/octet-stream';
+            var fileUrl = webDavResourceUrl(rootUrl, relative, false);
+            var put = await fetch(fileUrl, {
+                method: 'PUT', headers: putHeaders, body: data
+            });
+            if (!put.ok)
+                throw new Error('webdav PUT ' + relative + ': ' + put.status);
+            return { status: put.status, etag: put.headers.get('ETag') || '' };
+        },
+
+        async deleteWebDavFile(rootUrl, requestHeaders, path) {
+            rootUrl = normalizeWebDavRootUrl(rootUrl);
+            var relative = normalizeWebDavRelativePath(path);
+            if (!relative) throw new Error('webdav: empty delete path');
+            var response = await fetch(
+                webDavResourceUrl(rootUrl, relative, false), {
+                    method: 'DELETE',
+                    headers: cloneRequestHeaders(requestHeaders)
+                });
+            if (!response.ok && response.status !== 404)
+                throw new Error('webdav DELETE ' + relative + ': ' + response.status);
+            return response.status;
         },
 
         registerOverlayFile(path, data) {
@@ -475,6 +738,10 @@
             this._lowerIndex.delete(path.toLowerCase());
             var d = this._dirs.get(dirname(path));
             if (d) d.delete(basename(path).toLowerCase());
+            if (this.onUnlink) {
+                try { this.onUnlink(path); }
+                catch (error) { console.warn('[vlfs] onUnlink failed:', path, error); }
+            }
             return 0;
         },
 
@@ -657,7 +924,9 @@
                 case 'blob': {
                     if (!e.blob) { // registerRemote 的非 Range 降级：懒整包拉取为 Blob
                         if (!e._fetch) {
-                            e._fetch = fetch(e.url).then(function (r) {
+                            e._fetch = fetch(e.url, {
+                                headers: cloneRequestHeaders(e.requestHeaders)
+                            }).then(function (r) {
                                 if (!r.ok) throw new Error('fetch ' + e.url + ': ' + r.status);
                                 return r.blob();
                             });
@@ -674,15 +943,23 @@
                     return new Uint8Array(fbuf);
                 }
                 case 'remote': {
+                    var rangeHeaders = cloneRequestHeaders(e.requestHeaders);
+                    rangeHeaders.Range = 'bytes=' + pos + '-' + (pos + len - 1);
                     var resp = await fetch(e.url, {
-                        headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
+                        headers: rangeHeaders
                     });
                     if (resp.status !== 206 && resp.status !== 200)
                         throw new Error('range fetch ' + e.url + ': ' + resp.status);
+                    if (resp.status === 200) {
+                        // 服务器忽略 Range：缓存这一次完整响应，后续切片读取，
+                        // 避免每个块都重新下载整个远程文件。
+                        e.blob = await resp.blob();
+                        e.size = e.blob.size;
+                        e.kind = 'blob';
+                        var wholeBuf = await e.blob.slice(pos, pos + len).arrayBuffer();
+                        return new Uint8Array(wholeBuf);
+                    }
                     var rbuf = await resp.arrayBuffer();
-                    // 服务器忽略 Range 返回 200 全量时裁剪
-                    if (resp.status === 200 && rbuf.byteLength > len)
-                        return new Uint8Array(rbuf, pos, len).slice();
                     return new Uint8Array(rbuf, 0, Math.min(len, rbuf.byteLength)).slice();
                 }
                 case 'zip': {
