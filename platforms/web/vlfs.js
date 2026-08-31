@@ -331,7 +331,10 @@
          */
         async registerZipBlob(blob, opts) {
             return this._registerZipSource(
-                { kind: 'blob', size: blob.size, blob: blob }, opts);
+                {
+                    kind: 'blob', size: blob.size, blob: blob,
+                    fingerprint: opts && opts.fingerprint
+                }, opts);
         },
 
         async registerZipRemote(url, size, opts) {
@@ -809,8 +812,9 @@
             var cd = new DataView((await this._readZipSourceBytes(
                 source, cdOffset, cdSize)).buffer);
             var cdBytes = new Uint8Array(cd.buffer);
-            // 服务器可在 HEAD 响应中提供完整文件 SHA-256；浏览器无需为算
-            // hash 下载数 GB ZIP。没有该 header（本地 Blob/通用服务器）时，
+            // 服务器的强 ETag 由 shell 转成可用于 OPFS 目录的安全指纹；
+            // 浏览器无需为算 hash 下载数 GB ZIP。没有可用 ETag
+            // （本地 Blob/通用服务器）时，
             // 回退为“中央目录+总大小”的 SHA-256 内容/布局指纹。
             var fingerprintInput = new Uint8Array(8 + cdBytes.byteLength);
             new DataView(fingerprintInput.buffer).setBigUint64(

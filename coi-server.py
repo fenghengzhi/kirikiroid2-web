@@ -32,6 +32,7 @@ if zip_real_path and not os.path.isfile(zip_real_path):
 _content_sha256_cache = {}
 _content_sha256_lock = threading.Lock()
 
+
 def content_sha256(real_path):
     """Return a SHA-256 cached by the file's path, size, and mtime."""
     stat = os.stat(real_path)
@@ -52,6 +53,22 @@ def content_sha256(real_path):
         _content_sha256_cache[cache_key] = digest
         return digest
 
+
+def if_none_match_matches(header_value, etag):
+    """Use weak comparison for If-None-Match as required for GET and HEAD."""
+    if not header_value:
+        return False
+    for candidate in header_value.split(','):
+        candidate = candidate.strip()
+        if candidate == '*':
+            return True
+        if candidate.startswith('W/'):
+            candidate = candidate[2:].lstrip()
+        if candidate == etag:
+            return True
+    return False
+
+
 class COIHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
@@ -59,7 +76,7 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Expose-Headers',
                          'Accept-Ranges, Content-Length, Content-Range, '
-                         'ETag, X-Content-SHA256')
+                         'ETag')
         super().end_headers()
 
     def do_GET(self):
@@ -83,8 +100,23 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
         try:
             size = os.path.getsize(real_path)
             sha256 = content_sha256(real_path)
+            etag = f'"sha256-{sha256}"'
+
+            if if_none_match_matches(self.headers.get('If-None-Match'), etag):
+                self.send_response(304)
+                self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('ETag', etag)
+                self.end_headers()
+                return
+
             start, end = 0, size - 1
             range_header = self.headers.get('Range')
+            # If-Range only permits a strong ETag match. Dates and weak tags are
+            # deliberately treated as mismatches because this server emits an
+            # entity tag validator for every served archive.
+            if_range = self.headers.get('If-Range')
+            if range_header and if_range and if_range.strip() != etag:
+                range_header = None
             is_partial = False
             if range_header and range_header.startswith('bytes='):
                 spec = range_header[len('bytes='):].split(',')[0].strip()
@@ -106,8 +138,7 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-Type', 'application/octet-stream')
             self.send_header('Accept-Ranges', 'bytes')
             self.send_header('Content-Length', str(end - start + 1))
-            self.send_header('ETag', f'"sha256-{sha256}"')
-            self.send_header('X-Content-SHA256', sha256)
+            self.send_header('ETag', etag)
             if is_partial:
                 self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
             self.end_headers()

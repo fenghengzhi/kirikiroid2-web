@@ -1702,6 +1702,28 @@
             return new Blob(segments);
         }
 
+        // ETag 是不透明的 HTTP 校验器，不应依赖其内部格式。强 ETag
+        // 可稳定标识字节级一致的 ZIP；对通用值再做一次 SHA-256，
+        // 只是为了生成可安全用作 OPFS 目录名的本地缓存键。
+        async function archiveFingerprintFromETag(rawETag) {
+            var etag = String(rawETag || '').trim();
+            if (!etag || /^W\//i.test(etag) || !/^"[^"]*"$/.test(etag))
+                return '';
+
+            // 保留 coi-server 既有指纹值格式，避免切换到标准 ETag
+            // 后重建已完成的 OPFS 缓存。
+            var contentSha = /^"sha256-([0-9a-f]{64})"$/i.exec(etag);
+            if (contentSha) return 'sha256-' + contentSha[1].toLowerCase();
+
+            var input = new TextEncoder().encode(etag);
+            var digest = new Uint8Array(await crypto.subtle.digest(
+                'SHA-256', input));
+            var hex = '';
+            for (var i = 0; i < digest.length; i++)
+                hex += digest[i].toString(16).padStart(2, '0');
+            return 'etag-' + hex;
+        }
+
         // ?xp3=：优先 HTTP Range 懒加载；服务器不支持时整包 Blob（仍 off-heap）
         async function fetchXp3FromUrl(url) {
             loadingOverlay.classList.remove('hidden');
@@ -1757,21 +1779,16 @@
                 await vlfsReady;
                 var eagerDeflate = loadMode === 'eager';
                 var ranges = false, size = -1, archiveFingerprint = '';
-                if (!eagerDeflate) {
-                    try {
-                        var head = await fetch(url, { method: 'HEAD' });
-                        if (head.ok) {
-                            ranges = (head.headers.get('Accept-Ranges') || '')
-                                .toLowerCase() === 'bytes';
-                            size = parseInt(head.headers.get('Content-Length') || '-1', 10);
-                            var contentSha256 =
-                                (head.headers.get('X-Content-SHA256') || '')
-                                    .trim().toLowerCase();
-                            if (/^[0-9a-f]{64}$/.test(contentSha256))
-                                archiveFingerprint = 'sha256-' + contentSha256;
-                        }
-                    } catch (e) {}
-                }
+                try {
+                    var head = await fetch(url, { method: 'HEAD' });
+                    if (head.ok) {
+                        ranges = (head.headers.get('Accept-Ranges') || '')
+                            .toLowerCase() === 'bytes';
+                        size = parseInt(head.headers.get('Content-Length') || '-1', 10);
+                        archiveFingerprint = await archiveFingerprintFromETag(
+                            head.headers.get('ETag'));
+                    }
+                } catch (e) {}
 
                 var reg;
                 if (!eagerDeflate && ranges && size > 0) {
@@ -1806,6 +1823,7 @@
                     progressFill.style.width = eagerDeflate ? '60%' : '95%';
                     reg = await VLFS.registerZipBlob(blob, {
                         eagerDeflate: eagerDeflate,
+                        fingerprint: archiveFingerprint || undefined,
                         onProgress: eagerDeflate ? function(done, total, path) {
                             progressFill.style.width =
                                 (60 + Math.round(done / total * 40)) + '%';
