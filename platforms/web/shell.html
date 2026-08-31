@@ -773,7 +773,7 @@
                     <li>Drag the file onto the drop zone above, or use one of the buttons.</li>
                     <li>Choose or create a save space when prompted — your saves persist between sessions in the browser.</li>
                 </ol>
-                <p>You can also auto-load a game via URL parameters: <code>?xp3=&lt;url&gt;</code> loads a single archive, and <code>?game=&lt;url&gt;</code> loads a ZIP-packaged game directory.</p>
+                <p>You can also auto-load a game via URL parameters: <code>?xp3=&lt;url&gt;</code> loads a single archive, and <code>?game=&lt;url&gt;</code> loads a ZIP-packaged game directory. Use <code>loadMode=eager</code> (default) to download and prepare remote resources up front, or <code>loadMode=lazy</code> to fetch them on first access when the server supports HTTP Range.</p>
 
                 <h3>Browser requirements</h3>
                 <p>A modern browser with WebAssembly and WebGL support is required. The site is served with <code>Cross-Origin-Opener-Policy</code> and <code>Cross-Origin-Embedder-Policy</code> headers to enable <code>SharedArrayBuffer</code> and multi-threading. Tested on recent Chrome, Edge, Firefox, and Safari (desktop and mobile).</p>
@@ -1200,8 +1200,17 @@
         var xp3Url = urlParams.get('xp3');
         var gameZipUrl = urlParams.get('game');
         var entryXp3 = urlParams.get('entry');
+        var loadMode = normalizeLoadModeUrlParam(urlParams.get('loadMode'));
         var rendererUrlParam = normalizeRendererUrlParam(urlParams.get('renderer'));
         var localZipPickerEnabled = @KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE@ || urlParams.has('pickZip');
+
+        function normalizeLoadModeUrlParam(value) {
+            if (value === null || value === '') return 'eager';
+            value = String(value).trim().toLowerCase();
+            if (value === 'eager' || value === 'lazy') return value;
+            console.warn('[loader] Ignoring unsupported URL loadMode:', value);
+            return 'eager';
+        }
 
         function normalizeRendererUrlParam(value) {
             if (value === null) return '';
@@ -1736,63 +1745,78 @@
             }
         }
 
-        // ?game=：优先通过 HTTP Range 只读 ZIP 中央目录和实际文件区间；服务器
-        // 不支持 Range 时才退回整包 Blob。这样 ASan 的大 Wasm 内存与大游戏 ZIP
-        // 不会同时常驻 Chromium renderer，文件树和条目读取语义保持不变。
+        // ?game=：eager 先完整下载 ZIP 并准备全部 deflate 条目；lazy 优先
+        // 通过 HTTP Range 只读 ZIP 中央目录，条目首次访问时再拉取内容。
+        // 服务器不支持 Range 时，lazy 回退到完整 Blob，但仍延迟解压。
         async function fetchAndExtractZip(url, entryFile) {
             loadingOverlay.classList.remove('hidden');
-            statusElement.textContent = 'Probing game archive...';
+            statusElement.textContent = loadMode === 'lazy' ?
+                'Probing game archive...' : 'Downloading game archive...';
             progressFill.style.width = '0%';
             try {
                 await vlfsReady;
+                var eagerDeflate = loadMode === 'eager';
                 var ranges = false, size = -1, archiveFingerprint = '';
-                try {
-                    var head = await fetch(url, { method: 'HEAD' });
-                    if (head.ok) {
-                        ranges = (head.headers.get('Accept-Ranges') || '')
-                            .toLowerCase() === 'bytes';
-                        size = parseInt(head.headers.get('Content-Length') || '-1', 10);
-                        var contentSha256 =
-                            (head.headers.get('X-Content-SHA256') || '')
-                                .trim().toLowerCase();
-                        if (/^[0-9a-f]{64}$/.test(contentSha256))
-                            archiveFingerprint = 'sha256-' + contentSha256;
-                    }
-                } catch (e) {}
+                if (!eagerDeflate) {
+                    try {
+                        var head = await fetch(url, { method: 'HEAD' });
+                        if (head.ok) {
+                            ranges = (head.headers.get('Accept-Ranges') || '')
+                                .toLowerCase() === 'bytes';
+                            size = parseInt(head.headers.get('Content-Length') || '-1', 10);
+                            var contentSha256 =
+                                (head.headers.get('X-Content-SHA256') || '')
+                                    .trim().toLowerCase();
+                            if (/^[0-9a-f]{64}$/.test(contentSha256))
+                                archiveFingerprint = 'sha256-' + contentSha256;
+                        }
+                    } catch (e) {}
+                }
 
                 var reg;
-                if (ranges && size > 0) {
+                if (!eagerDeflate && ranges && size > 0) {
                     statusElement.textContent = 'Reading archive index...';
-                    reg = await VLFS.registerZipRemote(url, size, {
-                        fingerprint: archiveFingerprint || undefined,
-                        onProgress: function(done, total, path) {
-                            progressFill.style.width = Math.round(done / total * 100) + '%';
-                            statusElement.textContent =
-                                'Extracting (' + done + '/' + total + ') ' + path.substring(1);
-                        }
-                    });
-                    console.log('[vlfs] remote zip (Range): ' + url + ', ' + size + ' bytes');
-                } else {
+                    progressFill.style.width = '5%';
+                    try {
+                        reg = await VLFS.registerZipRemote(url, size, {
+                            eagerDeflate: false,
+                            fingerprint: archiveFingerprint || undefined
+                        });
+                        console.log('[vlfs] remote zip index mounted: ' + url +
+                                    ', ' + size + ' bytes, loadMode=lazy');
+                    } catch (rangeError) {
+                        console.warn('[vlfs] remote ZIP Range mount failed; ' +
+                                     'falling back to a complete Blob:', rangeError);
+                    }
+                }
+                if (!reg) {
                     statusElement.textContent = 'Downloading game archive...';
+                    var downloadProgressShare = eagerDeflate ? 0.6 : 0.95;
                     var blob = await fetchBlobWithProgress(url, function(loaded, total) {
                         if (total > 0) {
                             var pct = Math.round(loaded / total * 100);
-                            progressFill.style.width = (pct * 0.6) + '%';
+                            progressFill.style.width = (pct * downloadProgressShare) + '%';
                             statusElement.textContent = 'Downloading... ' + pct + '% (' + (loaded / 1048576).toFixed(1) + ' MB)';
                         } else {
                             statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
                         }
                     });
-                    statusElement.textContent = 'Extracting archive...';
-                    progressFill.style.width = '60%';
+                    statusElement.textContent = eagerDeflate ?
+                        'Extracting archive...' : 'Indexing archive...';
+                    progressFill.style.width = eagerDeflate ? '60%' : '95%';
                     reg = await VLFS.registerZipBlob(blob, {
-                        onProgress: function(done, total, path) {
-                            progressFill.style.width = (60 + Math.round(done / total * 40)) + '%';
+                        eagerDeflate: eagerDeflate,
+                        onProgress: eagerDeflate ? function(done, total, path) {
+                            progressFill.style.width =
+                                (60 + Math.round(done / total * 40)) + '%';
                             statusElement.textContent =
-                                'Extracting (' + done + '/' + total + ') ' + path.substring(1);
-                        }
+                                'Extracting (' + done + '/' + total + ') ' +
+                                path.substring(1);
+                        } : null
                     });
-                    console.log('[vlfs] zip blob fallback: ' + blob.size + ' bytes');
+                    console.log('[vlfs] remote zip blob: ' + blob.size +
+                                ' bytes, loadMode=' + loadMode +
+                                (!eagerDeflate ? ' (Range unavailable)' : ''));
                 }
                 console.log('[vlfs] zip registered: ' + reg.paths.length + ' entries, ' +
                             reg.xp3Paths.length + ' xp3');
@@ -1919,14 +1943,16 @@
             try {
                 setPickerProgress(10, 'Indexing ' + file.name + '...');
                 await vlfsReady;
-                // deflate 条目在注册阶段立即全部解压落 OPFS（stored 条目零成本）
+                var eagerDeflate = loadMode === 'eager';
                 var reg = await VLFS.registerZipBlob(file, {
-                    onProgress: function(done, total, path) {
+                    eagerDeflate: eagerDeflate,
+                    onProgress: eagerDeflate ? function(done, total, path) {
                         setPickerProgress(10 + Math.round(done / total * 90),
                             'Extracting (' + done + '/' + total + ') ' + path.substring(1));
-                    }
+                    } : null
                 });
-                console.log('[vlfs] local zip registered: ' + reg.paths.length + ' entries');
+                console.log('[vlfs] local zip registered: ' + reg.paths.length +
+                            ' entries, loadMode=' + loadMode);
                 setPickerProgress(100, 'Starting...');
                 checkAndStartGame(reg.xp3Paths, '');
             } catch (err) {

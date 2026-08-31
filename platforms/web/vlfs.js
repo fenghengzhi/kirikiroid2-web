@@ -7,8 +7,8 @@
  *
  * 内存驻留硬约束：不在内存持有任何全量文件数据。
  *  - 能 Blob 则 Blob（下载包/拖拽 File/ZIP stored 条目切片，off-heap）；
- *  - 不能 Blob 则 OPFS（ZIP deflate 条目在注册阶段立即全部流式解压落盘，
- *    不懒解压；完整 ZIP 以中央目录 SHA-256 指纹跨页面复用）；
+ *  - 不能 Blob 则 OPFS（ZIP deflate 条目按加载策略在注册阶段或首次读取时
+ *    流式解压落盘；eager 完整缓存以中央目录 SHA-256 指纹跨页面复用）；
  *  - 内存仅限有界块级 LRU 读缓存 + 写 overlay（存档级小文件）。
  *
  * 线程模型：所有方法只在浏览器主线程调用。wasm 主线程经 JSPI（EM_ASYNC_JS）
@@ -321,12 +321,12 @@
 
         /*
          * 解析 ZIP 中央目录（EOCD/ZIP64），把每个条目注册为 VLFS 文件。
-         * ZIP 源可以是本地 Blob，也可以是支持 HTTP Range 的远程 URL；后者
-         * 只读取中央目录和实际访问的 stored 区间，不把整包常驻浏览器内存。
-         * stored 条目 = 源区间切片，永不解压；deflate 条目在注册阶段**立即
-         * 全部**流式解压落 OPFS（不懒解压，避免游戏中途首读卡顿），解压
-         * 走 DecompressionStream→OPFS 管道，内存恒定不驻留全量数据。
-         * opts.onProgress(done, total, path) 报告解压进度。
+         * ZIP 源可以是本地 Blob，也可以是支持 HTTP Range 的远程 URL。
+         * stored 条目 = 源区间切片，永不解压；deflate 条目通过
+         * DecompressionStream→OPFS 流式解压。opts.eagerDeflate 默认为 true，
+         * 在注册阶段立即准备全部 deflate 条目；设为 false 时在条目首次读取
+         * 时才解压到页面会话 OPFS。opts.onProgress(done, total, path) 仅报告
+         * eager 解压进度。
          * 返回 { paths, xp3Paths }。
          */
         async registerZipBlob(blob, opts) {
@@ -344,6 +344,7 @@
 
         async _registerZipSource(source, opts) {
             opts = opts || {};
+            var eagerDeflate = opts.eagerDeflate !== false;
             var mountPrefix = opts.mountPrefix || '/';
             var parsed = await this._parseZipCentralDirectory(source);
             var records = parsed.records;
@@ -376,38 +377,39 @@
                 paths.push(fsPath);
                 if (fsPath.toLowerCase().endsWith('.xp3')) xp3Paths.push(fsPath);
             }
-            var expectedCacheEntries = deflated.map(function (item) {
-                return {
-                    file: 'e' + item.recordIndex,
-                    name: item.record.name,
-                    size: item.record.uncompSize,
-                    compSize: item.record.compSize,
-                    crc32: item.record.crc32
-                };
-            });
-            var zipCache = await this._prepareZipCache(
-                parsed.fingerprint, expectedCacheEntries,
-                parsed.fallbackFingerprint);
-            if (zipCache) {
-                for (var k = 0; k < deflated.length; k++) {
-                    var cacheName = expectedCacheEntries[k].file;
-                    deflated[k].entry.opfsCacheDir = zipCache.dir;
-                    deflated[k].entry.opfsCacheName = cacheName;
-                    if (zipCache.complete)
-                        deflated[k].entry.opfsFile = zipCache.files.get(cacheName);
+            if (eagerDeflate) {
+                var expectedCacheEntries = deflated.map(function (item) {
+                    return {
+                        file: 'e' + item.recordIndex,
+                        name: item.record.name,
+                        size: item.record.uncompSize,
+                        compSize: item.record.compSize,
+                        crc32: item.record.crc32
+                    };
+                });
+                var zipCache = await this._prepareZipCache(
+                    parsed.fingerprint, expectedCacheEntries,
+                    parsed.fallbackFingerprint);
+                if (zipCache) {
+                    for (var k = 0; k < deflated.length; k++) {
+                        var cacheName = expectedCacheEntries[k].file;
+                        deflated[k].entry.opfsCacheDir = zipCache.dir;
+                        deflated[k].entry.opfsCacheName = cacheName;
+                        if (zipCache.complete)
+                            deflated[k].entry.opfsFile = zipCache.files.get(cacheName);
+                    }
                 }
+                // eager 模式顺序准备全部 deflate 条目；完整 OPFS 缓存命中时
+                // _ensureOpfsSpill 直接返回，未命中则全部成功后提交完成标记。
+                for (var j = 0; j < deflated.length; j++) {
+                    if (opts.onProgress)
+                        opts.onProgress(j, deflated.length, deflated[j].path);
+                    await this._ensureOpfsSpill(deflated[j].entry);
+                }
+                await this._commitZipCache(zipCache);
+                if (opts.onProgress && deflated.length)
+                    opts.onProgress(deflated.length, deflated.length, '');
             }
-            // 立即全量解压全部 deflate 条目（顺序执行，IO 受限；
-            // 完整 OPFS 缓存命中时 _ensureOpfsSpill 直接返回；未命中则在
-            // 全部条目成功后才提交 ZIP 指纹完成标记）
-            for (var j = 0; j < deflated.length; j++) {
-                if (opts.onProgress)
-                    opts.onProgress(j, deflated.length, deflated[j].path);
-                await this._ensureOpfsSpill(deflated[j].entry);
-            }
-            await this._commitZipCache(zipCache);
-            if (opts.onProgress && deflated.length)
-                opts.onProgress(deflated.length, deflated.length, '');
             return { paths: paths, xp3Paths: xp3Paths };
         },
 
@@ -708,9 +710,9 @@
 
         /*
          * deflate 条目流式解压落 OPFS（恒定内存），之后随机读 OPFS。
-         * registerZipBlob 在注册阶段对全部 deflate 条目立即调用本函数
-         * （读路径保留调用仅作幂等兜底）。DEFLATE 不可随机访问是格式
-         * 约束；普通 spill 使用页面会话目录，ZIP 完整缓存使用由中央目录
+         * eager 模式在 ZIP 注册阶段对全部 deflate 条目调用本函数；lazy
+         * 模式在条目首次读取时调用。DEFLATE 不可随机访问是格式约束；lazy
+         * spill 使用页面会话目录，eager 的 ZIP 完整缓存使用由中央目录
          * SHA-256 指纹标识的持久目录。
          */
         async _ensureOpfsSpill(e) {
@@ -753,11 +755,12 @@
             var resp = await fetch(source.url, {
                 headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
             });
-            if (resp.status !== 206 && resp.status !== 200)
+            // registerZipRemote 只用于真正的 Range 挂载。若服务器忽略 Range
+            // 返回 200，交给 shell 回退成单个完整 Blob，避免后续每次条目读取
+            // 都重复下载整个 ZIP。
+            if (resp.status !== 206)
                 throw new Error('zip range fetch ' + source.url + ': ' + resp.status);
             var rbuf = await resp.arrayBuffer();
-            if (resp.status === 200 && rbuf.byteLength > len)
-                return new Uint8Array(rbuf, pos, len).slice();
             if (rbuf.byteLength < len)
                 throw new Error('short zip range: ' + rbuf.byteLength + ' < ' + len);
             return new Uint8Array(rbuf, 0, len).slice();
@@ -769,11 +772,10 @@
             var resp = await fetch(source.url, {
                 headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
             });
-            if (resp.status !== 206 && resp.status !== 200)
+            if (resp.status !== 206)
                 throw new Error('zip range fetch ' + source.url + ': ' + resp.status);
-            if (resp.status === 206 && resp.body) return resp.body;
-            var whole = await resp.blob();
-            return whole.slice(pos, pos + len).stream();
+            if (resp.body) return resp.body;
+            return (await resp.blob()).stream();
         },
 
         async _parseZipCentralDirectory(source) {
