@@ -66,6 +66,14 @@ self.addEventListener('fetch', function (event) {
     /* Only handle GET requests */
     if (request.method !== 'GET') return;
 
+    /* Game ZIP requests use cache:no-store and manage their durable copy in
+     * OPFS. Forward them directly so If-None-Match/Range validators reach the
+     * origin instead of being shadowed by this app-shell CacheStorage. */
+    if (request.cache === 'no-store') {
+        event.respondWith(fetch(request));
+        return;
+    }
+
     /* Navigation requests (HTML): network-first so updates propagate quickly,
      * but fall back to cache for offline access. */
     if (request.mode === 'navigate') {

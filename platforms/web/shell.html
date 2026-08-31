@@ -1795,9 +1795,7 @@
 
         // 流式下载为 Blob，带进度且 JS 堆峰值有界：每 64MB 块段合并为
         // 段 Blob（Blob 拼接引用而非复制），下载中堆驻留 ≤64MB。
-        async function fetchBlobWithProgress(url, onProgress, requestHeaders) {
-            var resp = await fetch(url, { headers: requestHeaders || {} });
-            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+        async function responseBlobWithProgress(resp, onProgress) {
             var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
             if (!resp.body) return await resp.blob();
             var reader = resp.body.getReader();
@@ -1820,26 +1818,41 @@
             return new Blob(segments);
         }
 
-        // ETag 是不透明的 HTTP 校验器，不应依赖其内部格式。强 ETag
-        // 可稳定标识字节级一致的 ZIP；对通用值再做一次 SHA-256，
-        // 只是为了生成可安全用作 OPFS 目录名的本地缓存键。
-        async function archiveFingerprintFromETag(rawETag) {
+        async function fetchBlobWithProgress(url, onProgress, requestHeaders) {
+            var resp = await fetch(url, { headers: requestHeaders || {} });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+            return await responseBlobWithProgress(resp, onProgress);
+        }
+
+        function strongArchiveETag(rawETag) {
             var etag = String(rawETag || '').trim();
             if (!etag || /^W\//i.test(etag) || !/^"[^"]*"$/.test(etag))
                 return '';
+            return etag;
+        }
 
-            // 保留 coi-server 既有指纹值格式，避免切换到标准 ETag
-            // 后重建已完成的 OPFS 缓存。
-            var contentSha = /^"sha256-([0-9a-f]{64})"$/i.exec(etag);
-            if (contentSha) return 'sha256-' + contentSha[1].toLowerCase();
+        function archiveResourceKey(url) {
+            var resource = new URL(url, document.baseURI);
+            resource.hash = '';
+            return resource.toString();
+        }
 
-            var input = new TextEncoder().encode(etag);
-            var digest = new Uint8Array(await crypto.subtle.digest(
-                'SHA-256', input));
-            var hex = '';
-            for (var i = 0; i < digest.length; i++)
-                hex += digest[i].toString(16).padStart(2, '0');
-            return 'etag-' + hex;
+        // 游戏 ZIP 不经 Service Worker/HTTP cache：完整文件的唯一持久副本
+        // 在 OPFS。条件 GET 的 304 由本层与该 OPFS 副本配对。
+        async function fetchArchiveWithProgress(url, onProgress, requestHeaders) {
+            var resp = await fetch(url, {
+                headers: requestHeaders || {}, cache: 'no-store'
+            });
+            var etag = strongArchiveETag(resp.headers.get('ETag'));
+            if (resp.status === 304)
+                return { status: 304, etag: etag, blob: null };
+            if (!resp.ok)
+                throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+            return {
+                status: resp.status,
+                etag: etag,
+                blob: await responseBlobWithProgress(resp, onProgress)
+            };
         }
 
         // ?xp3=：优先 HTTP Range 懒加载；服务器不支持时整包 Blob（仍 off-heap）
@@ -1946,9 +1959,9 @@
             }
         }
 
-        // ?game=：eager 先完整下载 ZIP 并准备全部 deflate 条目；lazy 优先
-        // 通过 HTTP Range 只读 ZIP 中央目录，条目首次访问时再拉取内容。
-        // 服务器不支持 Range 时，lazy 回退到完整 Blob，但仍延迟解压。
+        // ?game=：eager 用条件 GET 校验完整 OPFS 副本；304 直接恢复，
+        // 200 则把该 GET 自身的强 ETag 与实际 Blob 绑定，再将
+        // stored/deflate 全部写入 OPFS。lazy 仍保持 Range 按需读取。
         async function fetchAndExtractZip(url, entryFile) {
             loadingOverlay.classList.remove('hidden');
             statusElement.textContent = loadMode === 'lazy' ?
@@ -1957,63 +1970,124 @@
             try {
                 await vlfsReady;
                 var eagerDeflate = loadMode === 'eager';
-                var ranges = false, size = -1, archiveFingerprint = '';
-                try {
-                    var head = await fetch(url, { method: 'HEAD' });
-                    if (head.ok) {
-                        ranges = (head.headers.get('Accept-Ranges') || '')
-                            .toLowerCase() === 'bytes';
-                        size = parseInt(head.headers.get('Content-Length') || '-1', 10);
-                        archiveFingerprint = await archiveFingerprintFromETag(
-                            head.headers.get('ETag'));
-                    }
-                } catch (e) {}
-
+                var resourceKey = archiveResourceKey(url);
                 var reg;
-                if (!eagerDeflate && ranges && size > 0) {
-                    statusElement.textContent = 'Reading archive index...';
-                    progressFill.style.width = '5%';
+                if (eagerDeflate) {
+                    var cachedETag = await VLFS.getZipCacheValidator(resourceKey);
+                    var requestHeaders = cachedETag ?
+                        { 'If-None-Match': cachedETag } : {};
+                    var downloaded;
                     try {
-                        reg = await VLFS.registerZipRemote(url, size, {
-                            eagerDeflate: false,
-                            fingerprint: archiveFingerprint || undefined
-                        });
-                        console.log('[vlfs] remote zip index mounted: ' + url +
-                                    ', ' + size + ' bytes, loadMode=lazy');
-                    } catch (rangeError) {
-                        console.warn('[vlfs] remote ZIP Range mount failed; ' +
-                                     'falling back to a complete Blob:', rangeError);
+                        downloaded = await fetchArchiveWithProgress(
+                            url, function(loaded, total) {
+                                if (total > 0) {
+                                    var pct = Math.round(loaded / total * 100);
+                                    progressFill.style.width = (pct * 0.6) + '%';
+                                    statusElement.textContent = 'Downloading... ' +
+                                        pct + '% (' +
+                                        (loaded / 1048576).toFixed(1) + ' MB)';
+                                } else {
+                                    statusElement.textContent = 'Downloading... ' +
+                                        (loaded / 1048576).toFixed(1) + ' MB';
+                                }
+                            }, requestHeaders);
+                    } catch (conditionalError) {
+                        if (!cachedETag) throw conditionalError;
+                        // 跨域服务器可能不允许 If-None-Match 预检；
+                        // 无条件 GET 仍可用其实际响应 ETag 安全重建。
+                        console.warn('[vlfs] conditional ZIP request failed; ' +
+                            'retrying unconditionally:', conditionalError);
+                        downloaded = await fetchArchiveWithProgress(url, null, {});
                     }
-                }
-                if (!reg) {
-                    statusElement.textContent = 'Downloading game archive...';
-                    var downloadProgressShare = eagerDeflate ? 0.6 : 0.95;
-                    var blob = await fetchBlobWithProgress(url, function(loaded, total) {
-                        if (total > 0) {
-                            var pct = Math.round(loaded / total * 100);
-                            progressFill.style.width = (pct * downloadProgressShare) + '%';
-                            statusElement.textContent = 'Downloading... ' + pct + '% (' + (loaded / 1048576).toFixed(1) + ' MB)';
-                        } else {
-                            statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
+
+                    if (downloaded.status === 304) {
+                        var validatedETag = downloaded.etag || cachedETag;
+                        if (validatedETag === cachedETag) {
+                            statusElement.textContent = 'Restoring cached archive...';
+                            progressFill.style.width = '50%';
+                            reg = await VLFS.restoreZipCache(
+                                resourceKey, cachedETag);
                         }
-                    });
-                    statusElement.textContent = eagerDeflate ?
-                        'Extracting archive...' : 'Indexing archive...';
-                    progressFill.style.width = eagerDeflate ? '60%' : '95%';
-                    reg = await VLFS.registerZipBlob(blob, {
-                        eagerDeflate: eagerDeflate,
-                        fingerprint: archiveFingerprint || undefined,
-                        onProgress: eagerDeflate ? function(done, total, path) {
-                            progressFill.style.width =
-                                (60 + Math.round(done / total * 40)) + '%';
-                            statusElement.textContent =
-                                'Extracting (' + done + '/' + total + ') ' +
-                                path.substring(1);
-                        } : null
-                    });
-                    console.log('[vlfs] remote zip blob: ' + blob.size +
-                                ' bytes, loadMode=' + loadMode +
-                                (!eagerDeflate ? ' (Range unavailable)' : ''));
+                        if (!reg) {
+                            console.warn('[vlfs] validated ZIP cache is unavailable; ' +
+                                'downloading a fresh archive');
+                            downloaded = await fetchArchiveWithProgress(url, null, {});
+                        }
+                    }
+
+                    if (!reg) {
+                        statusElement.textContent = 'Caching archive...';
+                        progressFill.style.width = '60%';
+                        reg = await VLFS.registerZipBlob(downloaded.blob, {
+                            eagerDeflate: true,
+                            persistentCache: {
+                                resourceKey: resourceKey,
+                                etag: downloaded.etag
+                            },
+                            onProgress: function(done, total, path) {
+                                progressFill.style.width =
+                                    (60 + Math.round(done / total * 40)) + '%';
+                                statusElement.textContent =
+                                    'Caching (' + done + '/' + total + ') ' +
+                                    path.substring(1);
+                            }
+                        });
+                        console.log('[vlfs] remote ZIP cached from GET: ' +
+                            downloaded.blob.size + ' bytes, etag=' +
+                            (downloaded.etag || '(none)'));
+                    }
+                } else {
+                    var ranges = false, size = -1, archiveETag = '';
+                    try {
+                        var head = await fetch(url, {
+                            method: 'HEAD', cache: 'no-store'
+                        });
+                        if (head.ok) {
+                            ranges = (head.headers.get('Accept-Ranges') || '')
+                                .toLowerCase() === 'bytes';
+                            size = parseInt(
+                                head.headers.get('Content-Length') || '-1', 10);
+                            archiveETag = strongArchiveETag(
+                                head.headers.get('ETag'));
+                        }
+                    } catch (e) {}
+
+                    if (ranges && size > 0) {
+                        statusElement.textContent = 'Reading archive index...';
+                        progressFill.style.width = '5%';
+                        try {
+                            reg = await VLFS.registerZipRemote(url, size, {
+                                eagerDeflate: false,
+                                etag: archiveETag || undefined
+                            });
+                            console.log('[vlfs] remote zip index mounted: ' + url +
+                                        ', ' + size + ' bytes, loadMode=lazy');
+                        } catch (rangeError) {
+                            console.warn('[vlfs] remote ZIP Range mount failed; ' +
+                                         'falling back to a complete Blob:', rangeError);
+                        }
+                    }
+                    if (!reg) {
+                        statusElement.textContent = 'Downloading game archive...';
+                        var fallback = await fetchArchiveWithProgress(
+                            url, function(loaded, total) {
+                                if (total > 0) {
+                                    var pct = Math.round(loaded / total * 100);
+                                    progressFill.style.width = pct * 0.95 + '%';
+                                    statusElement.textContent = 'Downloading... ' +
+                                        pct + '% (' +
+                                        (loaded / 1048576).toFixed(1) + ' MB)';
+                                }
+                            }, {});
+                        statusElement.textContent = 'Indexing archive...';
+                        progressFill.style.width = '95%';
+                        reg = await VLFS.registerZipBlob(fallback.blob, {
+                            eagerDeflate: false
+                        });
+                        console.log('[vlfs] remote zip blob: ' +
+                            fallback.blob.size +
+                            ' bytes, loadMode=lazy (Range unavailable)');
+                    }
                 }
                 console.log('[vlfs] zip registered: ' + reg.paths.length + ' entries, ' +
                             reg.xp3Paths.length + ' xp3');

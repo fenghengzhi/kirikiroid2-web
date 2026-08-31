@@ -6,9 +6,10 @@
  * 落到这里。读路径按需取数据，写路径走内存 overlay。
  *
  * 内存驻留硬约束：不在内存持有任何全量文件数据。
- *  - 能 Blob 则 Blob（下载包/拖拽 File/ZIP stored 条目切片，off-heap）；
- *  - 不能 Blob 则 OPFS（ZIP deflate 条目按加载策略在注册阶段或首次读取时
- *    流式解压落盘；eager 完整缓存以中央目录 SHA-256 指纹跨页面复用）；
+ *  - 能 Blob 则 Blob（下载包/拖拽 File/ZIP 条目切片，off-heap）；
+ *  - 远程 eager ZIP 把 stored/deflate 全部文件按挂载后目录结构写入
+ *    OPFS，以资源 URL + 强 ETag 验证并跨页面复用；
+ *  - 其余 deflate 条目按加载策略在注册阶段或首次读取时流式解压落盘；
  *  - 内存仅限有界块级 LRU 读缓存 + 写 overlay（存档级小文件）。
  *
  * 线程模型：所有方法只在浏览器主线程调用。wasm 主线程经 JSPI（EM_ASYNC_JS）
@@ -25,7 +26,7 @@
     // vlfs-tmp/eN，新页面可能在旧写流收尾期间撞上
     // NoModificationAllowedError。会话隔离保证旧句柄只能锁住旧路径。
     var OPFS_ROOT_DIR = 'vlfs-tmp';
-    var ZIP_CACHE_SCHEMA_VERSION = 1;
+    var ZIP_CACHE_SCHEMA_VERSION = 2;
     var ZIP_CACHE_DIR_PREFIX = 'zip-cache-';
     var ZIP_CACHE_STATE_FILE = 'zip-cache-state.json';
 
@@ -211,7 +212,7 @@
             // 普通临时 spill 不能复用上一 Document 的文件路径：浏览器可能
             // 已经释放 Web Lock，却仍在异步关闭旧 writable stream。为此先
             // 创建当前会话的唯一目录，再回收旧会话；有完成标记的 ZIP 解压
-            // 缓存目录则保留，由 _prepareZipCache 校验后跨页面复用。
+            // 缓存目录则保留，由 state + ETag 校验后跨页面复用。
             try {
                 var root = await navigator.storage.getDirectory();
                 var opfsRoot = await root.getDirectoryHandle(
@@ -267,97 +268,173 @@
             }
         },
 
+        _zipCacheEntryValid(entry) {
+            return entry && typeof entry.path === 'string' &&
+                entry.path !== '/' && normPath(entry.path) === entry.path &&
+                Number.isSafeInteger(entry.size) && entry.size >= 0 &&
+                Number.isInteger(entry.crc32);
+        },
+
         _zipCacheEntriesEqual(a, b) {
             if (!Array.isArray(a) || a.length !== b.length) return false;
             for (var i = 0; i < b.length; i++) {
-                if (!a[i] || a[i].file !== b[i].file ||
-                    a[i].name !== b[i].name || a[i].size !== b[i].size ||
-                    a[i].compSize !== b[i].compSize ||
+                if (!this._zipCacheEntryValid(a[i]) ||
+                    a[i].path !== b[i].path || a[i].size !== b[i].size ||
                     a[i].crc32 !== b[i].crc32) return false;
             }
             return true;
         },
 
+        _zipCacheStateForResource(state, resourceKey) {
+            if (!state || state.version !== ZIP_CACHE_SCHEMA_VERSION ||
+                state.resourceKey !== resourceKey ||
+                typeof state.dirName !== 'string' ||
+                !state.dirName.startsWith(ZIP_CACHE_DIR_PREFIX) ||
+                !Array.isArray(state.entries) || !state.entries.length ||
+                typeof state.etag !== 'string' ||
+                (state.etag && !/^"[^"]*"$/.test(state.etag))) return null;
+            for (var i = 0; i < state.entries.length; i++) {
+                if (!this._zipCacheEntryValid(state.entries[i])) return null;
+            }
+            return state;
+        },
+
+        async getZipCacheValidator(resourceKey) {
+            if (!this._opfsRoot || !resourceKey) return '';
+            var state = this._zipCacheStateForResource(
+                await this._readOpfsJson(this._opfsRoot, ZIP_CACHE_STATE_FILE),
+                resourceKey);
+            return state ? state.etag : '';
+        },
+
+        async _opfsFileHandleAtPath(rootDir, path, create) {
+            path = normPath(path);
+            if (path === '/') throw new Error('vlfs: invalid ZIP cache path');
+            var parts = path.substring(1).split('/');
+            var fileName = parts.pop();
+            var dir = rootDir;
+            for (var i = 0; i < parts.length; i++) {
+                dir = await dir.getDirectoryHandle(parts[i], { create: create });
+            }
+            return await dir.getFileHandle(fileName, { create: create });
+        },
+
+        async _loadZipCacheFiles(dir, entries) {
+            var files = new Map();
+            var lowerPaths = new Set();
+            for (var i = 0; i < entries.length; i++) {
+                var expected = entries[i];
+                var lower = expected.path.toLowerCase();
+                if (lowerPaths.has(lower))
+                    throw new Error('duplicate ZIP cache path: ' + expected.path);
+                lowerPaths.add(lower);
+                var handle = await this._opfsFileHandleAtPath(
+                    dir, expected.path, false);
+                var file = await handle.getFile();
+                if (file.size !== expected.size)
+                    throw new Error(expected.path + ' size ' + file.size +
+                        ' != ' + expected.size);
+                files.set(expected.path, { handle: handle, file: file });
+            }
+            return files;
+        },
+
+        async restoreZipCache(resourceKey, etag) {
+            if (!this._opfsRoot || !resourceKey || !etag) return null;
+            var state = this._zipCacheStateForResource(
+                await this._readOpfsJson(this._opfsRoot, ZIP_CACHE_STATE_FILE),
+                resourceKey);
+            if (!state || state.etag !== etag) return null;
+            try {
+                var dir = await this._opfsRoot.getDirectoryHandle(state.dirName);
+                var files = await this._loadZipCacheFiles(dir, state.entries);
+                var paths = [], xp3Paths = [];
+                for (var i = 0; i < state.entries.length; i++) {
+                    var expected = state.entries[i];
+                    var cached = files.get(expected.path);
+                    this._register(expected.path, {
+                        kind: 'fsa', size: expected.size,
+                        handle: cached.handle, file: cached.file
+                    });
+                    paths.push(expected.path);
+                    if (expected.path.toLowerCase().endsWith('.xp3'))
+                        xp3Paths.push(expected.path);
+                }
+                console.log('[vlfs] ZIP OPFS cache restored: ' + state.dirName);
+                return { paths: paths, xp3Paths: xp3Paths };
+            } catch (e) {
+                console.warn('[vlfs] ZIP OPFS cache restore failed:', e);
+                return null;
+            }
+        },
+
+        async _zipCacheFingerprint(identity, fallbackFingerprint) {
+            if (!identity || !identity.resourceKey) return '';
+            if (!identity.etag) return fallbackFingerprint || '';
+            var input = new TextEncoder().encode(
+                identity.resourceKey + '\u0000' + identity.etag);
+            var digest = new Uint8Array(await crypto.subtle.digest(
+                'SHA-256', input));
+            var hex = '';
+            for (var i = 0; i < digest.length; i++)
+                hex += digest[i].toString(16).padStart(2, '0');
+            return 'etag-' + hex;
+        },
+
         /*
-         * OPFS ZIP 缓存采用“完成标记最后提交”：只有 state 中的指纹、条目
-         * 清单与当前 ZIP 一致，且所有解压文件尺寸都正确，才视为命中。
-         * 新 ZIP 解压失败时不会覆盖旧 state；下次仍可复用上一个完整缓存。
+         * 完整 ZIP 缓存把 stored/deflate 条目都写成挂载后原始路径。
+         * 新目录与旧目录并存，只有全部文件关闭成功后才最后提交 state；
+         * 因此中断、配额不足或解压失败都不会覆盖上一个完整缓存。
          */
-        async _prepareZipCache(fingerprint, expectedEntries,
+        async _prepareZipCache(identity, expectedEntries,
                                fallbackFingerprint) {
-            if (!this._opfsRoot || !expectedEntries.length) return null;
-            var state = await this._readOpfsJson(
-                this._opfsRoot, ZIP_CACHE_STATE_FILE);
-            if (state && state.version === ZIP_CACHE_SCHEMA_VERSION &&
-                (state.fingerprint === fingerprint ||
-                 (fallbackFingerprint &&
-                  state.fingerprint === fallbackFingerprint)) &&
-                typeof state.dirName === 'string' &&
+            if (!this._opfsRoot || !identity || !identity.resourceKey ||
+                !expectedEntries.length) return null;
+            var fingerprint = await this._zipCacheFingerprint(
+                identity, fallbackFingerprint);
+            if (!fingerprint) return null;
+            var state = this._zipCacheStateForResource(
+                await this._readOpfsJson(this._opfsRoot, ZIP_CACHE_STATE_FILE),
+                identity.resourceKey);
+            if (state && state.etag === (identity.etag || '') &&
+                state.fingerprint === fingerprint &&
                 this._zipCacheEntriesEqual(state.entries, expectedEntries)) {
                 try {
                     var hitDir = await this._opfsRoot.getDirectoryHandle(
                         state.dirName);
-                    var hitFiles = new Map();
-                    for (var i = 0; i < expectedEntries.length; i++) {
-                        var expected = expectedEntries[i];
-                        var hitHandle = await hitDir.getFileHandle(expected.file);
-                        var hitFile = await hitHandle.getFile();
-                        if (hitFile.size !== expected.size)
-                            throw new Error(expected.file + ' size ' +
-                                hitFile.size + ' != ' + expected.size);
-                        hitFiles.set(expected.file, hitFile);
-                    }
-                    if (state.fingerprint !== fingerprint) {
-                        // 旧版本只保存“大小+中央目录”指纹。服务器开始提供
-                        // 完整文件 SHA-256 后，校验旧缓存内容清单并原地迁移
-                        // 完成标记，避免为迁移再次解压数 GB ZIP。
-                        state.fingerprint = fingerprint;
-                        await this._writeOpfsJson(
-                            this._opfsRoot, ZIP_CACHE_STATE_FILE, state);
-                    }
+                    var hitFiles = await this._loadZipCacheFiles(
+                        hitDir, expectedEntries);
                     console.log('[vlfs] ZIP OPFS cache hit: ' + fingerprint);
                     return {
                         complete: true, dir: hitDir, dirName: state.dirName,
-                        fingerprint: fingerprint, entries: expectedEntries,
-                        files: hitFiles
+                        resourceKey: identity.resourceKey,
+                        etag: identity.etag || '', fingerprint: fingerprint,
+                        entries: expectedEntries, files: hitFiles
                     };
                 } catch (e) {
                     console.warn('[vlfs] ZIP OPFS cache invalid:', e);
-                    try {
-                        await this._opfsRoot.removeEntry(ZIP_CACHE_STATE_FILE);
-                    } catch (ignored) {}
                 }
             }
 
-            var dirName = ZIP_CACHE_DIR_PREFIX + fingerprint;
-            try {
-                await this._opfsRoot.removeEntry(dirName, { recursive: true });
-            } catch (ignored) {}
-            var cacheDir;
-            try {
-                cacheDir = await this._opfsRoot.getDirectoryHandle(
-                    dirName, { create: true });
-            } catch (e) {
-                // 上一 Document 的失败写流仍占用同名目录时，用唯一后缀绕开；
-                // 完成 state 会记录实际目录名，之后仍可稳定命中。
-                dirName += '-' + makeOpfsSessionName().substring(8);
-                cacheDir = await this._opfsRoot.getDirectoryHandle(
-                    dirName, { create: true });
-            }
+            var dirName = ZIP_CACHE_DIR_PREFIX + fingerprint + '-' +
+                makeOpfsSessionName().substring(8);
+            var cacheDir = await this._opfsRoot.getDirectoryHandle(
+                dirName, { create: true });
             console.log('[vlfs] ZIP OPFS cache miss: ' + fingerprint);
             return {
                 complete: false, dir: cacheDir, dirName: dirName,
-                fingerprint: fingerprint, entries: expectedEntries,
-                files: new Map()
+                resourceKey: identity.resourceKey,
+                etag: identity.etag || '', fingerprint: fingerprint,
+                entries: expectedEntries, files: new Map()
             };
         },
 
         async _commitZipCache(cache) {
             if (!cache || cache.complete || !this._opfsRoot) return;
-            // FileSystemWritableFileStream.close() 提交完成后才写 state；因此
-            // 崩溃、取消或任一条目解压失败都不会产生可命中的完成标记。
             await this._writeOpfsJson(this._opfsRoot, ZIP_CACHE_STATE_FILE, {
                 version: ZIP_CACHE_SCHEMA_VERSION,
+                resourceKey: cache.resourceKey,
+                etag: cache.etag,
                 fingerprint: cache.fingerprint,
                 dirName: cache.dirName,
                 entries: cache.entries
@@ -365,8 +442,7 @@
             cache.complete = true;
             console.log('[vlfs] ZIP OPFS cache committed: ' + cache.fingerprint);
 
-            // 只保留最后一次完整 ZIP 的目录；仍被旧 Document 占用的目录
-            // 删除失败时暂留，后续成功提交时继续回收。
+            // 只保留 state 指向的最后一个完整 ZIP 目录。
             for await (var pair of this._opfsRoot.entries()) {
                 var name = pair[0];
                 if (name === ZIP_CACHE_STATE_FILE ||
@@ -376,6 +452,14 @@
                     await this._opfsRoot.removeEntry(name, { recursive: true });
                 } catch (ignored) {}
             }
+        },
+
+        async _discardZipCache(cache) {
+            if (!cache || cache.complete || !this._opfsRoot) return;
+            try {
+                await this._opfsRoot.removeEntry(
+                    cache.dirName, { recursive: true });
+            } catch (ignored) {}
         },
 
         // ---------- 注册（shell.html 调用） ----------
@@ -585,27 +669,52 @@
         /*
          * 解析 ZIP 中央目录（EOCD/ZIP64），把每个条目注册为 VLFS 文件。
          * ZIP 源可以是本地 Blob，也可以是支持 HTTP Range 的远程 URL。
-         * stored 条目 = 源区间切片，永不解压；deflate 条目通过
-         * DecompressionStream→OPFS 流式解压。opts.eagerDeflate 默认为 true，
-         * 在注册阶段立即准备全部 deflate 条目；设为 false 时在条目首次读取
-         * 时才解压到页面会话 OPFS。opts.onProgress(done, total, path) 仅报告
-         * eager 解压进度。
+         * 普通 stored 条目从源区间切片；deflate 条目通过
+         * DecompressionStream→OPFS 流式解压。远程 eager 指定
+         * opts.persistentCache 时，stored/deflate 会全部按挂载后原始路径
+         * 写入持久 OPFS，使下次启动可以脱离 ZIP 本体直接恢复。
+         * opts.eagerDeflate 默认为 true；设为 false 时 deflate 在首读时
+         * 才解压到页面会话 OPFS。
          * 返回 { paths, xp3Paths }。
          */
         async registerZipBlob(blob, opts) {
             return this._registerZipSource(
-                {
-                    kind: 'blob', size: blob.size, blob: blob,
-                    fingerprint: opts && opts.fingerprint
-                }, opts);
+                { kind: 'blob', size: blob.size, blob: blob }, opts);
         },
 
         async registerZipRemote(url, size, opts) {
             return this._registerZipSource(
                 {
                     kind: 'remote', size: size, url: url,
-                    fingerprint: opts && opts.fingerprint
+                    etag: opts && opts.etag
                 }, opts);
+        },
+
+        async _writeZipEntryToCache(cacheDir, item) {
+            var entry = item.entry;
+            if (entry.dataOffset < 0) await this._resolveZipDataOffset(entry);
+            var handle = await this._opfsFileHandleAtPath(
+                cacheDir, item.path, true);
+            var writable = await handle.createWritable();
+            var source = await this._readZipSourceStream(
+                entry.zipSource, entry.dataOffset, entry.compSize);
+            if (entry.method === 8)
+                source = source.pipeThrough(new DecompressionStream('deflate-raw'));
+            await source.pipeTo(writable);
+            var file = await handle.getFile();
+            if (file.size !== entry.size)
+                throw new Error('vlfs: cached ZIP entry size mismatch ' +
+                    item.path + ' ' + file.size + ' != ' + entry.size);
+            return { handle: handle, file: file };
+        },
+
+        _adoptZipCacheFile(entry, cached) {
+            entry.kind = 'fsa';
+            entry.handle = cached.handle;
+            entry.file = cached.file;
+            entry.zipSource = null;
+            entry.opfsFile = null;
+            entry._spill = null;
         },
 
         async _registerZipSource(source, opts) {
@@ -617,7 +726,9 @@
             // 与旧 findCommonZipPrefix 语义一致：剥离唯一公共顶层目录
             var stripPrefix = opts.stripPrefix;
             if (stripPrefix === undefined) stripPrefix = findCommonZipPrefix(records);
-            var paths = [], xp3Paths = [], deflated = [];
+            var paths = [], xp3Paths = [], items = [], deflated = [];
+            var cacheable = true;
+            var cachePaths = new Set();
             for (var i = 0; i < records.length; i++) {
                 var r = records[i];
                 var inner = stripPrefix ? r.name.substring(stripPrefix.length) : r.name;
@@ -625,6 +736,7 @@
                 var fsPath = normPath(mountPrefix + '/' + inner);
                 if (r.method !== 0 && r.method !== 8) {
                     console.warn('[vlfs] unsupported zip method', r.method, 'for', r.name);
+                    cacheable = false;
                 }
                 var entry = this._register(fsPath, {
                     kind: 'zip', size: r.uncompSize, zipSource: source,
@@ -634,47 +746,65 @@
                     opfsFile: null,      // deflate 落盘后的 File
                     _spill: null         // 进行中的落盘 Promise（并发去重）
                 });
+                var lowerPath = fsPath.toLowerCase();
+                if (cachePaths.has(lowerPath)) cacheable = false;
+                cachePaths.add(lowerPath);
+                var item = {
+                    path: fsPath, entry: entry, record: r
+                };
+                items.push(item);
                 if (r.method === 8) {
-                    deflated.push({
-                        path: fsPath, entry: entry, record: r,
-                        recordIndex: i
-                    });
+                    deflated.push(item);
                 }
                 paths.push(fsPath);
                 if (fsPath.toLowerCase().endsWith('.xp3')) xp3Paths.push(fsPath);
             }
             if (eagerDeflate) {
-                var expectedCacheEntries = deflated.map(function (item) {
+                var expectedCacheEntries = items.map(function (item) {
                     return {
-                        file: 'e' + item.recordIndex,
-                        name: item.record.name,
+                        path: item.path,
                         size: item.record.uncompSize,
-                        compSize: item.record.compSize,
                         crc32: item.record.crc32
                     };
                 });
-                var zipCache = await this._prepareZipCache(
-                    parsed.fingerprint, expectedCacheEntries,
-                    parsed.fallbackFingerprint);
-                if (zipCache) {
-                    for (var k = 0; k < deflated.length; k++) {
-                        var cacheName = expectedCacheEntries[k].file;
-                        deflated[k].entry.opfsCacheDir = zipCache.dir;
-                        deflated[k].entry.opfsCacheName = cacheName;
-                        if (zipCache.complete)
-                            deflated[k].entry.opfsFile = zipCache.files.get(cacheName);
+                var zipCache = cacheable ? await this._prepareZipCache(
+                    opts.persistentCache, expectedCacheEntries,
+                    parsed.fingerprint) : null;
+                if (zipCache && !zipCache.complete) {
+                    try {
+                        for (var k = 0; k < items.length; k++) {
+                            if (opts.onProgress)
+                                opts.onProgress(k, items.length, items[k].path);
+                            zipCache.files.set(items[k].path,
+                                await this._writeZipEntryToCache(
+                                    zipCache.dir, items[k]));
+                        }
+                        await this._commitZipCache(zipCache);
+                    } catch (cacheError) {
+                        console.warn('[vlfs] complete ZIP cache failed; ' +
+                            'using session storage:', cacheError);
+                        await this._discardZipCache(zipCache);
+                        zipCache = null;
                     }
                 }
-                // eager 模式顺序准备全部 deflate 条目；完整 OPFS 缓存命中时
-                // _ensureOpfsSpill 直接返回，未命中则全部成功后提交完成标记。
-                for (var j = 0; j < deflated.length; j++) {
-                    if (opts.onProgress)
-                        opts.onProgress(j, deflated.length, deflated[j].path);
-                    await this._ensureOpfsSpill(deflated[j].entry);
+                if (zipCache && zipCache.complete) {
+                    for (var m = 0; m < items.length; m++) {
+                        this._adoptZipCacheFile(
+                            items[m].entry, zipCache.files.get(items[m].path));
+                    }
+                    if (opts.onProgress && items.length)
+                        opts.onProgress(items.length, items.length, '');
+                } else {
+                    // 无完整持久缓存时保留原有行为：仅把 deflate
+                    // 条目准备到页面会话 OPFS，stored 仍切片读 ZIP。
+                    for (var j = 0; j < deflated.length; j++) {
+                        if (opts.onProgress)
+                            opts.onProgress(j, deflated.length, deflated[j].path);
+                        await this._ensureOpfsSpill(deflated[j].entry);
+                    }
+                    if (opts.onProgress && deflated.length)
+                        opts.onProgress(deflated.length, deflated.length, '');
                 }
-                await this._commitZipCache(zipCache);
-                if (opts.onProgress && deflated.length)
-                    opts.onProgress(deflated.length, deflated.length, '');
             }
             return { paths: paths, xp3Paths: xp3Paths };
         },
@@ -991,19 +1121,18 @@
         /*
          * deflate 条目流式解压落 OPFS（恒定内存），之后随机读 OPFS。
          * eager 模式在 ZIP 注册阶段对全部 deflate 条目调用本函数；lazy
-         * 模式在条目首次读取时调用。DEFLATE 不可随机访问是格式约束；lazy
-         * spill 使用页面会话目录，eager 的 ZIP 完整缓存使用由中央目录
-         * SHA-256 指纹标识的持久目录。
+         * 模式在条目首次读取时调用。本函数只写页面会话目录；
+         * 可跨页面恢复的完整缓存由 _writeZipEntryToCache 单独构建。
          */
         async _ensureOpfsSpill(e) {
             if (e.opfsFile) return;
             if (e._spill) return e._spill;
-            var targetDir = e.opfsCacheDir || this._opfsDir;
+            var targetDir = this._opfsDir;
             if (!targetDir) throw new Error('vlfs: OPFS unavailable for deflate entry');
             var self = this;
             e._spill = (async function () {
                 if (e.dataOffset < 0) await self._resolveZipDataOffset(e);
-                var name = e.opfsCacheName || ('e' + e.id);
+                var name = 'e' + e.id;
                 var fh = await targetDir.getFileHandle(name, { create: true });
                 var w = await fh.createWritable();
                 var src = await self._readZipSourceStream(
@@ -1011,11 +1140,6 @@
                 await src.pipeThrough(new DecompressionStream('deflate-raw')).pipeTo(w);
                 var f = await fh.getFile();
                 if (f.size !== e.size) {
-                    if (e.opfsCacheDir) {
-                        try { await targetDir.removeEntry(name); } catch (ignored) {}
-                        throw new Error('vlfs: spill size mismatch ' + name + ' ' +
-                            f.size + ' != ' + e.size);
-                    }
                     console.warn('[vlfs] spill size mismatch', name,
                         f.size, '!=', e.size);
                     e.size = f.size;
@@ -1027,19 +1151,35 @@
 
         // ---------- ZIP 中央目录解析 ----------
 
+        _validateZipRangeResponse(source, response, pos, len) {
+            if (source.etag) {
+                var responseETag = (response.headers.get('ETag') || '').trim();
+                if (responseETag !== source.etag)
+                    throw new Error('vlfs: ZIP changed while reading ranges');
+            }
+            var contentRange = response.headers.get('Content-Range') || '';
+            var match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange);
+            if (!match || Number(match[1]) !== pos ||
+                Number(match[2]) < pos + len - 1 ||
+                Number(match[3]) !== source.size)
+                throw new Error('vlfs: invalid ZIP Content-Range ' + contentRange);
+        },
+
         async _readZipSourceBytes(source, pos, len) {
             if (source.kind === 'blob') {
                 var bbuf = await source.blob.slice(pos, pos + len).arrayBuffer();
                 return new Uint8Array(bbuf);
             }
             var resp = await fetch(source.url, {
-                headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
+                headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) },
+                cache: 'no-store'
             });
             // registerZipRemote 只用于真正的 Range 挂载。若服务器忽略 Range
             // 返回 200，交给 shell 回退成单个完整 Blob，避免后续每次条目读取
             // 都重复下载整个 ZIP。
             if (resp.status !== 206)
                 throw new Error('zip range fetch ' + source.url + ': ' + resp.status);
+            this._validateZipRangeResponse(source, resp, pos, len);
             var rbuf = await resp.arrayBuffer();
             if (rbuf.byteLength < len)
                 throw new Error('short zip range: ' + rbuf.byteLength + ' < ' + len);
@@ -1050,10 +1190,12 @@
             if (source.kind === 'blob')
                 return source.blob.slice(pos, pos + len).stream();
             var resp = await fetch(source.url, {
-                headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
+                headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) },
+                cache: 'no-store'
             });
             if (resp.status !== 206)
                 throw new Error('zip range fetch ' + source.url + ': ' + resp.status);
+            this._validateZipRangeResponse(source, resp, pos, len);
             if (resp.body) return resp.body;
             return (await resp.blob()).stream();
         },
@@ -1147,8 +1289,7 @@
             }
             return {
                 records: records,
-                fingerprint: source.fingerprint || fingerprint,
-                fallbackFingerprint: source.fingerprint ? fingerprint : null
+                fingerprint: fingerprint
             };
         },
 

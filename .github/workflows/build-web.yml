@@ -145,6 +145,7 @@ jobs:
         run: |
           set -o pipefail
           cmake --build out/web/release 2>&1 | tee /tmp/cmake-build.log
+          node tests/web/vlfs_zip_cache.test.mjs
           node tests/web/web_release_asset_pair.test.mjs out/web/release
 
       - name: Upload logs on failure

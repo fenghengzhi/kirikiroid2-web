@@ -9,6 +9,7 @@ const read = name => fs.readFileSync(path.join(buildDir, name));
 const html = read("index.html").toString("utf8");
 const glue = read("index.js").toString("utf8");
 const serviceWorker = read("sw.js").toString("utf8");
+const vlfs = read("vlfs.js").toString("utf8");
 const wasm = read("index.wasm");
 
 const htmlVersion = html.match(/BUILD_VERSION\s*=\s*["']([^"']+)["']/)?.[1];
@@ -37,11 +38,23 @@ assert.match(
     "Force Update does not navigate to its cache-busted URL");
 
 assert.match(serviceWorker, /ENGINE_ASSET_SUFFIX\s*=/);
+assert.match(
+    serviceWorker,
+    /request\.cache\s*===\s*["']no-store["']/,
+    "Service Worker does not bypass CacheStorage for OPFS-managed archives");
 for(const asset of ["index.js", "index.wasm", "vlfs.js", "assets.zip"]) {
     assert.ok(
         serviceWorker.includes(`'./${asset}' + ENGINE_ASSET_SUFFIX`),
         `Service Worker does not precache versioned ${asset}`);
 }
+assert.match(html, /["']If-None-Match["']\s*:/,
+    "HTML does not conditionally validate the complete ZIP cache");
+assert.match(html, /VLFS\.restoreZipCache\(/,
+    "HTML does not restore a 304-validated ZIP from OPFS");
+assert.match(vlfs, /ZIP_CACHE_SCHEMA_VERSION\s*=\s*2/,
+    "VLFS complete ZIP cache schema is not enabled");
+assert.match(vlfs, /_writeZipEntryToCache\(/,
+    "VLFS does not persist all ZIP entry methods into OPFS");
 
 const module = new WebAssembly.Module(wasm);
 const continuationImports = WebAssembly.Module.imports(module).filter(

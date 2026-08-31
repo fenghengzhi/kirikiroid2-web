@@ -34,9 +34,10 @@ _content_sha256_lock = threading.Lock()
 
 
 def content_sha256(real_path):
-    """Return a SHA-256 cached by the file's path, size, and mtime."""
+    """Return a SHA-256 cached by stable file identity and change metadata."""
     stat = os.stat(real_path)
-    cache_key = (real_path, stat.st_size, stat.st_mtime_ns)
+    cache_key = (real_path, stat.st_dev, stat.st_ino, stat.st_size,
+                 stat.st_mtime_ns, stat.st_ctime_ns)
     with _content_sha256_lock:
         digest = _content_sha256_cache.get(cache_key)
         if digest is not None:
@@ -74,10 +75,17 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers',
+                         'If-None-Match, Range')
         self.send_header('Access-Control-Expose-Headers',
                          'Accept-Ranges, Content-Length, Content-Range, '
                          'ETag')
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def do_GET(self):
         if xp3_real_path and self.path == '/data.xp3':
