@@ -34,24 +34,18 @@ set(BASE_HEADERS_DIR
         ${BASE_PATH}/impl
 )
 
-if(EMSCRIPTEN)
-    list(REMOVE_ITEM BASE_SOURCE_FILES ${BASE_PATH}/7zArchive.cpp)
-endif()
-
 add_library(${PROJECT_NAME} STATIC ${BASE_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_visual_module core_plugin_module core_environ_module core_extension_module core_sound_module core_utils_module)
 
-if(EMSCRIPTEN)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR2_NO_7ZIP)
-endif()
-
+find_package(7zip CONFIG REQUIRED)
 find_package(unrar CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(cocos2dx CONFIG REQUIRED)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    7zip::7zip
     unrar::unrar
     LibArchive::LibArchive
     zstd::libzstd

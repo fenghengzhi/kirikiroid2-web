@@ -50,7 +50,7 @@
 
 ## 调试注意事项
 - 不要用单独的 XP3 文件测试 — 不完整的 XP3 集合会导致初始化失败，掩盖真正的 bug
-- 浏览器自动化：Codex 使用 `browser:control-in-app-browser` skill 控制应用内浏览器，并遵循 `.codex/skills/krkr2-debug/SKILL.md`；不要使用或假定存在 `playwright-cli`。测试游戏输入优先使用当前 Browser skill 文档支持的鼠标点击接口；不要跨调用拆分触摸 down/up。判断输入是否进入引擎前，先在页面安装 capture listener 核对浏览器事件计数
+- 浏览器自动化：使用 `playwright-cli` skill，并遵循 `.codex/skills/krkr2-debug/SKILL.md`。测试游戏输入优先使用 `playwright-cli click` 或在单次 `run-code` 中完成鼠标点击；不要跨调用拆分触摸 down/up。判断输入是否进入引擎前，先在页面安装 capture listener 核对浏览器事件计数
 - C++ 日志（`spdlog`/`printf`/`fprintf(stderr)`）均输出到浏览器控制台
 - WASM 引擎每秒可能产生数百条日志，浏览器的近期 console 视图可能遗漏初始化日志，不能单独作为诊断依据。按 `krkr2-debug` skill 在导航前注入捕获脚本，再分批读取 `window._filteredLogs`
 - URL 参数：`?xp3=file.xp3` 加载单个 XP3，`?game=file.zip` 加载 ZIP 包。注意不要混用

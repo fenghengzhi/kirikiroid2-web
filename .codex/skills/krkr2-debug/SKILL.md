@@ -1,9 +1,9 @@
 ---
 name: krkr2-debug
-description: 指导 Codex 中的 KrKr2 WebAssembly 完整调试工作流，从构建、服务器到应用内浏览器。当用户需要调试、测试或排查运行时环境的端到端问题时使用。
+description: 指导 KrKr2 WebAssembly 的完整调试工作流，从构建、服务器到 playwright-cli 浏览器自动化。当用户需要调试、测试或排查运行时环境的端到端问题时使用。
 ---
 
-# KrKr2 调试工作流（Codex）
+# KrKr2 调试工作流
 
 ## 编译
 
@@ -15,9 +15,22 @@ description: 指导 Codex 中的 KrKr2 WebAssembly 完整调试工作流，从�
 
 ## 浏览器自动化调试
 
-服务器启动后，使用 Codex 的 `browser:control-in-app-browser` skill 控制应用内浏览器。不要使用或假定存在 `playwright-cli`，也不要把 Claude 版 `krkr2-debug` 的 CLI 命令移植到 Codex 工作流。
+服务器启动后，统一使用 `playwright-cli` 控制浏览器。开始操作前完整读取 [playwright-cli skill](../playwright-cli/SKILL.md)，并先确认命令可用：
 
-开始浏览器操作前必须完整读取 `browser:control-in-app-browser` skill，并严格按它完成运行时初始化、浏览器选择以及浏览器自身文档读取。浏览器连接和 tab binding 应在同一调试任务内复用；tab 失效时重新取得 tab，不要重复初始化浏览器运行时。
+```bash
+playwright-cli --version
+```
+
+如果只有项目本地版本，先用 `npx --no-install playwright --version` 确认，再把下文命令中的 `playwright-cli` 替换为 `npx playwright cli`。
+
+同一调试任务固定复用具名 session `krkr2`，避免命令连接到错误的浏览器实例：
+
+```bash
+playwright-cli -s=krkr2 open
+playwright-cli list
+```
+
+session 失效时重新 `open`；任务结束后执行 `playwright-cli -s=krkr2 close`。
 
 ### URL 参数
 
@@ -33,70 +46,102 @@ WASM 引擎每秒可能产生数百条控制台日志。浏览器提供的近期
 
 正确流程：
 
-1. 先取得应用内浏览器和一个空白 tab。
-2. 按该浏览器完整文档提供的初始化脚本接口，在导航前注入日志捕获脚本。
-3. 再导航到目标 KrKr2 URL。
-4. 通过 tab 的页面执行接口分批读取 `window._filteredLogs`。
-5. 截图并检查可见页面状态；输入问题还要验证浏览器事件是否抵达页面。
+1. 用 `playwright-cli -s=krkr2 open` 创建空白页面。
+2. 在导航前用 `run-code` 调用 `page.addInitScript` 安装日志捕获脚本。
+3. 用 `goto` 导航到目标 KrKr2 URL。
+4. 用 `eval` 分批读取 `window._filteredLogs`。
+5. 用 `snapshot` 和 `screenshot` 检查可见页面状态；输入问题还要验证浏览器事件是否抵达页面。
 
-注入脚本的核心逻辑如下；具体调用方法必须使用当前浏览器文档中支持的 API，不要包装成 `playwright-cli run-code`：
+导航前执行：
 
-```js
-window._allLogCount = 0;
-window._filteredLogs = [];
+```bash
+playwright-cli -s=krkr2 run-code "async page => {
+  await page.addInitScript(() => {
+    window._allLogCount = 0;
+    window._filteredLogs = [];
 
-const original = {
-  log: console.log,
-  warn: console.warn,
-  error: console.error,
-};
+    const original = {
+      log: console.log,
+      warn: console.warn,
+      error: console.error,
+    };
 
-const capture = (level, args) => {
-  window._allLogCount++;
-  const message = args
-    .map(value => typeof value === "string" ? value : String(value))
-    .join(" ");
+    const capture = (level, args) => {
+      window._allLogCount++;
+      const message = args
+        .map(value => typeof value === 'string' ? value : String(value))
+        .join(' ');
 
-  if (!message.includes("isExistentStorage") &&
-      !message.includes("UpdateToDrawDevice") &&
-      !message.includes("InternalComplete2") &&
-      !message.includes("DrawCompleted") &&
-      !message.includes("BasicDrawDevice::Show") &&
-      !message.includes("_TVPDeliverContinuousEvent") &&
-      !message.includes("DrawDevice::Update")) {
-    window._filteredLogs.push(`[${level}] ${message}`);
-  }
-};
+      if (!message.includes('isExistentStorage') &&
+          !message.includes('UpdateToDrawDevice') &&
+          !message.includes('InternalComplete2') &&
+          !message.includes('DrawCompleted') &&
+          !message.includes('BasicDrawDevice::Show') &&
+          !message.includes('_TVPDeliverContinuousEvent') &&
+          !message.includes('DrawDevice::Update')) {
+        window._filteredLogs.push('[' + level + '] ' + message);
+      }
+    };
 
-console.log = function(...args) {
-  capture("LOG", args);
-  original.log.apply(console, args);
-};
-console.warn = function(...args) {
-  capture("WARN", args);
-  original.warn.apply(console, args);
-};
-console.error = function(...args) {
-  capture("ERR", args);
-  original.error.apply(console, args);
-};
+    console.log = function(...args) {
+      capture('LOG', args);
+      original.log.apply(console, args);
+    };
+    console.warn = function(...args) {
+      capture('WARN', args);
+      original.warn.apply(console, args);
+    };
+    console.error = function(...args) {
+      capture('ERR', args);
+      original.error.apply(console, args);
+    };
+  });
+}"
+
+playwright-cli -s=krkr2 goto "http://localhost:端口/index.html?game=game.zip"
 ```
 
 过滤条件必须根据问题调整：调试 storage 时不要过滤 storage 日志；调试渲染时可过滤高频绘制日志。日志应分批取回，避免一次返回过长内容。
 
+```bash
+playwright-cli -s=krkr2 --raw eval "JSON.stringify({all: window._allLogCount, pending: window._filteredLogs.length})"
+playwright-cli -s=krkr2 --raw eval "JSON.stringify(window._filteredLogs.splice(0, 200))"
+```
+
 ### 输入事件调试
 
-测试游戏输入时，优先使用浏览器文档支持的鼠标点击接口。不要跨调用拆分触摸 down/up，也不要假定 tab 启用了 touch context。
+测试游戏输入时优先使用 `click`，或在一次 `run-code` 中完成 `page.mouse.click(x, y)`。不要把触摸 down/up 拆成多个 CLI 调用；需要触摸上下文时，用 `open --mobile` 或 `open --device=...` 创建新 session。
 
 判断输入是否进入引擎前，先在页面上安装 capture listener，分别统计 `pointerdown`、`pointerup`、`mousedown`、`mouseup` 和 `click`。只有浏览器层事件计数正常后，才继续排查 KrKr2 的 Window、DrawDevice 和脚本事件链。
+
+```bash
+playwright-cli -s=krkr2 run-code "async page => {
+  await page.evaluate(() => {
+    if (window._krkrInputCaptureInstalled) return;
+    window._krkrInputCaptureInstalled = true;
+    const types = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click'];
+    window._inputEventCounts = Object.fromEntries(types.map(type => [type, 0]));
+    for (const type of types) {
+      window.addEventListener(type, () => window._inputEventCounts[type]++, true);
+    }
+  });
+}"
+
+playwright-cli -s=krkr2 snapshot
+playwright-cli -s=krkr2 click e15
+# canvas 无可用 ref 时，在一次调用中完成坐标点击
+playwright-cli -s=krkr2 run-code "async page => { await page.mouse.click(400, 300); }"
+playwright-cli -s=krkr2 --raw eval "JSON.stringify(window._inputEventCounts)"
+```
 
 ### 典型调试流程
 
 1. 将完整游戏 ZIP 或所需 XP3 放到构建输出目录；不要用不完整的单独 XP3 集合测试游戏初始化。
 2. 使用 `krkr2-server` 启动带跨域隔离响应头的服务器。
-3. 按 Browser skill 初始化并选择应用内浏览器，完整读取其文档。
-4. 创建空白 tab，并在导航前安装日志捕获脚本。
-5. 导航到 `http://localhost:端口/index.html?...`。
-6. 等待页面达到目标状态，检查页面可见状态并截图。
-7. 分批读取关键日志；需要输入时优先发送鼠标点击并检查 capture 计数器。
-8. 将浏览器层、WASM 日志和引擎调用链证据分开记录，避免把浏览器自动化问题误判为引擎回归。
+3. 完整读取 `playwright-cli` skill，确认命令可用并打开具名 session `krkr2`。
+4. 在空白页面通过 `page.addInitScript` 安装日志捕获脚本。
+5. 用 `goto` 导航到 `http://localhost:端口/index.html?...`。
+6. 用 `snapshot`、`screenshot` 和页面状态断言确认已达到目标状态。
+7. 用 `eval` 分批读取关键日志；需要输入时发送鼠标点击并检查 capture 计数器。
+8. 将 CLI 自动化层、WASM 日志和引擎调用链证据分开记录，避免把自动化问题误判为引擎回归。
+9. 调试结束后关闭 `krkr2` session。

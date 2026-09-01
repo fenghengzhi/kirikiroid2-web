@@ -9,11 +9,6 @@
 
 extern "C" const IID IID_IUnknown = {0, 0, 0, {0}};
 
-tTVPArchive *TVPOpen7ZArchive(const ttstr &name, tTJSBinaryStream *st,
-                              bool normalizeFileName) {
-    return nullptr;
-}
-
 void TVPLoadBPG(void *formatdata, void *callbackdata,
                 tTVPGraphicSizeCallback sizecallback,
                 tTVPGraphicScanLineCallback scanlinecallback,
