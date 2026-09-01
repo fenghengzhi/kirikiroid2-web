@@ -112,6 +112,7 @@ find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(oniguruma CONFIG REQUIRED)
 find_package(uchardet CONFIG REQUIRED)
+find_package(7zip CONFIG REQUIRED)
 find_package(unrar CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
@@ -187,6 +188,7 @@ target_link_libraries(krkr2_wasmtime_guest PRIVATE
     $<TARGET_FILE:tjs2>
     minizip
     uchardet::libuchardet
+    7zip::7zip
     unrar::unrar
     LibArchive::LibArchive
     zstd::libzstd
