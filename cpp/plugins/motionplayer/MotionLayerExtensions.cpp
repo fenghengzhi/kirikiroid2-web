@@ -76,12 +76,12 @@ namespace motion {
         }
 
         PointList_guess readMeshPoints_guess(ncbPropAccessor &points) {
-            const tjs_int coordinateCount = points.GetCount();
+            const tjs_int coordinateCount = points.GetArrayCount();
             PointList_guess result;
 
             // This unsigned gate is deliberately not expressed as
-            // coordinateCount >= 2.  Negative custom GetCount results enter
-            // the allocation path in the references as well.
+            // coordinateCount >= 2. Negative custom count-property results
+            // enter the allocation path in the references as well.
             if(static_cast<std::uint32_t>(coordinateCount) + 1u >= 3u) {
                 const tjs_int pointCount = coordinateCount / 2;
                 result.reserve(static_cast<std::size_t>(pointCount));
