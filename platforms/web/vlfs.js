@@ -967,7 +967,7 @@
             var f = this._fds.get(fd);
             if (!f) return null;
             var e = f.entry;
-            if (e.size >= 0 && f.pos >= e.size) return new Uint8Array(0); // EOF 同步返回
+            if (len === 0 || (e.size >= 0 && f.pos >= e.size)) return new Uint8Array(0);
             if (e.kind === 'overlay') {
                 var n = Math.min(len, e.size - f.pos);
                 var out = e.data.subarray(f.pos, f.pos + n);
@@ -979,11 +979,17 @@
             var n2 = Math.min(len, e.size - f.pos);
             var first = Math.floor(f.pos / BLOCK_SIZE);
             var last = Math.floor((f.pos + n2 - 1) / BLOCK_SIZE);
+            var blocks = [];
             for (var b = first; b <= last; b++) {
-                if (!this._blockCache.has(e.id + '@' + b)) { this._statsMiss++; return null; }
+                var block = this._getCachedBlock(e.id + '@' + b);
+                if (block === null) { this._statsMiss++; return null; }
+                blocks.push(block);
             }
             var out2 = new Uint8Array(n2);
-            this._assembleFromBlocks(e, f.pos, out2);
+            var done = 0;
+            for (var i = 0; i < blocks.length; i++) {
+                done += this._copyBlock(blocks[i], (f.pos + done) % BLOCK_SIZE, out2, done);
+            }
             f.pos += n2;
             this._statsHit++;
             return out2;
@@ -992,54 +998,65 @@
         async read(fd, len) {
             var f = this._fds.get(fd);
             if (!f) throw new Error('vlfs: bad fd ' + fd);
+            if (len === 0) return new Uint8Array(0);
             var e = f.entry;
             if (e.kind === 'fsa' && e.size < 0) {
                 e.file = await e.handle.getFile();
                 e.size = e.file.size;
             }
-            if (f.pos >= e.size) return new Uint8Array(0);
-            var n = Math.min(len, e.size - f.pos);
+            var pos = f.pos;
+            if (pos >= e.size) return new Uint8Array(0);
+            var n = Math.min(len, e.size - pos);
             var out;
             if (e.kind === 'overlay') {
-                out = e.data.subarray(f.pos, f.pos + n);
+                out = e.data.subarray(pos, pos + n);
             } else if (n >= DIRECT_READ_THRESHOLD) {
                 // 大读直读源，不污染块缓存
-                out = await this._readSource(e, f.pos, n);
+                out = await this._readSource(e, pos, n);
             } else {
-                var first = Math.floor(f.pos / BLOCK_SIZE);
-                var last = Math.floor((f.pos + n - 1) / BLOCK_SIZE);
-                for (var b = first; b <= last; b++) await this._ensureBlock(e, b);
                 out = new Uint8Array(n);
-                this._assembleFromBlocks(e, f.pos, out);
+                var done = 0;
+                while (done < n) {
+                    var b = Math.floor((pos + done) / BLOCK_SIZE);
+                    var block = await this._getBlock(e, b);
+                    // 当前读取持有数据引用；缓存可在 await 期间被其它读取淘汰。
+                    done += this._copyBlock(block, (pos + done) % BLOCK_SIZE, out, done);
+                }
             }
-            f.pos += n;
+            f.pos = pos + n;
             return out;
         },
 
         // ---------- 内部：块缓存与数据源 ----------
 
-        _assembleFromBlocks(e, pos, out) {
-            var done = 0;
-            while (done < out.length) {
-                var b = Math.floor((pos + done) / BLOCK_SIZE);
-                var block = this._blockCache.get(e.id + '@' + b);
-                // LRU touch
-                this._blockCache.delete(e.id + '@' + b);
-                this._blockCache.set(e.id + '@' + b, block);
-                var off = (pos + done) - b * BLOCK_SIZE;
-                var n = Math.min(out.length - done, block.length - off);
-                out.set(block.subarray(off, off + n), done);
-                done += n;
-            }
+        // 只从调用方持有的块复制，组装过程不再查询或修改缓存。
+        _copyBlock(block, off, out, done) {
+            var n = Math.min(out.length - done, BLOCK_SIZE - off);
+            if (off + n > block.length) throw new Error('vlfs: short block read');
+            out.set(block.subarray(off, off + n), done);
+            return n;
         },
 
-        async _ensureBlock(e, blockIdx) {
+        _getCachedBlock(key) {
+            var block = this._blockCache.get(key);
+            if (block === undefined) return null;
+            // LRU touch；这里只放回已取得的有效数据。
+            this._blockCache.delete(key);
+            this._blockCache.set(key, block);
+            return block;
+        },
+
+        async _getBlock(e, blockIdx) {
             var key = e.id + '@' + blockIdx;
-            if (this._blockCache.has(key)) return;
+            var cached = this._getCachedBlock(key);
+            if (cached !== null) return cached;
             var off = blockIdx * BLOCK_SIZE;
             var n = Math.min(BLOCK_SIZE, e.size - off);
             var data = await this._readSource(e, off, n);
-            if (this._blockCache.has(key)) return; // 并发取块去重（后到丢弃）
+            if (!(data instanceof Uint8Array) || data.length !== n)
+                throw new Error('vlfs: short or invalid block read ' + key + ' (expected ' + n + ' bytes)');
+            cached = this._getCachedBlock(key);
+            if (cached !== null) return cached; // 并发取块去重（后到丢弃）
             this._blockCache.set(key, data);
             this._blockCacheBytes += data.length;
             while (this._blockCacheBytes > BLOCK_CACHE_BUDGET) {
@@ -1047,6 +1064,7 @@
                 this._blockCacheBytes -= this._blockCache.get(oldest).length;
                 this._blockCache.delete(oldest);
             }
+            return data;
         },
 
         async _readSource(e, pos, len) {

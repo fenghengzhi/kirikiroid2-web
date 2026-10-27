@@ -158,6 +158,7 @@ jobs:
             test -f out/web/release/index.wasm.map
           fi
           node tests/web/vlfs_zip_cache.test.mjs
+          node tests/web/vlfs_block_cache.test.mjs out/web/release/vlfs.js
           node tests/web/web_release_asset_pair.test.mjs out/web/release
 
       - name: Upload logs on failure
