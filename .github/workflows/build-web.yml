@@ -33,7 +33,11 @@ jobs:
       EMSDK: ${{ github.workspace }}/.emsdk
       BUILD_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
       BUILD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-      KRKR2_WEB_SOURCE_MAP: ${{ (github.event_name == 'workflow_run' && startsWith(github.event.workflow_run.head_branch, 'dev/')) || (github.event_name != 'workflow_run' && startsWith(github.ref_name, 'dev/')) }}
+      KRKR2_WEB_SOURCE_MAP: >-
+        ${{ (github.event_name == 'workflow_run' &&
+             (github.event.workflow_run.head_branch == 'web' || startsWith(github.event.workflow_run.head_branch, 'dev/'))) ||
+            (github.event_name != 'workflow_run' &&
+             (github.ref_name == 'web' || startsWith(github.ref_name, 'dev/'))) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,6 +154,9 @@ jobs:
         run: |
           set -o pipefail
           cmake --build out/web/release 2>&1 | tee /tmp/cmake-build.log
+          if [ "$KRKR2_WEB_SOURCE_MAP" = "true" ]; then
+            test -f out/web/release/index.wasm.map
+          fi
           node tests/web/vlfs_zip_cache.test.mjs
           node tests/web/web_release_asset_pair.test.mjs out/web/release
 
@@ -217,10 +224,7 @@ jobs:
           cp out/web/release/index.html /tmp/cloudflare-pages/
           cp out/web/release/index.js /tmp/cloudflare-pages/
           cp out/web/release/index.wasm /tmp/cloudflare-pages/
-          if [ "$KRKR2_WEB_SOURCE_MAP" = "true" ]; then
-            test -f out/web/release/index.wasm.map
-            cp out/web/release/index.wasm.map /tmp/cloudflare-pages/
-          fi
+          # Source maps are retained in GitHub artifacts only.
           # VirtualLazyFS: index.data(--preload-file) 已移除，
           # UI 资源改为 assets.zip + vlfs.js 懒加载
           cp out/web/release/vlfs.js /tmp/cloudflare-pages/
