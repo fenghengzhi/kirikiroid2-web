@@ -157,7 +157,9 @@ namespace motion {
                 }
             }
 
-            auto *texture = TVPGetRenderManager()->CreateTexture2D(
+            auto *renderManager =
+                render_backend_guess::getPrivateOpenGLRenderManager_guess();
+            auto *texture = renderManager->CreateTexture2D(
                 bgra, signedW32(pitch),
                 static_cast<tjs_uint>(width), static_cast<tjs_uint>(height),
                 TVPTextureFormat::RGBA, RENDER_CREATE_TEXTURE_FLAG_STATIC);
