@@ -2498,10 +2498,10 @@ void tTJSNI_WaveSoundBuffer::Clear() {
     Thread->Interrupt();
 #ifdef __EMSCRIPTEN__
     {
-        // A queued continuation owns a dispatch reference to this object. The
-        // generation check prevents it from starting after this point; this CS
-        // closes the race where it already passed that check and is executing
-        // Android Decode@0x967D74 against FilterOutput.
+        // Main-thread fills hold a dispatch reference; decoder fills were
+        // drained by Interrupt(). The generation check rejects stale work;
+        // this CS closes the race where it already passed that check and is
+        // executing Android Decode@0x967D74 against FilterOutput.
         tTJSCriticalSectionHolder asyncDecodeHolder(AsyncDecodeCS);
 #endif
     if(LoopManager)
@@ -2620,7 +2620,10 @@ void tTJSNI_WaveSoundBuffer::FillL2BufferAsync(
     if(!fromdecodethread && Thread->GetRunning())
         Thread->SetPriority(ttpHighest);
 
-    iTJSDispatch2 *keepAlive = Owner;
+    // TJS reference counts are not atomic. Decoder fills hold OneLoopCS
+    // until completion; Interrupt() drains them before owner teardown. Only
+    // main-thread fills need a dispatch reference across the continuation.
+    iTJSDispatch2 *keepAlive = fromdecodethread ? nullptr : Owner;
     if(keepAlive)
         keepAlive->AddRef();
 
@@ -2757,7 +2760,7 @@ void tTJSNI_WaveSoundBuffer::FillL2BufferAsync(
             }
         }
 
-        // completeDeferred already owns the dispatch reference and releases it
+        // completeDeferred releases a main-thread fill's dispatch reference
         // on the Cocos thread after the caller's continuation has run.
         context->Completion(committed);
     });
