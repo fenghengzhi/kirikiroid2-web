@@ -496,8 +496,11 @@ tTVPScenarioCacheItem *TVPGetScenario(const ttstr &storagename, bool isstring) {
 // tTJSNI_KAGParser : KAGParser TJS native instance
 //---------------------------------------------------------------------------
 // KAGParser is implemented as a TJS native class/object
-tTJSNI_KAGParser::tTJSNI_KAGParser() {
+tTJSNI_KAGParser::tTJSNI_KAGParser() : tTJSNI_KAGParser(nullptr) {}
+
+tTJSNI_KAGParser::tTJSNI_KAGParser(const tTVPKAGParserMethodCache *methods) {
     Owner = nullptr;
+    OwnsMethods = methods == nullptr;
     Scenario = nullptr;
     Lines = nullptr;
     CurLineStr = nullptr;
@@ -518,13 +521,22 @@ tTJSNI_KAGParser::tTJSNI_KAGParser() {
     MacroArgStackDepth = 0;
     MacroArgStackBase = 0;
 
-    // retrieve DictClear method and DictObj object
-    iTJSDispatch2 *dictclass;
-    DicObj = TJSCreateDictionaryObject(&dictclass);
+    iTJSDispatch2 *dictclass = nullptr;
+    DicObj = TJSCreateDictionaryObject(methods ? nullptr : &dictclass);
     Macros = TJSCreateDictionaryObject();
-    // taglist accumulator array (libkrkr2.so sub_561F3C keeps it at parser+24)
-    iTJSDispatch2 *arrayclass;
-    TagList = TJSCreateArrayObject(&arrayclass);
+    // Keep the current tag's attribute names in a private ordered Array.
+    iTJSDispatch2 *arrayclass = nullptr;
+    TagList = TJSCreateArrayObject(methods ? nullptr : &arrayclass);
+    if(methods) {
+        // Exb acquired these references once at module registration.
+        DicClear = methods->DicClear;
+        DicAssign = methods->DicAssign;
+        TagListClear = methods->ArrayClear;
+        TagListAdd = methods->ArrayPush;
+        ArrayAssign = methods->ArrayAssign;
+        ArrayPush = methods->ArrayPush;
+        return;
+    }
     try {
         // retrieve clear method from dictclass
         tTJSVariant val;
@@ -609,20 +621,24 @@ void tTJSNI_KAGParser::Invalidate() {
     // invalidate this object
 
     // release objects
-    if(DicAssign)
-        DicAssign->Release();
-    if(DicClear)
-        DicClear->Release();
+    if(OwnsMethods) {
+        if(DicAssign)
+            DicAssign->Release();
+        if(DicClear)
+            DicClear->Release();
+    }
     if(DicObj)
         DicObj->Release();
-    if(TagListAdd)
-        TagListAdd->Release();
-    if(TagListClear)
-        TagListClear->Release();
-    if(ArrayAssign)
-        ArrayAssign->Release();
-    if(ArrayPush)
-        ArrayPush->Release();
+    if(OwnsMethods) {
+        if(TagListAdd)
+            TagListAdd->Release();
+        if(TagListClear)
+            TagListClear->Release();
+        if(ArrayAssign)
+            ArrayAssign->Release();
+        if(ArrayPush)
+            ArrayPush->Release();
+    }
     if(TagList)
         TagList->Release();
     if(Macros)
@@ -1712,13 +1728,8 @@ void tTJSNI_KAGParser::ClearCallStack() {
 }
 
 //---------------------------------------------------------------------------
-// taglist accumulator helpers (libkrkr2.so sub_561F3C @0x561F3C)
-//   libkrkr2.so keeps an Array at parser+24 that is cleared together with
-//   DicObj at the top of each parse loop (clear @qword_1AB3C08), Array.add's
-//   (@qword_1AB3C18) every member name stored into DicObj, and is finally
-//   written as DicObj.taglist via sub_568F88 @0x568F88 right before the tag
-//   dictionary is returned. KAGEnvironment.getCommandTarget gates its
-//   env-object path on elm.taglist.count > 1.
+// Ordered attribute names remain private in the base parser. Ex / Exb expose
+// the same Array as an enumerable taglist member at successful return sites.
 void tTJSNI_KAGParser::TagListClearItems() {
     TagListClear->FuncCall(0, nullptr, nullptr, nullptr, 0, nullptr, TagList);
 }
@@ -1730,6 +1741,10 @@ void tTJSNI_KAGParser::TagListAddName(const ttstr &name) {
 }
 
 void tTJSNI_KAGParser::AttachTagList() {
+    // Only the explicitly loaded Ex / Exb implementations expose taglist.
+    if(!ReturnsTagList())
+        return;
+
     static ttstr __taglist_name(TJSMapGlobalStringMap(TJS_W("taglist")));
     tTJSVariant tlval(TagList, TagList);
     DicObj->PropSetByVS(TJS_MEMBERENSURE,
@@ -2078,7 +2093,7 @@ parse_start:
                     TVP_KAG_STEP_NEXT;
 
                     if(condition && ExcludeLevel == -1) {
-                        AttachTagList(); // sub_568F88: DicObj.taglist = TagList
+                        AttachTagList();
                         DicObj->AddRef();
                         TVPKAGTraceTag("kag.tag.return", this, StorageName,
                                        CurLabel, CurLine, CurPos, TagLine,
@@ -2681,12 +2696,37 @@ static iTJSNativeInstance *Create_NI_KAGParser() {
     return new tTJSNI_KAGParser();
 }
 
+namespace {
+    class tTJSNI_KAGParserEx : public tTJSNI_KAGParser {
+    protected:
+        bool ReturnsTagList() const override { return true; }
+    };
+
+    class tTJSNI_KAGParserExb : public tTJSNI_KAGParser {
+    public:
+        tTJSNI_KAGParserExb() :
+            tTJSNI_KAGParser(&TVPGetKAGParserExbMethodCache()) {}
+
+    protected:
+        bool ReturnsTagList() const override { return true; }
+    };
+
+    iTJSNativeInstance *Create_NI_KAGParserEx() {
+        return new tTJSNI_KAGParserEx();
+    }
+
+    iTJSNativeInstance *Create_NI_KAGParserExb() {
+        return new tTJSNI_KAGParserExb();
+    }
+}
+
 //---------------------------------------------------------------------------
 // tTJSNC_KAGParser : KAGParser TJS native class
 //---------------------------------------------------------------------------
-iTJSDispatch2 *TVPCreateNativeClass_KAGParser() {
+static iTJSDispatch2 *TVPCreateKAGParserClass(
+    iTJSNativeInstance *(*createInstance)()) {
     tTJSNativeClassForPlugin *classobj =
-        TJSCreateNativeClassForPlugin(TJS_W("KAGParser"), Create_NI_KAGParser);
+        TJSCreateNativeClassForPlugin(TJS_W("KAGParser"), createInstance);
     // register native methods/properties
 #undef TJS_NCM_REG_THIS
 #define TJS_NCM_REG_THIS classobj
@@ -3039,3 +3079,15 @@ return classobj;
 
 #undef TJS_NATIVE_CLASSID_NAME
 //---------------------------------------------------------------------------
+
+iTJSDispatch2 *TVPCreateNativeClass_KAGParser() {
+    return TVPCreateKAGParserClass(Create_NI_KAGParser);
+}
+
+iTJSDispatch2 *TVPCreateNativeClass_KAGParserEx() {
+    return TVPCreateKAGParserClass(Create_NI_KAGParserEx);
+}
+
+iTJSDispatch2 *TVPCreateNativeClass_KAGParserExb() {
+    return TVPCreateKAGParserClass(Create_NI_KAGParserExb);
+}
