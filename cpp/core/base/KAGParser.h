@@ -149,6 +149,14 @@ public:
 //---------------------------------------------------------------------------
 // tTJSNI_KAGParser
 //---------------------------------------------------------------------------
+struct tTVPKAGParserMethodCache {
+    iTJSDispatch2 *DicClear;
+    iTJSDispatch2 *DicAssign;
+    iTJSDispatch2 *ArrayClear;
+    iTJSDispatch2 *ArrayAssign;
+    iTJSDispatch2 *ArrayPush;
+};
+
 class tTJSNI_KAGParser : public tTJSNativeInstance {
     typedef tTJSNativeInstance inherited;
 
@@ -160,20 +168,21 @@ public:
 
     void Invalidate() override;
 
+protected:
+    explicit tTJSNI_KAGParser(const tTVPKAGParserMethodCache *methods);
+    virtual bool ReturnsTagList() const { return false; }
+
 private:
     iTJSDispatch2 *Owner; // owner object
+    bool OwnsMethods; // Exb borrows its module's cached dispatch pointers.
 
     iTJSDispatch2 *DicClear; // Dictionary.Clear method pointer
     iTJSDispatch2 *DicAssign; // Dictionary
     iTJSDispatch2 *DicObj; // DictionaryObject
 
     iTJSDispatch2 *TagListClear; // Array.clear method pointer (for TagList)
-    iTJSDispatch2 *TagListAdd; // Array.add method pointer (for TagList)
-    iTJSDispatch2 *TagList; // ordered list of the current tag's attribute
-                            // names (Array); attached as the "taglist" member
-                            // of DicObj. libkrkr2.so sub_561F3C @0x561F3C keeps
-                            // this array at parser+24, clears it together with
-                            // DicObj and Array.add's each stored member name
+    iTJSDispatch2 *TagListAdd; // Appends names; Exb borrows Array.push.
+    iTJSDispatch2 *TagList; // ordered names, exposed only by Ex / Exb parsers
 
     iTJSDispatch2 *ArrayAssign; // Array.assign method pointer
                                 // libkrkr2.so qword_1AB3C10 (取自 Array class
@@ -334,9 +343,9 @@ public:
 private:
     iTJSDispatch2 *_GetNextTag();
     // taglist accumulator helpers (libkrkr2.so sub_561F3C @0x561F3C)
-    void TagListClearItems(); // clear TagList (qword_1AB3C08 clear)
-    void TagListAddName(const ttstr &name); // Array.add (qword_1AB3C18)
-    void AttachTagList(); // DicObj.taglist = TagList (sub_568F88 @0x568F88)
+    void TagListClearItems();
+    void TagListAddName(const ttstr &name);
+    void AttachTagList(); // Only Ex / Exb expose DicObj.taglist.
 
 public:
     iTJSDispatch2 *GetNextTag();
@@ -372,6 +381,9 @@ public:
 };
 
 extern iTJSDispatch2 *TVPCreateNativeClass_KAGParser();
+extern iTJSDispatch2 *TVPCreateNativeClass_KAGParserEx();
+extern iTJSDispatch2 *TVPCreateNativeClass_KAGParserExb();
+extern const tTVPKAGParserMethodCache &TVPGetKAGParserExbMethodCache();
 
 
 #endif
